@@ -1325,6 +1325,42 @@ describe("Worker fetch handler", () => {
 
     vi.restoreAllMocks();
   });
+
+  it("returns 400 for a malformed gzip body (stops Logpush retry)", async () => {
+    const privateKeyPem = await getTestPrivateKeyPem();
+    (mockEnv as any).RSA_PRIVATE_KEY_PEM = privateKeyPem;
+
+    // Valid gzip magic bytes (0x1f 0x8b) followed by corrupt/truncated data
+    const request = new Request("https://worker.example.com/", {
+      method: "POST",
+      body: new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]),
+      headers: {
+        "Content-Encoding": "gzip",
+        "X-Origin-Secret": "test-origin-secret",
+      },
+    });
+    const response = await exports.default.fetch(request, mockEnv as any, {
+      waitUntil: vi.fn(),
+    } as any);
+    expect(response.status).toBe(400);
+  });
+
+  it("returns 400 when the gzip body is missing", async () => {
+    const privateKeyPem = await getTestPrivateKeyPem();
+    (mockEnv as any).RSA_PRIVATE_KEY_PEM = privateKeyPem;
+
+    const request = new Request("https://worker.example.com/", {
+      method: "POST",
+      headers: {
+        "Content-Encoding": "gzip",
+        "X-Origin-Secret": "test-origin-secret",
+      },
+    });
+    const response = await exports.default.fetch(request, mockEnv as any, {
+      waitUntil: vi.fn(),
+    } as any);
+    expect(response.status).toBe(400);
+  });
 });
 ```
 
@@ -1377,13 +1413,26 @@ export default {
       return new Response("Unauthorized", { status: 401 });
     }
 
-    // 2. Decompress gzip body if Content-Encoding: gzip
+    // 2. Decompress gzip body if Content-Encoding: gzip.
+    //    Malformed gzip makes DecompressionStream throw a TypeError; if left
+    //    uncaught the handler returns HTTP 500 and Logpush retries the same
+    //    corrupt batch (~5x over 5 min). Return 400 to stop the retry loop.
     let bodyText: string;
     const contentEncoding = request.headers.get("Content-Encoding");
     if (contentEncoding === "gzip") {
-      const ds = new DecompressionStream("gzip");
-      const decompressed = request.body!.pipeThrough(ds);
-      bodyText = await new Response(decompressed).text();
+      if (!request.body) {
+        return new Response("Missing gzip body", { status: 400 });
+      }
+      try {
+        const ds = new DecompressionStream("gzip");
+        const decompressed = request.body.pipeThrough(ds);
+        bodyText = await new Response(decompressed).text();
+      } catch (err) {
+        console.error(
+          `Failed to decompress gzip body: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return new Response("Invalid gzip body", { status: 400 });
+      }
     } else {
       bodyText = await request.text();
     }
@@ -1446,7 +1495,7 @@ export default {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd workers && npx vitest run tests/index.test.ts`
-Expected: PASS — all 5 tests pass.
+Expected: PASS — all 7 tests pass.
 
 - [ ] **Step 5: Run all tests together**
 

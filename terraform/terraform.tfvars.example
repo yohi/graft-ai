@@ -1,0 +1,10 @@
+# Non-secret variables — copy to terraform.tfvars and fill in
+# Secret variables should be set via TF_VAR_* environment variables, NOT in this file.
+
+cloudflare_account_id = "your-cloudflare-account-id-hex"
+gateway_name            = "main"
+env_label               = "prod"
+logpush_dataset         = "gateway_http"
+worker_script_name      = "graft-ai-aig-logpush"
+logpush_job_name        = "graft-ai-aig-logpush"
+workers_subdomain       = "your-account-subdomain"

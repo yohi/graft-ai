@@ -4,7 +4,7 @@
 
 **Goal:** Build a Cloudflare Worker that receives encrypted AI Gateway Logpush logs, decrypts/decompresses them, transforms each log line into Loki JSON streams format, and pushes to Grafana Cloud Loki — all provisioned via Terraform.
 
-**Architecture:** A single TypeScript Cloudflare Worker handles the full inbound pipeline: verify origin-secret header → decompress gzip body → decrypt each log line (RSA-OAEP unwrap AES-GCM key, AES-GCM decrypt payload) → parse NDJSON → transform to Loki push format with 4 fixed labels → push to Grafana Cloud Loki via HTTPS with Basic Auth. Terraform provisions the Worker script, Logpush job, and all secret bindings. Unit tests run inside the Workers runtime using `@cloudflare/vitest-pool-workers`.
+**Architecture:** A single TypeScript Cloudflare Worker handles the full inbound pipeline: verify origin-secret header → decompress gzip body → decrypt each log line (RSA-OAEP unwrap AES-GCM key, AES-GCM decrypt payload) → parse NDJSON → transform to Loki push format with 4 fixed labels → push to Grafana Cloud Loki via HTTPS with Basic Auth. The Worker is deployed via Wrangler; Terraform provisions only the Logpush job. Unit tests run inside the Workers runtime using `@cloudflare/vitest-pool-workers`.
 
 **Tech Stack:** TypeScript, Cloudflare Workers, Web Crypto API (RSA-OAEP-SHA256 + AES-GCM), `DecompressionStream("gzip")`, Wrangler v4, Vitest v4 with `@cloudflare/vitest-pool-workers`, Terraform with Cloudflare provider v5, Grafana Cloud Loki HTTP push API.
 
@@ -21,8 +21,8 @@
 - Grafana Cloud Free Tier: 14-day retention, 50 GB/month logs, 10k active series (spec §7.2, README).
 - Terraform state should use a remote encrypted backend (spec §3.3, §6.2) — local state acceptable for initial dev; switch before production.
 - Logpush to HTTP destination does NOT require `ownership_challenge` (Cloudflare docs: HTTP destination).
-- `cloudflare_workers_secret` resource is removed in Terraform provider v5; use `secret_text` binding type inside `cloudflare_workers_script.bindings` instead.
 - Logpush HTTP destination supports `header_*` URL query params to set custom request headers (e.g. `header_X-Origin-Secret`).
+- Worker deployment is handled by Wrangler (`npx wrangler deploy`); Terraform manages only the Logpush job.
 - Pre-implementation verification required (spec §9): exact Logpush dataset name, field names, `RequestTime` unit, Grafana Cloud Loki token issuance, Terraform remote backend selection.
 
 ---
@@ -49,8 +49,7 @@ graft-ai/
 │   ├── wrangler.jsonc
 │   └── .dev.vars              # Local dev secrets (gitignored)
 ├── terraform/
-│   ├── main.tf                # Cloudflare Workers script + Logpush job + bindings
-│   ├── variables.tf           # Input variables (account_id, gateway_id, loki_url, etc.)
+│   ├── main.tf                # Cloudflare Logpush job only; Worker script is deployed via Wrangler
 │   ├── outputs.tf             # Useful outputs (worker URL, logpush job ID)
 │   ├── versions.tf            # Provider version constraints
 │   └── terraform.tfvars.example  # Non-secret variable examples (gitignored actual tfvars)
@@ -58,7 +57,7 @@ graft-ai/
 │   └── fixtures/
 │       └── sample_aigateway_log.json  # NDJSON test fixture (spec §8.2)
 ├── .gitignore                 # Add: workers/.dev.vars, terraform/terraform.tfvars, terraform/.terraform/
-└── Makefile                   # Convenience targets (fmt, validate, test, plan, apply)
+└── Makefile                   # Convenience targets (fmt, validate, test, plan, apply, deploy)
 ```
 
 **Responsibilities:**
@@ -68,8 +67,8 @@ graft-ai/
 - `workers/src/transform.ts` — Pure functions: parse NDJSON, normalize model name, convert timestamp to nanoseconds, build Loki stream entry. No network calls.
 - `workers/src/loki.ts` — Loki HTTP push client with Basic Auth, 429 retry/backoff logic. Takes a `fetch`-compatible function for testability.
 - `workers/src/index.ts` — Worker `fetch` handler. Orchestrates: auth check → decompress → decrypt → transform → push. Returns appropriate HTTP status codes.
-- `terraform/main.tf` — Single file with all Cloudflare resources: `cloudflare_workers_script` (with `secret_text` bindings), `cloudflare_logpush_job`.
-- `tests/fixtures/sample_aigateway_log.json` — NDJSON fixture with 200/400/500 status codes, multiple models, prod/stg envs (spec §8.2).
+- `terraform/main.tf` — Single file with the Cloudflare `cloudflare_logpush_job`; Worker script is deployed via Wrangler.
+- `terraform/variables.tf` — Input variables including `workers_subdomain` for the Worker URL.
 
 ---
 
@@ -232,12 +231,12 @@ export interface LokiPushPayload {
 
 ```bash
 # Copy to .dev.vars and fill with real values for local development
+# For production, set secrets via `npx wrangler secret put`.
 GRAFANA_CLOUD_LOKI_URL=https://logs-prod-xxx.grafana.net
 GRAFANA_CLOUD_LOKI_USERNAME=123456
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
 ORIGIN_SECRET=your-random-origin-secret-here
 RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
-```
 
 - [ ] **Step 7: Update `.gitignore`**
 
@@ -845,13 +844,17 @@ export function normalizeModelName(modelId: string): string {
 }
 
 export function requestTimeToNanos(requestTime: number): string {
-  const digits = Math.floor(requestTime).toString().length;
-  if (digits <= 10) {
+  const s = Math.floor(requestTime).toString();
+  if (s.length <= 10) {
     // Seconds → nanoseconds
-    return (requestTime * 1_000_000_000).toString();
+    return (BigInt(requestTime) * 1_000_000_000n).toString();
   }
-  // Milliseconds → nanoseconds (13-digit epoch)
-  return (requestTime * 1_000_000).toString();
+  if (s.length <= 13) {
+    // Milliseconds → nanoseconds
+    return (BigInt(requestTime) * 1_000_000n).toString();
+  }
+  // Already nanoseconds (≥19 digits)
+  return BigInt(requestTime).toString();
 }
 
 export function buildLogLine(log: AIGatewayLog): string {
@@ -1209,9 +1212,8 @@ const sampleNdjson = [
   }),
 ].join("\n");
 
-function gzipText(text: string): ArrayBuffer {
+async function gzipText(text: string): Promise<ArrayBuffer> {
   // Use CompressionStream to gzip the text
-  // This is synchronous-ish via a stream pump
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
@@ -1221,7 +1223,7 @@ function gzipText(text: string): ArrayBuffer {
   });
   const compressed = stream.pipeThrough(new CompressionStream("gzip"));
   // Consume the compressed stream into an ArrayBuffer
-  return new Response(compressed).arrayBuffer() as unknown as ArrayBuffer;
+  return new Response(compressed).arrayBuffer();
 }
 
 describe("Worker fetch handler", () => {
@@ -1233,7 +1235,7 @@ describe("Worker fetch handler", () => {
     // we test the handler directly with explicit env injection via exports.default.fetch
     const request = new Request("https://worker.example.com/", {
       method: "POST",
-      body: gzipText(sampleNdjson),
+      body: await gzipText(sampleNdjson),
       headers: { "Content-Encoding": "gzip" },
     });
     // Call the exported handler with our mock env
@@ -1248,7 +1250,7 @@ describe("Worker fetch handler", () => {
     (mockEnv as any).RSA_PRIVATE_KEY_PEM = privateKeyPem;
     const request = new Request("https://worker.example.com/", {
       method: "POST",
-      body: gzipText(sampleNdjson),
+      body: await gzipText(sampleNdjson),
       headers: { "Content-Encoding": "gzip", "X-Origin-Secret": "wrong-secret" },
     });
     const response = await exports.default.fetch(request, mockEnv as any, {
@@ -1282,7 +1284,7 @@ describe("Worker fetch handler", () => {
 
     const request = new Request("https://worker.example.com/", {
       method: "POST",
-      body: gzipText(sampleNdjson),
+      body: await gzipText(sampleNdjson),
       headers: {
         "Content-Encoding": "gzip",
         "X-Origin-Secret": "test-origin-secret",
@@ -1310,7 +1312,7 @@ describe("Worker fetch handler", () => {
 
     const request = new Request("https://worker.example.com/", {
       method: "POST",
-      body: gzipText(sampleNdjson),
+      body: await gzipText(sampleNdjson),
       headers: {
         "Content-Encoding": "gzip",
         "X-Origin-Secret": "test-origin-secret",
@@ -1341,15 +1343,37 @@ import { importRsaPrivateKey, decryptIfEncrypted } from "./crypto";
 import { transformNdjsonToLokiPayload } from "./transform";
 import { pushToLoki } from "./loki";
 
+// Cache imported RSA private keys across warm Worker invocations
+const privateKeyCache = new Map<string, CryptoKey>();
+
+function timingSafeSecretEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  if (aBytes.length !== bBytes.length) {
+    return false;
+  }
+  return crypto.subtle.timingSafeEqual(aBytes, bBytes);
+}
+
+async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {
+  let key = privateKeyCache.get(pem);
+  if (!key) {
+    key = await importRsaPrivateKey(pem);
+    privateKeyCache.set(pem, key);
+  }
+  return key;
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }
 
-    // 1. Validate origin secret
+    // 1. Validate origin secret using constant-time comparison
     const originSecret = request.headers.get("X-Origin-Secret");
-    if (!originSecret || originSecret !== env.ORIGIN_SECRET) {
+    if (!originSecret || !timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET)) {
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -1364,8 +1388,8 @@ export default {
       bodyText = await request.text();
     }
 
-    // 3. Import RSA private key (cache opportunity: keys are per-request in Workers)
-    const privateKey = await importRsaPrivateKey(env.RSA_PRIVATE_KEY_PEM);
+    // 3. Import RSA private key (cached across warm Worker invocations)
+    const privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM);
 
     // 4. Parse NDJSON, decrypt encrypted fields per line
     const lines = bodyText.split("\n").filter((line) => line.trim().length > 0);
@@ -1448,8 +1472,8 @@ git commit -m "feat: add Worker fetch handler orchestrating decrypt-transform-pu
 - Create: `terraform/terraform.tfvars.example`
 
 **Interfaces:**
-- Consumes: Worker script at `workers/src/index.ts` (Task 6), spec requirements for Logpush job, secret bindings, and IaC management.
-- Produces: A complete Terraform configuration that provisions the Worker script with `secret_text` bindings, a Logpush job targeting the Worker URL, and outputs for monitoring.
+- Consumes: Worker script at `workers/src/index.ts` (Task 6), spec requirements for Logpush job, and IaC management.
+- Produces: A Terraform configuration that provisions only the Logpush job targeting the Wrangler-deployed Worker URL, plus outputs for monitoring. Worker script and secrets are managed by Wrangler.
 
 - [ ] **Step 1: Create `terraform/versions.tf`**
 
@@ -1549,6 +1573,11 @@ variable "logpush_job_name" {
   type        = string
   default     = "graft-ai-aig-logpush"
 }
+
+variable "workers_subdomain" {
+  description = "Cloudflare Workers account subdomain (set in Workers & Pages › Your subdomain)"
+  type        = string
+}
 ```
 
 - [ ] **Step 3: Create `terraform/main.tf`**
@@ -1558,71 +1587,16 @@ provider "cloudflare" {
   api_token = var.cloudflare_api_token
 }
 
-# Worker script with secret_text bindings (spec §3.2, §6.1)
-# Note: cloudflare_workers_secret resource is removed in provider v5;
-# use secret_text binding type inside cloudflare_workers_script instead.
-resource "cloudflare_workers_script" "logpush_transformer" {
-  account_id      = var.cloudflare_account_id
-  script_name     = var.worker_script_name
-  content_file    = "${path.module}/../workers/src/index.ts"
-  main_module     = "index.ts"
-  compatibility_date = "2026-07-01"
-  compatibility_flags = ["nodejs_compat"]
+# Worker script is deployed by Wrangler; Terraform manages only the Logpush job.
+# Use `make deploy` (wrangler deploy + terraform apply) after setting secrets via
+# `npx wrangler secret put` and `TF_VAR_*` environment variables.
 
-  # Plain text bindings (non-secret)
-  bindings = [
-    {
-      type = "plain_text"
-      name = "GATEWAY_NAME"
-      text = var.gateway_name
-    },
-    {
-      type = "plain_text"
-      name = "ENV_LABEL"
-      text = var.env_label
-    },
-    # Secret text bindings (sensitive values)
-    {
-      type = "secret_text"
-      name = "GRAFANA_CLOUD_LOKI_URL"
-      text = var.grafana_cloud_loki_url
-    },
-    {
-      type = "secret_text"
-      name = "GRAFANA_CLOUD_LOKI_USERNAME"
-      text = var.grafana_cloud_loki_username
-    },
-    {
-      type = "secret_text"
-      name = "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
-      text = var.grafana_cloud_access_policy_token
-    },
-    {
-      type = "secret_text"
-      name = "ORIGIN_SECRET"
-      text = var.origin_secret
-    },
-    {
-      type = "secret_text"
-      name = "RSA_PRIVATE_KEY_PEM"
-      text = var.rsa_private_key_pem
-    }
-  ]
-
-  observability = {
-    enabled = true
-  }
-}
-
-# Logpush job targeting the Worker URL (spec §3.2, §7.1)
-# The destination_conf uses header_X-Origin-Secret to inject the shared secret
-# into every Logpush POST request (spec §6.4).
 resource "cloudflare_logpush_job" "aig_logs" {
   account_id      = var.cloudflare_account_id
   dataset         = var.logpush_dataset
   name            = var.logpush_job_name
   enabled         = true
-  destination_conf = "https://${var.worker_script_name}.${var.cloudflare_account_id}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
+  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${var.origin_secret_urlencoded}"
   max_upload_bytes = 5000000
   max_upload_records = 1000
 
@@ -1646,112 +1620,6 @@ resource "cloudflare_logpush_job" "aig_logs" {
     timestamp_format = "unixnano"
     output_type      = "ndjson"
   }
-
-  depends_on = [cloudflare_workers_script.logpush_transformer]
-}
-
-# Helper function for URL-encoding the origin secret in destination_conf
-function "urlencode" {
-  params = [str]
-  result = replace(replace(replace(replace(replace(str, "%", "%25"), " ", "%20"), "&", "%26"), "=", "%3D"), "?", "%3F")
-}
-```
-
-**Important note:** Terraform does not support custom `function` blocks — the above `function` syntax is invalid. Replace with the `urlencode()` built-in or pre-encode the secret. Here is the corrected `main.tf` destination_conf line:
-
-```hcl
-  destination_conf = "https://${var.worker_script_name}.${var.cloudflare_account_id}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
-```
-
-Actually, Terraform has no built-in `urlencode()` function. Use `urlescape()` or pass the already-encoded secret. The simplest approach: pre-encode the origin secret outside Terraform and pass it as a variable. Replace the `main.tf` with this corrected version:
-
-```hcl
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
-}
-
-resource "cloudflare_workers_script" "logpush_transformer" {
-  account_id          = var.cloudflare_account_id
-  script_name          = var.worker_script_name
-  content_file         = "${path.module}/../workers/src/index.ts"
-  main_module          = "index.ts"
-  compatibility_date   = "2026-07-01"
-  compatibility_flags  = ["nodejs_compat"]
-
-  bindings = [
-    {
-      type = "plain_text"
-      name = "GATEWAY_NAME"
-      text = var.gateway_name
-    },
-    {
-      type = "plain_text"
-      name = "ENV_LABEL"
-      text = var.env_label
-    },
-    {
-      type = "secret_text"
-      name = "GRAFANA_CLOUD_LOKI_URL"
-      text = var.grafana_cloud_loki_url
-    },
-    {
-      type = "secret_text"
-      name = "GRAFANA_CLOUD_LOKI_USERNAME"
-      text = var.grafana_cloud_loki_username
-    },
-    {
-      type = "secret_text"
-      name = "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
-      text = var.grafana_cloud_access_policy_token
-    },
-    {
-      type = "secret_text"
-      name = "ORIGIN_SECRET"
-      text = var.origin_secret
-    },
-    {
-      type = "secret_text"
-      name = "RSA_PRIVATE_KEY_PEM"
-      text = var.rsa_private_key_pem
-    }
-  ]
-
-  observability = {
-    enabled = true
-  }
-}
-
-resource "cloudflare_logpush_job" "aig_logs" {
-  account_id      = var.cloudflare_account_id
-  dataset         = var.logpush_dataset
-  name            = var.logpush_job_name
-  enabled         = true
-  destination_conf = "https://${var.worker_script_name}.${var.cloudflare_account_id}.workers.dev?header_X-Origin-Secret=${var.origin_secret_urlencoded}"
-  max_upload_bytes  = 5000000
-  max_upload_records = 1000
-
-  output_options = {
-    field_names = [
-      "RequestID",
-      "RequestTime",
-      "CacheStatus",
-      "StatusCode",
-      "Model",
-      "PromptTokens",
-      "CompletionTokens",
-      "TotalTokens",
-      "RequestDuration",
-      "Path",
-      "Method",
-      "Metadata",
-      "RequestBody",
-      "ResponseBody",
-    ]
-    timestamp_format = "unixnano"
-    output_type      = "ndjson"
-  }
-
-  depends_on = [cloudflare_workers_script.logpush_transformer]
 }
 ```
 
@@ -1763,6 +1631,11 @@ variable "origin_secret_urlencoded" {
   type        = string
   sensitive   = true
 }
+
+variable "workers_subdomain" {
+  description = "Cloudflare Workers account subdomain (set in Workers & Pages › Your subdomain)"
+  type        = string
+}
 ```
 
 - [ ] **Step 4: Create `terraform/outputs.tf`**
@@ -1770,7 +1643,7 @@ variable "origin_secret_urlencoded" {
 ```hcl
 output "worker_url" {
   description = "URL of the deployed Worker"
-  value       = "https://${var.worker_script_name}.${var.cloudflare_account_id}.workers.dev"
+  value       = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev"
 }
 
 output "logpush_job_id" {
@@ -1785,7 +1658,7 @@ output "logpush_job_name" {
 
 output "worker_script_name" {
   description = "Name of the deployed Worker script"
-  value       = cloudflare_workers_script.logpush_transformer.script_name
+  value       = var.worker_script_name
 }
 ```
 
@@ -1801,6 +1674,7 @@ env_label             = "prod"
 logpush_dataset        = "gateway_http"
 worker_script_name     = "graft-ai-aig-logpush"
 logpush_job_name       = "graft-ai-aig-logpush"
+workers_subdomain      = "your-account-subdomain"
 ```
 
 - [ ] **Step 6: Verify Terraform formatting and validation**
@@ -1811,15 +1685,12 @@ Expected: PASS (no formatting issues).
 Run: `cd terraform && terraform init && terraform validate`
 Expected: PASS — "The configuration is valid."
 
-Note: `terraform validate` requires all variables to have either a default or be set. Secret variables without defaults will trigger a warning during `plan` but not during `validate`. If `validate` fails due to missing variables, temporarily set `TF_VAR_cloudflare_api_token=dummy TF_VAR_cloudflare_account_id=dummy TF_VAR_grafana_cloud_loki_url=dummy TF_VAR_grafana_cloud_loki_username=dummy TF_VAR_grafana_cloud_access_policy_token=dummy TF_VAR_origin_secret=dummy TF_VAR_origin_secret_urlencoded=dummy TF_VAR_rsa_private_key_pem=dummy` before running validate.
-
-- [ ] **Step 7: Commit**
+Note: `terraform validate` requires all variables to have either a default or be set. Secret variables without defaults will trigger a warning during `plan` but not during `validate`. If `validate` fails due to missing variables, temporarily set `TF_VAR_cloudflare_api_token=dummy TF_VAR_cloudflare_account_id=dummy TF_VAR_workers_subdomain=dummy TF_VAR_origin_secret=dummy TF_VAR_origin_secret_urlencoded=dummy` before running validate.
 
 ```bash
 git add terraform/
-git commit -m "feat: add Terraform configuration for Workers script and Logpush job"
+git commit -m "feat: add Terraform configuration for Logpush job targeting Wrangler-deployed Worker"
 ```
-
 ---
 
 ### Task 8: Makefile and CI Checks
@@ -1868,7 +1739,6 @@ deploy:
 	terraform -chdir=terraform apply
 
 clean:
-	cd workers && rm -rf node_modules dist .wrangler
 	rm -rf terraform/.terraform terraform/terraform.tfstate*
 ```
 
@@ -1945,8 +1815,9 @@ export TF_VAR_grafana_cloud_access_policy_token="glc_xxxxxxxxxxxx"
 ```bash
 export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
 export TF_VAR_cloudflare_account_id="your-cloudflare-account-id"
+export TF_VAR_workers_subdomain="your-account-subdomain"
 export TF_VAR_origin_secret="$(openssl rand -hex 32)"
-export TF_VAR_origin_secret_urlencoded="$(python3 -c "import urllib.parse; import os; print(urllib.parse.quote(os.environ['TF_VAR_origin_secret']))")"
+export TF_VAR_origin_secret_urlencoded="$(python3 -c \"import urllib.parse; import os; print(urllib.parse.quote(os.environ['TF_VAR_origin_secret']))\")"
 export TF_VAR_rsa_private_key_pem="$(cat private_key.pem)"
 ```
 
@@ -1964,7 +1835,7 @@ Verify that the fields listed in `terraform/main.tf` `output_options.field_names
 - [ ] **Step 5: Run `terraform plan`**
 
 Run: `cd terraform && terraform plan`
-Expected: Plan shows creation of 2 resources: `cloudflare_workers_script.logpush_transformer` and `cloudflare_logpush_job.aig_logs`. No unexpected changes.
+Expected: Plan shows creation of 1 resource: `cloudflare_logpush_job.aig_logs`. No unexpected changes.
 
 - [ ] **Step 6: Commit any field name corrections**
 
@@ -1989,16 +1860,15 @@ git commit -m "fix: correct Logpush field names based on API verification"
 - [ ] **Step 1: Deploy the Worker and infrastructure**
 
 Run: `make deploy`
-Expected: Worker deployed, Terraform apply succeeds, Logpush job created and enabled.
+Expected: Worker deployed via Wrangler, Terraform apply succeeds for the Logpush job, and the Logpush job is created and enabled.
 
 - [ ] **Step 2: Verify Worker responds to POST with 401 without secret**
 
 Run:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" -X POST "https://graft-ai-aig-logpush.${TF_VAR_cloudflare_account_id}.workers.dev" -d "test"
+curl -s -o /dev/null -w "%{http_code}" -X POST "https://graft-ai-aig-logpush.${TF_VAR_workers_subdomain}.workers.dev" -d "test"
 ```
-
 Expected: `401` (Unauthorized — missing X-Origin-Secret header).
 
 - [ ] **Step 3: Verify Worker responds to POST with 200 with correct secret and gzipped NDJSON**
@@ -2006,9 +1876,8 @@ Expected: `401` (Unauthorized — missing X-Origin-Secret header).
 Run:
 
 ```bash
-echo '{"RequestID":"smoke-001","RequestTime":1720032000,"CacheStatus":"miss","StatusCode":200,"Model":"@cf/meta/llama-3.1-8b-instruct","PromptTokens":10,"CompletionTokens":5,"TotalTokens":15,"RequestDuration":100,"Path":"/v1/chat/completions","Method":"POST"}' | gzip | curl -s -o /dev/null -w "%{http_code}" -X POST "https://graft-ai-aig-logpush.${TF_VAR_cloudflare_account_id}.workers.dev" -H "Content-Encoding: gzip" -H "X-Origin-Secret: ${TF_VAR_origin_secret}" --data-binary @-
+echo '{"RequestID":"smoke-001","RequestTime":1720032000,"CacheStatus":"miss","StatusCode":200,"Model":"@cf/meta/llama-3.1-8b-instruct","PromptTokens":10,"CompletionTokens":5,"TotalTokens":15,"RequestDuration":100,"Path":"/v1/chat/completions","Method":"POST"}' | gzip | curl -s -o /dev/null -w "%{http_code}" -X POST "https://graft-ai-aig-logpush.${TF_VAR_workers_subdomain}.workers.dev" -H "Content-Encoding: gzip" -H "X-Origin-Secret: ${TF_VAR_origin_secret}" --data-binary @-
 ```
-
 Expected: `200` (OK — Worker processed the log and pushed to Loki).
 
 - [ ] **Step 4: Verify logs appear in Grafana Cloud Loki**
@@ -2031,6 +1900,7 @@ Expected: Response contains `status: "success"` and `data.result` has at least o
 Run a test request through your AI Gateway:
 
 ```bash
+export TF_VAR_workers_subdomain="your-account-subdomain"
 curl -X POST "https://gateway.ai.cloudflare.com/v1/${TF_VAR_cloudflare_account_id}/main/openai/chat/completions" \
   -H "Authorization: Bearer ${OPENAI_API_KEY}" \
   -H "Content-Type: application/json" \

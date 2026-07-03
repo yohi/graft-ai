@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "typecheck:ci": "wrangler types && tsc --noEmit",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {

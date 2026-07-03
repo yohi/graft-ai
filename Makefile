@@ -15,7 +15,7 @@ test:
 	cd workers && npx vitest run
 
 typecheck:
-	cd workers && npx tsc --noEmit
+	cd workers && npm run typecheck:ci
 
 plan:
 	terraform -chdir=terraform plan

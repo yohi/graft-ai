@@ -14,30 +14,55 @@ variable "grafana_cloud_loki_url" {
   description = "Grafana Cloud Loki push endpoint URL (e.g. https://logs-prod-xxx.grafana.net)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.grafana_cloud_loki_url) > 0
+    error_message = "grafana_cloud_loki_url must not be empty."
+  }
 }
 
 variable "grafana_cloud_loki_username" {
   description = "Grafana Cloud Loki tenant ID (User value from portal)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.grafana_cloud_loki_username) > 0
+    error_message = "grafana_cloud_loki_username must not be empty."
+  }
 }
 
 variable "grafana_cloud_access_policy_token" {
   description = "Grafana Cloud Access Policy Token with logs:write scope"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.grafana_cloud_access_policy_token) > 0
+    error_message = "grafana_cloud_access_policy_token must not be empty."
+  }
 }
 
 variable "origin_secret" {
   description = "Shared secret for X-Origin-Secret header validation between Logpush and Worker"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.origin_secret) > 0
+    error_message = "origin_secret must not be empty."
+  }
 }
 
 variable "rsa_private_key_pem" {
   description = "RSA private key (PKCS#8 PEM) for decrypting AI Gateway logpush logs"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(var.rsa_private_key_pem) > 0
+    error_message = "rsa_private_key_pem must not be empty."
+  }
 }
 
 variable "gateway_name" {

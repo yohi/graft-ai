@@ -27,6 +27,7 @@ dev:
 	cd workers && npx wrangler dev
 
 deploy:
+	scripts/verify-deployment-env.sh
 	cd workers && npx wrangler deploy
 	terraform -chdir=terraform apply
 

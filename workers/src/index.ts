@@ -1,5 +1,5 @@
 import type { Env, AIGatewayLog, LokiPushPayload } from "./types";
-import { importRsaPrivateKey, decryptIfEncrypted } from "./crypto";
+import { importRsaPrivateKey, tryDecryptField } from "./crypto";
 import { transformNdjsonToLokiPayload } from "./transform";
 import { pushToLoki } from "./loki";
 
@@ -71,10 +71,12 @@ export default {
     for (const line of lines) {
       try {
         const parsed = JSON.parse(line) as Record<string, unknown>;
-        // Decrypt encrypted fields if present (Metadata, RequestBody, ResponseBody)
+        // Decrypt encrypted fields if present (Metadata, RequestBody, ResponseBody).
+        // If a field looks encrypted but fails to decrypt, keep the raw value so the
+        // log line is preserved and Logpush retries are not triggered.
         const decrypted: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(parsed)) {
-          const decryptedValue = await decryptIfEncrypted(privateKey, value);
+          const decryptedValue = await tryDecryptField(privateKey, value);
           if (
             (key === "Metadata" || key === "RequestBody" || key === "ResponseBody") &&
             typeof decryptedValue === "string"
@@ -95,7 +97,6 @@ export default {
         );
       }
     }
-
     // No log lines at all — nothing to process; acknowledge success so
     // Logpush does not retry an empty batch.
     if (lines.length === 0) {

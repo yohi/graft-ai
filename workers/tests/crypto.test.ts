@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { importRsaPrivateKey, decryptField, decryptIfEncrypted } from "../src/crypto";
+import { importRsaPrivateKey, decryptField, tryDecryptField } from "../src/crypto";
 import type { EncryptedField } from "../src/types";
 
 // Generate a test RSA key pair inside the Workers runtime
@@ -111,46 +111,57 @@ describe("crypto module", () => {
     expect(decrypted).toBe(original);
   });
 
-  it("decryptIfEncrypted returns plaintext string for EncryptedField", async () => {
+  it("tryDecryptField returns decrypted plaintext for a valid EncryptedField", async () => {
     const { privateKeyPem, publicKeyPem } = await generateTestKeyPair();
     const privateKey = await importRsaPrivateKey(privateKeyPem);
     const original = "hello world";
     const encrypted = await encryptForTest(publicKeyPem, original);
-    const result = await decryptIfEncrypted(privateKey, encrypted);
+    const result = await tryDecryptField(privateKey, encrypted);
     expect(result).toBe("hello world");
   });
 
-  it("decryptIfEncrypted returns value as-is when not encrypted", async () => {
+  it("tryDecryptField returns value as-is when not encrypted", async () => {
     const { privateKeyPem } = await generateTestKeyPair();
     const privateKey = await importRsaPrivateKey(privateKeyPem);
-    const result = await decryptIfEncrypted(privateKey, "plain string value");
+    const result = await tryDecryptField(privateKey, "plain string value");
     expect(result).toBe("plain string value");
   });
 
-  it("decryptIfEncrypted returns a plain object with non-base64 encryption-shaped fields as-is", async () => {
+  it("tryDecryptField returns a plain object with non-base64 encryption-shaped fields as-is", async () => {
     const { privateKeyPem } = await generateTestKeyPair();
     const privateKey = await importRsaPrivateKey(privateKeyPem);
     const shapedButPlain = { key: "not-base64!", iv: "iv", data: "data" };
 
-    const result = await decryptIfEncrypted(privateKey, shapedButPlain);
+    const result = await tryDecryptField(privateKey, shapedButPlain);
 
     expect(result).toEqual(shapedButPlain);
   });
 
-  it("decryptIfEncrypted returns a partial encryption-shaped object as-is", async () => {
+  it("tryDecryptField returns a partial encryption-shaped object as-is", async () => {
     const { privateKeyPem } = await generateTestKeyPair();
     const privateKey = await importRsaPrivateKey(privateKeyPem);
     const partial = { key: "abc", data: "def" };
 
-    const result = await decryptIfEncrypted(privateKey, partial);
+    const result = await tryDecryptField(privateKey, partial);
 
     expect(result).toEqual(partial);
   });
 
-  it("decryptIfEncrypted returns null as-is", async () => {
+  it("tryDecryptField returns a valid base64-shaped plain object as-is when decryption fails", async () => {
     const { privateKeyPem } = await generateTestKeyPair();
     const privateKey = await importRsaPrivateKey(privateKeyPem);
-    const result = await decryptIfEncrypted(privateKey, null);
+    // Looks like base64 but is not actually encrypted with this key.
+    const plainButBase64Shaped = { key: "dGVzdA==", iv: "YWJjZGVmZ2hpams=", data: "eHl6" };
+
+    const result = await tryDecryptField(privateKey, plainButBase64Shaped);
+
+    expect(result).toEqual(plainButBase64Shaped);
+  });
+
+  it("tryDecryptField returns null as-is", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    const privateKey = await importRsaPrivateKey(privateKeyPem);
+    const result = await tryDecryptField(privateKey, null);
     expect(result).toBe(null);
   });
 });

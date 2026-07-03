@@ -24,7 +24,8 @@ export function requestTimeToNanos(requestTime: number): string {
     return (n * 1_000_000n).toString();
   }
   throw new Error(
-    `RequestTime precision lost: ${requestTime} has ${s.length} digits; expected seconds or milliseconds. Set timestamp_format to "unixseconds".`,
+    `RequestTime precision lost: ${requestTime} has ${s.length} digits; ` +
+      `expected seconds or milliseconds. Set timestamp_format to "unix".`,
   );
 }
 

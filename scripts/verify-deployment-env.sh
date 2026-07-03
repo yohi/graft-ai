@@ -5,10 +5,12 @@ missing=()
 
 require_var() {
   local name="$1"
+  local tf_name="TF_VAR_${name}"
   local value="${!name:-}"
+  local tf_value="${!tf_name:-}"
 
-  if [[ -z "$value" ]]; then
-    missing+=("$name")
+  if [[ -z "$value" && -z "$tf_value" ]]; then
+    missing+=("${name} (or ${tf_name})")
   fi
 }
 

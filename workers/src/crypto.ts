@@ -66,15 +66,24 @@ export async function decryptField(
   return new TextDecoder().decode(decrypted);
 }
 
-export async function decryptIfEncrypted(
+export async function tryDecryptField(
   privateKey: CryptoKey,
   value: unknown,
 ): Promise<unknown> {
   if (value === null || value === undefined) {
     return value;
   }
-  if (isEncryptedField(value)) {
-    return decryptField(privateKey, value);
+  if (!isEncryptedField(value)) {
+    return value;
   }
-  return value;
+  try {
+    return await decryptField(privateKey, value);
+  } catch (err) {
+    // If decryption fails, the value is not actually encrypted; return it as-is
+    // so a single malformed field does not drop the entire log line.
+    console.error(
+      `Failed to decrypt field: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return value;
+  }
 }

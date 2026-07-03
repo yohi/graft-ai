@@ -6,7 +6,7 @@ import {
   transformLogToLokiStream,
   transformNdjsonToLokiPayload,
 } from "../src/transform";
-import type { AIGatewayLog } from "../src/types";
+import type { AIGatewayLog, EncryptedField } from "../src/types";
 
 describe("normalizeModelName", () => {
   it("strips @cf/meta/ prefix", () => {
@@ -71,10 +71,38 @@ describe("buildLogLine", () => {
     expect(parsed.duration_ms).toBe(1250);
     expect(parsed.path).toBe("/v1/chat/completions");
     expect(parsed.method).toBe("POST");
-    // Sensitive fields must NOT be present
-    expect(parsed.RequestHeaders).toBeUndefined();
-    expect(parsed.ResponseHeaders).toBeUndefined();
     expect(parsed.authorization).toBeUndefined();
+    expect(parsed.request_body).toBeUndefined();
+    expect(parsed.response_body).toBeUndefined();
+    expect(parsed.metadata).toBeUndefined();
+  });
+
+  it("includes optional decrypted fields when requested", () => {
+    const log: AIGatewayLog = {
+      RequestID: "abc123",
+      RequestTime: 1720032000,
+      CacheStatus: "miss",
+      StatusCode: 200,
+      Model: "@cf/meta/llama-3.1-8b-instruct",
+      PromptTokens: 150,
+      CompletionTokens: 80,
+      TotalTokens: 230,
+      RequestDuration: 1250,
+      Path: "/v1/chat/completions",
+      Method: "POST",
+      Metadata: { model: "gpt-4o" } as unknown as EncryptedField,
+      RequestBody: { messages: [] } as unknown as EncryptedField,
+      ResponseBody: { choices: [] } as unknown as EncryptedField,
+    };
+    const line = buildLogLine(log, {
+      requestBody: true,
+      responseBody: true,
+      metadata: true,
+    });
+    const parsed = JSON.parse(line);
+    expect(parsed.request_body).toEqual(log.RequestBody);
+    expect(parsed.response_body).toEqual(log.ResponseBody);
+    expect(parsed.metadata).toEqual(log.Metadata);
   });
 });
 

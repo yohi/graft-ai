@@ -6,6 +6,9 @@ export interface Env {
   RSA_PRIVATE_KEY_PEM: string;
   GATEWAY_NAME: string;
   ENV_LABEL: string;
+  INCLUDE_REQUEST_BODY?: string; // "true" to include decrypted request body
+  INCLUDE_RESPONSE_BODY?: string; // "true" to include decrypted response body
+  INCLUDE_METADATA?: string; // "true" to include decrypted metadata
 }
 
 export interface AIGatewayLog {

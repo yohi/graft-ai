@@ -28,8 +28,15 @@ export function requestTimeToNanos(requestTime: number): string {
   );
 }
 
-export function buildLogLine(log: AIGatewayLog): string {
-  const line = {
+export function buildLogLine(
+  log: AIGatewayLog,
+  include?: {
+    requestBody?: boolean;
+    responseBody?: boolean;
+    metadata?: boolean;
+  },
+): string {
+  const line: Record<string, unknown> = {
     request_id: log.RequestID,
     cache_status: log.CacheStatus,
     prompt_tokens: log.PromptTokens,
@@ -39,6 +46,15 @@ export function buildLogLine(log: AIGatewayLog): string {
     path: log.Path,
     method: log.Method,
   };
+  if (include?.requestBody && log.RequestBody !== undefined) {
+    line.request_body = log.RequestBody;
+  }
+  if (include?.responseBody && log.ResponseBody !== undefined) {
+    line.response_body = log.ResponseBody;
+  }
+  if (include?.metadata && log.Metadata !== undefined) {
+    line.metadata = log.Metadata;
+  }
   return JSON.stringify(line);
 }
 
@@ -55,6 +71,7 @@ export function transformLogToLokiStream(
   log: AIGatewayLog,
   gatewayName: string,
   envLabel: string,
+  include?: Parameters<typeof buildLogLine>[1],
 ): LokiStream {
   return {
     stream: {
@@ -63,7 +80,7 @@ export function transformLogToLokiStream(
       env: envLabel,
       gateway: gatewayName,
     },
-    values: [[requestTimeToNanos(log.RequestTime), buildLogLine(log)]],
+    values: [[requestTimeToNanos(log.RequestTime), buildLogLine(log, include)]],
   };
 }
 
@@ -71,14 +88,15 @@ export function transformNdjsonToLokiPayload(
   ndjson: string,
   gatewayName: string,
   envLabel: string,
-): LokiPushPayload {
+  include?: Parameters<typeof buildLogLine>[1],
+  ): LokiPushPayload {
   const lines = ndjson.split("\n").filter((line) => line.trim().length > 0);
   const streamMap = new Map<string, LokiStream>();
 
   for (const line of lines) {
     try {
       const log = JSON.parse(line) as AIGatewayLog;
-      const stream = transformLogToLokiStream(log, gatewayName, envLabel);
+      const stream = transformLogToLokiStream(log, gatewayName, envLabel, include);
       const key = labelKey(stream.stream);
       const existing = streamMap.get(key);
       if (existing) {
@@ -87,7 +105,6 @@ export function transformNdjsonToLokiPayload(
         streamMap.set(key, stream);
       }
     } catch (err) {
-      // Skip invalid JSON line, log to console (Workers Logs)
       console.error(
         `Failed to parse log line: ${err instanceof Error ? err.message : String(err)}`,
       );

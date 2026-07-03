@@ -74,7 +74,19 @@ export default {
         // Decrypt encrypted fields if present (Metadata, RequestBody, ResponseBody)
         const decrypted: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(parsed)) {
-          decrypted[key] = await decryptIfEncrypted(privateKey, value);
+          const decryptedValue = await decryptIfEncrypted(privateKey, value);
+          if (
+            (key === "Metadata" || key === "RequestBody" || key === "ResponseBody") &&
+            typeof decryptedValue === "string"
+          ) {
+            try {
+              decrypted[key] = JSON.parse(decryptedValue);
+            } catch {
+              decrypted[key] = decryptedValue;
+            }
+          } else {
+            decrypted[key] = decryptedValue;
+          }
         }
         decryptedLogs.push(decrypted as unknown as AIGatewayLog);
       } catch (err) {
@@ -100,10 +112,16 @@ export default {
     // 5. Re-serialize to NDJSON and transform to Loki push payload
     //    (transformNdjsonToLokiPayload expects NDJSON string input)
     const decryptedNdjson = decryptedLogs.map((log) => JSON.stringify(log)).join("\n");
+    const include = {
+      requestBody: env.INCLUDE_REQUEST_BODY === "true",
+      responseBody: env.INCLUDE_RESPONSE_BODY === "true",
+      metadata: env.INCLUDE_METADATA === "true",
+    };
     const lokiPayload: LokiPushPayload = transformNdjsonToLokiPayload(
       decryptedNdjson,
       env.GATEWAY_NAME,
       env.ENV_LABEL,
+      include,
     );
 
     if (lokiPayload.streams.length === 0) {

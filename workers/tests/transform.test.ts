@@ -38,6 +38,10 @@ describe("requestTimeToNanos", () => {
   it("handles 0 as seconds", () => {
     expect(requestTimeToNanos(0)).toBe("0");
   });
+
+  it("rejects nanosecond input longer than 13 digits to avoid precision loss", () => {
+    expect(() => requestTimeToNanos(1720032000000000000)).toThrow();
+  });
 });
 
 describe("buildLogLine", () => {

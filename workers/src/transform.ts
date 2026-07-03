@@ -13,17 +13,19 @@ export function normalizeModelName(modelId: string): string {
 }
 
 export function requestTimeToNanos(requestTime: number): string {
-  const s = Math.floor(requestTime).toString();
+  const n = BigInt(Math.floor(requestTime));
+  const s = n.toString();
   if (s.length <= 10) {
     // Seconds → nanoseconds
-    return (BigInt(requestTime) * 1_000_000_000n).toString();
+    return (n * 1_000_000_000n).toString();
   }
   if (s.length <= 13) {
     // Milliseconds → nanoseconds
-    return (BigInt(requestTime) * 1_000_000n).toString();
+    return (n * 1_000_000n).toString();
   }
-  // Already nanoseconds (≥19 digits)
-  return BigInt(requestTime).toString();
+  throw new Error(
+    `RequestTime precision lost: ${requestTime} has ${s.length} digits; expected seconds or milliseconds. Set timestamp_format to "unixseconds".`,
+  );
 }
 
 export function buildLogLine(log: AIGatewayLog): string {

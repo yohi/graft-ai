@@ -26,7 +26,7 @@ async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
     }

@@ -4,7 +4,7 @@ import type { EncryptedField } from "../src/types";
 
 // Generate a test RSA key pair inside the Workers runtime
 async function generateTestKeyPair(): Promise<{ privateKeyPem: string; publicKeyPem: string }> {
-  const keyPair = await crypto.subtle.generateKey(
+  const keyPair = (await crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
       modulusLength: 2048,
@@ -13,10 +13,10 @@ async function generateTestKeyPair(): Promise<{ privateKeyPem: string; publicKey
     },
     true,
     ["encrypt", "decrypt"],
-  );
+  )) as CryptoKeyPair;
 
-  const privateKeyDer = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
-  const publicKeyDer = await crypto.subtle.exportKey("spki", keyPair.publicKey);
+  const privateKeyDer = (await crypto.subtle.exportKey("pkcs8", keyPair.privateKey)) as ArrayBuffer;
+  const publicKeyDer = (await crypto.subtle.exportKey("spki", keyPair.publicKey)) as ArrayBuffer;
 
   const privateKeyPem = pemEncode(privateKeyDer, "PRIVATE KEY");
   const publicKeyPem = pemEncode(publicKeyDer, "PUBLIC KEY");
@@ -45,11 +45,11 @@ async function encryptForTest(publicKeyPem: string, plaintext: string): Promise<
     ["encrypt"],
   );
 
-  const aesKey = await crypto.subtle.generateKey(
+  const aesKey = (await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt", "decrypt"],
-  );
+  )) as CryptoKey;
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoder = new TextEncoder();
@@ -59,7 +59,7 @@ async function encryptForTest(publicKeyPem: string, plaintext: string): Promise<
     encoder.encode(plaintext),
   );
 
-  const aesKeyRaw = await crypto.subtle.exportKey("raw", aesKey);
+  const aesKeyRaw = (await crypto.subtle.exportKey("raw", aesKey)) as ArrayBuffer;
   const wrappedKey = await crypto.subtle.encrypt(
     { name: "RSA-OAEP" },
     pubKey,

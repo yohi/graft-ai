@@ -4,7 +4,7 @@ import type { Env } from "../src/types";
 
 // Helper to generate a test RSA key pair and return PEM strings
 async function getTestPrivateKeyPem(): Promise<string> {
-  const keyPair = await crypto.subtle.generateKey(
+  const keyPair = (await crypto.subtle.generateKey(
     {
       name: "RSA-OAEP",
       modulusLength: 2048,
@@ -13,8 +13,8 @@ async function getTestPrivateKeyPem(): Promise<string> {
     },
     true,
     ["encrypt", "decrypt"],
-  );
-  const der = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  )) as CryptoKeyPair;
+  const der = (await crypto.subtle.exportKey("pkcs8", keyPair.privateKey)) as ArrayBuffer;
   const bytes = new Uint8Array(der);
   let binary = "";
   for (const byte of bytes) {

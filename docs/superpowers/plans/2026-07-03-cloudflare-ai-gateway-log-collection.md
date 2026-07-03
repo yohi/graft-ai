@@ -1361,6 +1361,26 @@ describe("Worker fetch handler", () => {
     } as any);
     expect(response.status).toBe(400);
   });
+
+  it("returns 400 when all log lines fail to parse (stops Logpush retry)", async () => {
+    const privateKeyPem = await getTestPrivateKeyPem();
+    (mockEnv as any).RSA_PRIVATE_KEY_PEM = privateKeyPem;
+
+    // Valid gzip, but every decompressed line is unparseable JSON, so no
+    // record survives parse/decrypt and the batch is unprocessable.
+    const request = new Request("https://worker.example.com/", {
+      method: "POST",
+      body: await gzipText("not-json\n{invalid\n"),
+      headers: {
+        "Content-Encoding": "gzip",
+        "X-Origin-Secret": "test-origin-secret",
+      },
+    });
+    const response = await exports.default.fetch(request, mockEnv as any, {
+      waitUntil: vi.fn(),
+    } as any);
+    expect(response.status).toBe(400);
+  });
 });
 ```
 
@@ -1458,8 +1478,17 @@ export default {
       }
     }
 
+    // No log lines at all — nothing to process; acknowledge success so
+    // Logpush does not retry an empty batch.
+    if (lines.length === 0) {
+      return new Response("No log lines", { status: 200 });
+    }
+
+    // Every line failed to parse/decrypt — the batch is unprocessable. Return
+    // 4xx (not 5xx) so Logpush does not retry non-recoverable data, matching
+    // the malformed-gzip handling above.
     if (decryptedLogs.length === 0) {
-      return new Response("No valid log lines", { status: 200 });
+      return new Response("No valid log lines", { status: 400 });
     }
 
     // 5. Re-serialize to NDJSON and transform to Loki push payload
@@ -1495,7 +1524,7 @@ export default {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd workers && npx vitest run tests/index.test.ts`
-Expected: PASS — all 7 tests pass.
+Expected: PASS — all 8 tests pass.
 
 - [ ] **Step 5: Run all tests together**
 
@@ -1679,11 +1708,6 @@ variable "origin_secret_urlencoded" {
   description = "URL-encoded version of origin_secret for use in Logpush destination_conf header_* param"
   type        = string
   sensitive   = true
-}
-
-variable "workers_subdomain" {
-  description = "Cloudflare Workers account subdomain (set in Workers & Pages › Your subdomain)"
-  type        = string
 }
 ```
 

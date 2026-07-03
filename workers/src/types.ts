@@ -34,6 +34,36 @@ export interface EncryptedField {
   data: string;
 }
 
+export function isEncryptedField(value: unknown): value is EncryptedField {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const v = value as Record<string, unknown>;
+  if (
+    typeof v.key !== "string" ||
+    typeof v.iv !== "string" ||
+    typeof v.data !== "string"
+  ) {
+    return false;
+  }
+
+  const key = v.key;
+  const iv = v.iv;
+  const data = v.data;
+
+  const base64Pattern = /^[A-Za-z0-9+/]+={0,2}$/;
+
+  return (
+    key.length > 0 &&
+    iv.length > 0 &&
+    data.length > 0 &&
+    base64Pattern.test(key) &&
+    base64Pattern.test(iv) &&
+    base64Pattern.test(data)
+  );
+}
+
 export interface LokiStream {
   stream: {
     model: string;

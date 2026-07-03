@@ -127,6 +127,26 @@ describe("crypto module", () => {
     expect(result).toBe("plain string value");
   });
 
+  it("decryptIfEncrypted returns a plain object with non-base64 encryption-shaped fields as-is", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    const privateKey = await importRsaPrivateKey(privateKeyPem);
+    const shapedButPlain = { key: "not-base64!", iv: "iv", data: "data" };
+
+    const result = await decryptIfEncrypted(privateKey, shapedButPlain);
+
+    expect(result).toEqual(shapedButPlain);
+  });
+
+  it("decryptIfEncrypted returns a partial encryption-shaped object as-is", async () => {
+    const { privateKeyPem } = await generateTestKeyPair();
+    const privateKey = await importRsaPrivateKey(privateKeyPem);
+    const partial = { key: "abc", data: "def" };
+
+    const result = await decryptIfEncrypted(privateKey, partial);
+
+    expect(result).toEqual(partial);
+  });
+
   it("decryptIfEncrypted returns null as-is", async () => {
     const { privateKeyPem } = await generateTestKeyPair();
     const privateKey = await importRsaPrivateKey(privateKeyPem);

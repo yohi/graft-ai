@@ -1,4 +1,4 @@
-import type { EncryptedField } from "./types";
+import { isEncryptedField, type EncryptedField } from "./types";
 
 function pemToDer(pem: string): ArrayBuffer {
   const lines = pem
@@ -73,14 +73,8 @@ export async function decryptIfEncrypted(
   if (value === null || value === undefined) {
     return value;
   }
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "key" in value &&
-    "iv" in value &&
-    "data" in value
-  ) {
-    return decryptField(privateKey, value as EncryptedField);
+  if (isEncryptedField(value)) {
+    return decryptField(privateKey, value);
   }
   return value;
 }

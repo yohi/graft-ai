@@ -1698,7 +1698,7 @@ resource "cloudflare_logpush_job" "aig_logs" {
       "RequestBody",
       "ResponseBody",
     ]
-    timestamp_format = "unixnano"
+    timestamp_format = "unix"
     output_type      = "ndjson"
   }
 }

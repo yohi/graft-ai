@@ -9,6 +9,7 @@ fmt:
 	terraform fmt -recursive
 
 validate:
+	terraform -chdir=terraform init -backend=false
 	terraform -chdir=terraform validate
 
 test:
@@ -18,9 +19,11 @@ typecheck:
 	cd workers && npm run typecheck:ci
 
 plan:
+	terraform -chdir=terraform init
 	terraform -chdir=terraform plan
 
 apply:
+	terraform -chdir=terraform init
 	terraform -chdir=terraform apply
 
 dev:
@@ -29,6 +32,7 @@ dev:
 deploy:
 	scripts/verify-deployment-env.sh
 	cd workers && npx wrangler deploy
+	terraform -chdir=terraform init
 	terraform -chdir=terraform apply
 
 clean:

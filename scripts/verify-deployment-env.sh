@@ -41,7 +41,12 @@ require_wrangler_secret() {
   local secret_name="$1"
   local found=0
 
-  for s in "${WRANGLER_SECRETS[@]:-}"; do
+  if [[ ${#WRANGLER_SECRETS[@]} -eq 0 ]]; then
+    missing+=("Wrangler secret: ${secret_name}")
+    return
+  fi
+
+  for s in "${WRANGLER_SECRETS[@]}"; do
     if [[ "$s" == "$secret_name" ]]; then
       found=1
       break
@@ -60,15 +65,17 @@ require_terraform_var "grafana_cloud_access_policy_token"
 require_terraform_var "cloudflare_api_token"
 require_terraform_var "cloudflare_account_id"
 require_terraform_var "workers_subdomain"
+require_terraform_var "origin_secret"
 
 if ! load_wrangler_secrets; then
   missing+=("Could not verify Wrangler secrets")
+else
+  require_wrangler_secret "RSA_PRIVATE_KEY_PEM"
+  require_wrangler_secret "ORIGIN_SECRET"
+  require_wrangler_secret "GRAFANA_CLOUD_LOKI_URL"
+  require_wrangler_secret "GRAFANA_CLOUD_LOKI_USERNAME"
+  require_wrangler_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
 fi
-
-require_wrangler_secret "RSA_PRIVATE_KEY_PEM"
-require_wrangler_secret "GRAFANA_CLOUD_LOKI_URL"
-require_wrangler_secret "GRAFANA_CLOUD_LOKI_USERNAME"
-require_wrangler_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
 
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "Missing required environment variables for deployment:" >&2

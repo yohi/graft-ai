@@ -1677,7 +1677,7 @@ resource "cloudflare_logpush_job" "aig_logs" {
   dataset         = var.logpush_dataset
   name            = var.logpush_job_name
   enabled         = true
-  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${var.origin_secret_urlencoded}"
+  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
   max_upload_bytes = 5000000
   max_upload_records = 1000
 
@@ -1707,12 +1707,11 @@ resource "cloudflare_logpush_job" "aig_logs" {
 And add this variable to `variables.tf`:
 
 ```hcl
-variable "origin_secret_urlencoded" {
-  description = "URL-encoded version of origin_secret for use in Logpush destination_conf header_* param"
+variable "origin_secret" {
+  description = "Shared secret that Cloudflare Logpush sends as the X-Origin-Secret header"
   type        = string
   sensitive   = true
 }
-```
 
 - [x] **Step 4: Create `terraform/outputs.tf`**
 

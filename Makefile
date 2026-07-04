@@ -36,4 +36,4 @@ deploy:
 	terraform -chdir=terraform apply
 
 clean:
-	rm -rf terraform/.terraform terraform/terraform.tfstate*
+	rm -rf terraform/.terraform

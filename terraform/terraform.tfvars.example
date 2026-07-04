@@ -6,3 +6,6 @@ logpush_dataset         = "ai_gateway_events"
 worker_script_name      = "graft-ai-aig-logpush"
 logpush_job_name        = "graft-ai-aig-logpush"
 workers_subdomain       = "your-account-subdomain"
+
+# max_upload_bytes   = 5000000
+# max_upload_records = 1000

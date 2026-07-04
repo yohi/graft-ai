@@ -87,3 +87,15 @@ variable "workers_subdomain" {
   description = "Cloudflare Workers account subdomain (set in Workers & Pages › Your subdomain)"
   type        = string
 }
+
+variable "max_upload_bytes" {
+  description = "Maximum upload size in bytes for each Logpush batch"
+  type        = number
+  default     = 5000000
+}
+
+variable "max_upload_records" {
+  description = "Maximum number of records per Logpush batch"
+  type        = number
+  default     = 1000
+}

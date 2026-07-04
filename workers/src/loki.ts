@@ -35,22 +35,31 @@ export async function pushToLoki(
       await sleep(backoffMs);
     }
 
-    const response = await fetchFn(url, {
-      method: "POST",
-      headers,
-      body,
-    });
-    lastStatus = response.status;
+    try {
+      const response = await fetchFn(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(30000),
+      });
+      lastStatus = response.status;
 
-    if (response.status >= 200 && response.status < 300) {
-      return { ok: true, status: response.status };
-    }
+      if (response.status >= 200 && response.status < 300) {
+        return { ok: true, status: response.status };
+      }
 
-    if (response.status !== 429) {
-      // Non-429 errors: do not retry, let caller decide
-      return { ok: false, status: response.status };
+      if (response.status !== 429) {
+        // Non-429 errors: do not retry, let caller decide
+        return { ok: false, status: response.status };
+      }
+      // 429: retry with backoff
+    } catch (err) {
+      // Network failures and timeouts are retryable.
+      lastStatus = 0;
+      console.error(
+        `Loki push attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    // 429: retry with backoff
   }
 
   return { ok: false, status: lastStatus };

@@ -49,6 +49,14 @@ describe("pushToLoki", () => {
     expect(mockFetch).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
   });
 
+  it("retries on network failure and eventually returns the last error", async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
+    const result = await pushToLoki(testEnv, testPayload, mockFetch);
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(0);
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+
   it("succeeds on retry after initial 429", async () => {
     const mockFetch = vi
       .fn()
@@ -98,5 +106,12 @@ describe("pushToLoki", () => {
     const call = mockFetch.mock.calls[0]!;
     const init = call[1] as RequestInit;
     expect(init.body).toBe(JSON.stringify(testPayload));
+  });
+
+  it("uses AbortSignal.timeout for each request", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    await pushToLoki(testEnv, testPayload, mockFetch);
+    const init = mockFetch.mock.calls[0]![1] as RequestInit;
+    expect(init.signal).toBeDefined();
   });
 });

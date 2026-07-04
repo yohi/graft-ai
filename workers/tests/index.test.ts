@@ -262,6 +262,17 @@ describe("Worker fetch handler", () => {
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
     expect(response.status).toBe(400);
   });
+
+  it("returns 400 when RSA private key PEM is invalid (stops Logpush retry)", async () => {
+    const env = buildEnv({ RSA_PRIVATE_KEY_PEM: "not-a-valid-pem" });
+    const request = new Request("https://worker.example.com/", {
+      method: "POST",
+      body: await gzipText(sampleNdjson),
+      headers: { "Content-Encoding": "gzip" },
+    });
+    const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
+    expect(response.status).toBe(400);
+  });
 });
 
 it("includes decrypted bodies in Loki payload when env flags are enabled", async () => {

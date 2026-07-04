@@ -46,7 +46,16 @@ export default {
     }
 
     // 3. Import RSA private key (cached across warm Worker invocations)
-    const privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM);
+    //    An invalid PEM is non-recoverable; return 4xx so Logpush does not retry.
+    let privateKey: CryptoKey;
+    try {
+      privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM);
+    } catch (err) {
+      console.error(
+        `Failed to import RSA private key: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return new Response("Invalid RSA private key", { status: 400 });
+    }
 
     // 4. Parse NDJSON, decrypt encrypted fields per line
     const lines = bodyText.split("\n").filter((line) => line.trim().length > 0);

@@ -79,10 +79,11 @@ Cloudflare AI Gateway の Logpush 出力は、リクエストごとに 1 行の 
 Workers は NDJSON の各行を以下のように Loki 用 JSON streams 形式に変換する。
 
 1. **タイムスタンプ変換**
-   - `RequestTime` の単位を確定する（Cloudflare 公式ドキュメントで確認）。
-     - 秒の場合：`RequestTime × 1_000_000_000` でナノ秒に変換する。
-     - ミリ秒の場合：`RequestTime × 1_000_000` でナノ秒に変換する。
-   - 実装前にサンプルログで値の桁数（10 桁 → 秒、13 桁 → ミリ秒）を確認し、変換ルールをここに明記する。
+   - Logpush の `output_options.timestamp_format` は `"unix"`（秒）とする。Workers 側の `requestTimeToNanos` は、秒（10 桁以下）またはミリ秒（13 桁以下）のみを受け入れ、ナノ秒に変換する。
+   - 秒の場合：`RequestTime × 1_000_000_000` でナノ秒に変換する。
+   - ミリ秒の場合：`RequestTime × 1_000_000` でナノ秒に変換する。
+   - 14 桁以上の値が来た場合、既にナノ秒や未知の精度である可能性があるため異常値として扱い、該当ログ行をスキップして Workers Logs に記録する。
+   - 実装時に Cloudflare Logpush からのサンプルログで 10 桁（秒）を確認済み。13 桁（ミリ秒）ブランチは、異なる `timestamp_format` 設定や将来の変更に備えた防御的な対応として保持している。
    - Loki は各ログ行に `[<unix epoch in nanoseconds>, "<log line>"]` を要求する。
 
 2. **ラベル（インデックス）の付与**

@@ -88,3 +88,14 @@ variable "max_upload_records" {
   type        = number
   default     = 1000
 }
+
+variable "origin_secret" {
+  description = "Origin secret shared between Logpush destination and the Workers ingress; sent as X-Origin-Secret header"
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.origin_secret) > 0
+    error_message = "origin_secret must not be empty."
+  }
+}

@@ -2,6 +2,7 @@ export interface Env {
   GRAFANA_CLOUD_LOKI_URL: string;
   GRAFANA_CLOUD_LOKI_USERNAME: string;
   GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string;
+  ORIGIN_SECRET: string;
   RSA_PRIVATE_KEY_PEM: string;
   GATEWAY_NAME: string;
   ENV_LABEL: string;

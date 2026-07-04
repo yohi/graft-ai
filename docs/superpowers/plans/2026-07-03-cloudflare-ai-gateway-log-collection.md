@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Cloudflare Workers, Web Crypto API (RSA-OAEP-SHA256 + AES-GCM), `DecompressionStream("gzip")`, Wrangler v4, Vitest v4 with `@cloudflare/vitest-pool-workers`, Terraform with Cloudflare provider v5, Grafana Cloud Loki HTTP push API.
 
-> **Implementation status (as of 2026-07-04):** Most code/tasks are complete and verified. Tests pass (44/44), typecheck passes, `terraform validate` passes, and `make fmt` is clean. However, the `X-Origin-Secret` validation described in the Architecture/Global Constraints is **not currently implemented**: `workers/src/index.ts` does not check the header, `workers/.dev.vars.example` omits `ORIGIN_SECRET`, and Terraform does not define `origin_secret`/`origin_secret_urlencoded` or pass the secret via `header_X-Origin-Secret`. These items are left unchecked below. Tasks 9 and 10 require real Cloudflare/Grafana credentials and deployment, so they remain unchecked.
+> **Implementation status (as of 2026-07-04):** Most code/tasks are complete and verified. Tests pass (46/46), typecheck passes, `terraform validate` passes, and `make fmt` is clean. The `X-Origin-Secret` validation described in the Architecture/Global Constraints is implemented in `workers/src/index.ts`; the secret is defined in `workers/.dev.vars.example` and sent via Terraform `header_X-Origin-Secret`. Tasks 9 and 10 require real Cloudflare/Grafana credentials and deployment, so they remain unchecked.
 
 ## Global Constraints
 
@@ -238,7 +238,8 @@ GRAFANA_CLOUD_LOKI_URL=https://logs-prod-xxx.grafana.net
 GRAFANA_CLOUD_LOKI_USERNAME=123456
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
 ORIGIN_SECRET=your-random-origin-secret-here
-RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
+RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----
+```
 
 - [x] **Step 7: Update `.gitignore`**
 
@@ -1676,7 +1677,7 @@ resource "cloudflare_logpush_job" "aig_logs" {
   dataset         = var.logpush_dataset
   name            = var.logpush_job_name
   enabled         = true
-  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${var.origin_secret_urlencoded}"
+  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
   max_upload_bytes = 5000000
   max_upload_records = 1000
 
@@ -1706,12 +1707,11 @@ resource "cloudflare_logpush_job" "aig_logs" {
 And add this variable to `variables.tf`:
 
 ```hcl
-variable "origin_secret_urlencoded" {
-  description = "URL-encoded version of origin_secret for use in Logpush destination_conf header_* param"
+variable "origin_secret" {
+  description = "Shared secret that Cloudflare Logpush sends as the X-Origin-Secret header"
   type        = string
   sensitive   = true
 }
-```
 
 - [x] **Step 4: Create `terraform/outputs.tf`**
 

@@ -12,3 +12,6 @@ terraform/.terraform/
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/terraform.tfvars
+
+# Agent planning workspace
+.omo/

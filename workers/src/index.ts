@@ -6,6 +6,19 @@ import { pushToLoki } from "./loki";
 // Cache imported RSA private keys across warm Worker invocations
 const privateKeyCache = new Map<string, CryptoKey>();
 
+async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const maxLen = Math.max(aBytes.length, bBytes.length);
+  const aPadded = new Uint8Array(maxLen);
+  const bPadded = new Uint8Array(maxLen);
+  aPadded.set(aBytes);
+  bPadded.set(bBytes);
+  crypto.subtle.timingSafeEqual(aPadded, bPadded);
+  return aBytes.length === bBytes.length;
+}
+
 async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {
   let key = privateKeyCache.get(pem);
   if (!key) {
@@ -19,6 +32,12 @@ export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     if (request.method !== "POST") {
       return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    // 1. Validate origin secret using constant-time comparison
+    const originSecret = request.headers.get("X-Origin-Secret");
+    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET))) {
+      return new Response("Unauthorized", { status: 401 });
     }
 
     // 2. Decompress gzip body if Content-Encoding: gzip.

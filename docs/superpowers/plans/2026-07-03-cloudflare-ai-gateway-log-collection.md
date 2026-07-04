@@ -8,6 +8,8 @@
 
 **Tech Stack:** TypeScript, Cloudflare Workers, Web Crypto API (RSA-OAEP-SHA256 + AES-GCM), `DecompressionStream("gzip")`, Wrangler v4, Vitest v4 with `@cloudflare/vitest-pool-workers`, Terraform with Cloudflare provider v5, Grafana Cloud Loki HTTP push API.
 
+> **Implementation status (as of 2026-07-04):** Most code/tasks are complete and verified. Tests pass (46/46), typecheck passes, `terraform validate` passes, and `make fmt` is clean. The `X-Origin-Secret` validation described in the Architecture/Global Constraints is implemented in `workers/src/index.ts`; the secret is defined in `workers/.dev.vars.example` and sent via Terraform `header_X-Origin-Secret`. Tasks 9 and 10 require real Cloudflare/Grafana credentials and deployment, so they remain unchecked.
+
 ## Global Constraints
 
 - Workers implementation language: TypeScript (spec §9 — TypeScript 推奨).
@@ -87,7 +89,7 @@ graft-ai/
 - Consumes: nothing (first task)
 - Produces: `Env` interface in `workers/src/types.ts` with fields: `GRAFANA_CLOUD_LOKI_URL: string`, `GRAFANA_CLOUD_LOKI_USERNAME: string`, `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string`, `ORIGIN_SECRET: string`, `RSA_PRIVATE_KEY_PEM: string`, `GATEWAY_NAME: string`, `ENV_LABEL: string`
 
-- [ ] **Step 1: Create `workers/package.json`**
+- [x] **Step 1: Create `workers/package.json`**
 
 ```json
 {
@@ -112,7 +114,7 @@ graft-ai/
 }
 ```
 
-- [ ] **Step 2: Create `workers/tsconfig.json`**
+- [x] **Step 2: Create `workers/tsconfig.json`**
 
 ```json
 {
@@ -139,7 +141,7 @@ graft-ai/
 }
 ```
 
-- [ ] **Step 3: Create `workers/wrangler.jsonc`**
+- [x] **Step 3: Create `workers/wrangler.jsonc`**
 
 ```jsonc
 {
@@ -158,7 +160,7 @@ graft-ai/
 }
 ```
 
-- [ ] **Step 4: Create `workers/vitest.config.ts`**
+- [x] **Step 4: Create `workers/vitest.config.ts`**
 
 ```ts
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
@@ -236,9 +238,10 @@ GRAFANA_CLOUD_LOKI_URL=https://logs-prod-xxx.grafana.net
 GRAFANA_CLOUD_LOKI_USERNAME=123456
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
 ORIGIN_SECRET=your-random-origin-secret-here
-RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
+RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----
+```
 
-- [ ] **Step 7: Update `.gitignore`**
+- [x] **Step 7: Update `.gitignore`**
 
 Append these lines to the project root `.gitignore`:
 
@@ -260,7 +263,7 @@ terraform/terraform.tfvars
 .DS_Store
 ```
 
-- [ ] **Step 8: Install dependencies and generate types**
+- [x] **Step 8: Install dependencies and generate types**
 
 Run from `workers/` directory:
 
@@ -270,12 +273,12 @@ cd workers && npm install && npx wrangler types
 
 Expected: `node_modules/` created, `worker-configuration.d.ts` generated, no errors.
 
-- [ ] **Step 9: Verify typecheck passes**
+- [x] **Step 9: Verify typecheck passes**
 
 Run: `cd workers && npx tsc --noEmit`
 Expected: PASS with no output (no type errors).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add workers/ .gitignore
@@ -293,7 +296,7 @@ git commit -m "feat: scaffold Cloudflare Workers project for AI Gateway log coll
 - Consumes: `AIGatewayLog` type from Task 1
 - Produces: NDJSON fixture file used by all subsequent test tasks
 
-- [ ] **Step 1: Create the fixture file**
+- [x] **Step 1: Create the fixture file**
 
 Create `tests/fixtures/sample_aigateway_log.json` with NDJSON (one JSON object per line, no trailing newline):
 
@@ -307,7 +310,7 @@ Create `tests/fixtures/sample_aigateway_log.json` with NDJSON (one JSON object p
 
 This covers: status 200 (×3), 400, 500; two models (`llama-3.1-8b-instruct`, `llama-3.1-70b-instruct`); cache miss/hit; `RequestTime` in seconds (10-digit epoch).
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add tests/fixtures/sample_aigateway_log.json
@@ -328,7 +331,7 @@ git commit -m "test: add sample AI Gateway NDJSON fixture with 200/400/500 statu
 - Produces: `decryptField(privateKey: CryptoKey, field: EncryptedField): Promise<string>` — unwraps AES-GCM key via RSA, then decrypts ciphertext, returns UTF-8 string.
 - Produces: `decryptIfEncrypted(privateKey: CryptoKey, value: unknown): Promise<unknown>` — if value is `EncryptedField`, decrypts; otherwise returns as-is.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `workers/tests/crypto.test.ts`:
 
@@ -471,12 +474,12 @@ describe("crypto module", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd workers && npx vitest run tests/crypto.test.ts`
 Expected: FAIL with "Failed to resolve import" or "module not found" for `../src/crypto`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `workers/src/crypto.ts`:
 
@@ -563,12 +566,12 @@ export async function decryptIfEncrypted(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd workers && npx vitest run tests/crypto.test.ts`
 Expected: PASS — all 5 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add workers/src/crypto.ts workers/tests/crypto.test.ts
@@ -591,7 +594,7 @@ git commit -m "feat: add crypto module for RSA-OAEP unwrap and AES-GCM decrypt"
 - Produces: `transformLogToLokiStream(log: AIGatewayLog, gatewayName: string, envLabel: string): LokiStream` — builds a complete Loki stream entry with labels and values.
 - Produces: `transformNdjsonToLokiPayload(ndjson: string, gatewayName: string, envLabel: string): LokiPushPayload` — parses NDJSON, transforms each line, groups by label set.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `workers/tests/transform.test.ts`:
 
@@ -819,12 +822,12 @@ describe("transformNdjsonToLokiPayload", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd workers && npx vitest run tests/transform.test.ts`
 Expected: FAIL with "Failed to resolve import" for `../src/transform`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `workers/src/transform.ts`:
 
@@ -920,12 +923,12 @@ export function transformNdjsonToLokiPayload(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd workers && npx vitest run tests/transform.test.ts`
 Expected: PASS — all tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add workers/src/transform.ts workers/tests/transform.test.ts
@@ -944,7 +947,7 @@ git commit -m "feat: add transform module for NDJSON to Loki streams conversion"
 - Consumes: `LokiPushPayload` from `workers/src/types.ts` (Task 1), `Env` from `workers/src/types.ts` (Task 1)
 - Produces: `pushToLoki(env: Pick<Env, "GRAFANA_CLOUD_LOKI_URL" | "GRAFANA_CLOUD_LOKI_USERNAME" | "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN">, payload: LokiPushPayload, fetchFn?: typeof fetch): Promise<{ ok: boolean; status: number }>` — pushes Loki payload via HTTP, retries on 429 up to 3 times with exponential backoff. Returns `{ ok: true, status: 200 }` on success.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `workers/tests/loki.test.ts`:
 
@@ -1066,12 +1069,12 @@ describe("pushToLoki", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd workers && npx vitest run tests/loki.test.ts`
 Expected: FAIL with "Failed to resolve import" for `../src/loki`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `workers/src/loki.ts`:
 
@@ -1130,12 +1133,12 @@ export async function pushToLoki(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd workers && npx vitest run tests/loki.test.ts`
 Expected: PASS — all 9 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add workers/src/loki.ts workers/tests/loki.test.ts
@@ -1384,7 +1387,7 @@ describe("Worker fetch handler", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd workers && npx vitest run tests/index.test.ts`
 Expected: FAIL with "Failed to resolve import" for `../src` or `exports.default` undefined.
@@ -1521,17 +1524,17 @@ export default {
 } satisfies ExportedHandler<Env>;
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd workers && npx vitest run tests/index.test.ts`
 Expected: PASS — all 8 tests pass.
 
-- [ ] **Step 5: Run all tests together**
+- [x] **Step 5: Run all tests together**
 
 Run: `cd workers && npx vitest run`
 Expected: PASS — all tests across crypto, transform, loki, and index pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add workers/src/index.ts workers/tests/index.test.ts
@@ -1553,7 +1556,7 @@ git commit -m "feat: add Worker fetch handler orchestrating decrypt-transform-pu
 - Consumes: Worker script at `workers/src/index.ts` (Task 6), spec requirements for Logpush job, and IaC management.
 - Produces: A Terraform configuration that provisions only the Logpush job targeting the Wrangler-deployed Worker URL, plus outputs for monitoring. Worker script and secrets are managed by Wrangler.
 
-- [ ] **Step 1: Create `terraform/versions.tf`**
+- [x] **Step 1: Create `terraform/versions.tf`**
 
 ```hcl
 terraform {
@@ -1674,7 +1677,7 @@ resource "cloudflare_logpush_job" "aig_logs" {
   dataset         = var.logpush_dataset
   name            = var.logpush_job_name
   enabled         = true
-  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${var.origin_secret_urlencoded}"
+  destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
   max_upload_bytes = 5000000
   max_upload_records = 1000
 
@@ -1704,14 +1707,13 @@ resource "cloudflare_logpush_job" "aig_logs" {
 And add this variable to `variables.tf`:
 
 ```hcl
-variable "origin_secret_urlencoded" {
-  description = "URL-encoded version of origin_secret for use in Logpush destination_conf header_* param"
+variable "origin_secret" {
+  description = "Shared secret that Cloudflare Logpush sends as the X-Origin-Secret header"
   type        = string
   sensitive   = true
 }
-```
 
-- [ ] **Step 4: Create `terraform/outputs.tf`**
+- [x] **Step 4: Create `terraform/outputs.tf`**
 
 ```hcl
 output "worker_url" {
@@ -1750,7 +1752,7 @@ logpush_job_name       = "graft-ai-aig-logpush"
 workers_subdomain      = "your-account-subdomain"
 ```
 
-- [ ] **Step 6: Verify Terraform formatting and validation**
+- [x] **Step 6: Verify Terraform formatting and validation**
 
 Run: `cd terraform && terraform fmt -check`
 Expected: PASS (no formatting issues).
@@ -1776,7 +1778,7 @@ git commit -m "feat: add Terraform configuration for Logpush job targeting Wrang
 - Consumes: All previous tasks
 - Produces: Convenience Makefile targets for formatting, validation, testing, and deployment
 
-- [ ] **Step 1: Create `Makefile`**
+- [x] **Step 1: Create `Makefile`**
 
 ```makefile
 .PHONY: install fmt validate test typecheck plan apply dev deploy clean
@@ -1815,7 +1817,7 @@ clean:
 	rm -rf terraform/.terraform terraform/terraform.tfstate*
 ```
 
-- [ ] **Step 2: Verify Makefile targets work**
+- [x] **Step 2: Verify Makefile targets work**
 
 Run: `make typecheck`
 Expected: PASS — no TypeScript errors.
@@ -1826,7 +1828,7 @@ Expected: PASS — all Vitest tests pass.
 Run: `make fmt`
 Expected: PASS — no formatting changes needed.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add Makefile

@@ -1,5 +1,9 @@
 import type { AIGatewayLog, LokiStream, LokiPushPayload } from "./types";
 
+// Loki has a per-line size limit; Grafana Cloud Free Tier accepts up to ~64KB per line.
+// We leave a margin for JSON overhead and labels.
+const MAX_LOG_LINE_BYTES = 60_000;
+
 export function normalizeModelName(modelId: string): string {
   if (modelId.startsWith("@cf/")) {
     const withoutPrefix = modelId.slice(4);
@@ -56,7 +60,25 @@ export function buildLogLine(
   if (include?.metadata && log.Metadata !== undefined) {
     line.metadata = log.Metadata;
   }
-  return JSON.stringify(line);
+  const json = JSON.stringify(line);
+  const bytes = new TextEncoder().encode(json);
+  if (bytes.length <= MAX_LOG_LINE_BYTES) {
+    return json;
+  }
+
+  const trimmed: Record<string, unknown> = { ...line };
+  for (const key of ["request_body", "response_body", "metadata"] as const) {
+    if (key in trimmed) {
+      delete trimmed[key];
+      const trimmedJson = JSON.stringify(trimmed);
+      const trimmedBytes = new TextEncoder().encode(trimmedJson);
+      if (trimmedBytes.length <= MAX_LOG_LINE_BYTES) {
+        return trimmedJson;
+      }
+    }
+  }
+
+  throw new Error(`Log line exceeds maximum size even after trimming: ${bytes.length} bytes`);
 }
 
 function labelKey(stream: {
@@ -107,7 +129,7 @@ export function transformNdjsonToLokiPayload(
       }
     } catch (err) {
       console.error(
-        `Failed to parse log line: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to parse or trim log line: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

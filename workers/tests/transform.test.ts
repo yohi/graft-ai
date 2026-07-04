@@ -104,6 +104,29 @@ describe("buildLogLine", () => {
     expect(parsed.response_body).toEqual(log.ResponseBody);
     expect(parsed.metadata).toEqual(log.Metadata);
   });
+
+  it("drops optional bodies when log line exceeds size limit", () => {
+    const big = "x".repeat(70_000);
+    const log: AIGatewayLog = {
+      RequestID: "req-big",
+      RequestTime: 1720032000,
+      CacheStatus: "miss",
+      StatusCode: 200,
+      Model: "gpt-4o",
+      PromptTokens: 1,
+      CompletionTokens: 1,
+      TotalTokens: 2,
+      RequestDuration: 100,
+      Path: "/v1/chat/completions",
+      Method: "POST",
+      RequestBody: { messages: [big] } as unknown as EncryptedField,
+    };
+    const line = buildLogLine(log, { requestBody: true });
+    const bytes = new TextEncoder().encode(line);
+    expect(bytes.length).toBeLessThanOrEqual(60_000);
+    const parsed = JSON.parse(line);
+    expect(parsed.request_body).toBeUndefined();
+  });
 });
 
 describe("transformLogToLokiStream", () => {

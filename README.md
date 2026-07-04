@@ -97,17 +97,28 @@ make deploy      # wrangler deploy + terraform apply
    cp workers/.dev.vars.example workers/.dev.vars
    cp terraform/terraform.tfvars.example terraform/terraform.tfvars
    ```
-3. Export secret variables (do not commit them):
+3. Set Worker runtime secrets via Wrangler:
+   ```bash
+   cd workers
+   npx wrangler secret put ORIGIN_SECRET
+   npx wrangler secret put RSA_PRIVATE_KEY_PEM
+   npx wrangler secret put GRAFANA_CLOUD_LOKI_URL
+   npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME
+   npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN
+   cd ..
+   ```
+4. Export Terraform variables (do not commit them):
    ```bash
    export TF_VAR_cloudflare_api_token="..."
    export TF_VAR_cloudflare_account_id="..."
+   export TF_VAR_workers_subdomain="..."
    export TF_VAR_origin_secret="..."
    export TF_VAR_rsa_private_key_pem="..."
    export TF_VAR_grafana_cloud_loki_url="..."
    export TF_VAR_grafana_cloud_loki_username="..."
    export TF_VAR_grafana_cloud_access_policy_token="..."
    ```
-4. Deploy and verify end-to-end:
+5. Deploy and verify end-to-end:
    ```bash
    make deploy
    ```

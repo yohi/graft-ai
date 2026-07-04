@@ -66,6 +66,7 @@ if ! load_wrangler_secrets; then
 fi
 
 require_wrangler_secret "RSA_PRIVATE_KEY_PEM"
+require_wrangler_secret "ORIGIN_SECRET"
 require_wrangler_secret "GRAFANA_CLOUD_LOKI_URL"
 require_wrangler_secret "GRAFANA_CLOUD_LOKI_USERNAME"
 require_wrangler_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"

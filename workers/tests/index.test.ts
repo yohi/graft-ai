@@ -38,10 +38,7 @@ function buildEnv(overrides: Partial<Env> = {}): Env {
   };
 }
 
-function buildRequest(
-  body: BodyInit | null,
-  headers: Record<string, string> = {},
-): Request {
+function buildRequest(body: BodyInit | null, headers: Record<string, string> = {}): Request {
   return new Request("https://worker.example.com/", {
     method: "POST",
     body,
@@ -255,10 +252,9 @@ describe("Worker fetch handler", () => {
   it("returns 400 for a malformed gzip body (stops Logpush retry)", async () => {
     const env = buildEnv({ RSA_PRIVATE_KEY_PEM: await getTestPrivateKeyPem() });
 
-    const request = buildRequest(
-      new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]),
-      { "Content-Encoding": "gzip" },
-    );
+    const request = buildRequest(new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]), {
+      "Content-Encoding": "gzip",
+    });
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
     expect(response.status).toBe(400);
   });

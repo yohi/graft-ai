@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Cloudflare Workers, Web Crypto API (RSA-OAEP-SHA256 + AES-GCM), `DecompressionStream("gzip")`, Wrangler v4, Vitest v4 with `@cloudflare/vitest-pool-workers`, Terraform with Cloudflare provider v5, Grafana Cloud Loki HTTP push API.
 
-> **Implementation status (as of 2026-07-04):** Most code/tasks are complete and verified. Tests pass (44/44), typecheck passes, `terraform validate` passes, and `make fmt` is clean. However, the `X-Origin-Secret` validation described in the Architecture/Global Constraints is **not currently implemented**: `workers/src/index.ts` does not check the header, `workers/.dev.vars.example` omits `ORIGIN_SECRET`, and Terraform does not define `origin_secret`/`origin_secret_urlencoded` or pass the secret via `header_X-Origin-Secret`. These items are left unchecked below. Tasks 9 and 10 require real Cloudflare/Grafana credentials and deployment, so they remain unchecked.
+> **Implementation status (as of 2026-07-04):** Most code/tasks are complete and verified. Tests pass (46/46), typecheck passes, `terraform validate` passes, and `make fmt` is clean. The `X-Origin-Secret` validation described in the Architecture/Global Constraints is implemented in `workers/src/index.ts`; the secret is defined in `workers/.dev.vars.example` and sent via Terraform `header_X-Origin-Secret`. Tasks 9 and 10 require real Cloudflare/Grafana credentials and deployment, so they remain unchecked.
 
 ## Global Constraints
 

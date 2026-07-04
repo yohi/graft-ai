@@ -109,11 +109,10 @@ async function encryptForTest(publicKeyPem: string, plaintext: string): Promise<
     ["encrypt"],
   );
 
-  const aesKey = (await crypto.subtle.generateKey(
-    { name: "AES-GCM", length: 256 },
-    true,
-    ["encrypt", "decrypt"],
-  )) as CryptoKey;
+  const aesKey = (await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
+    "encrypt",
+    "decrypt",
+  ])) as CryptoKey;
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoder = new TextEncoder();
@@ -124,11 +123,7 @@ async function encryptForTest(publicKeyPem: string, plaintext: string): Promise<
   );
 
   const aesKeyRaw = (await crypto.subtle.exportKey("raw", aesKey)) as ArrayBuffer;
-  const wrappedKey = await crypto.subtle.encrypt(
-    { name: "RSA-OAEP" },
-    pubKey,
-    aesKeyRaw,
-  );
+  const wrappedKey = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pubKey, aesKeyRaw);
 
   return {
     key: base64Encode(wrappedKey),
@@ -157,7 +152,6 @@ function base64Encode(buf: ArrayBuffer): string {
   }
   return btoa(binary);
 }
-
 
 const mockCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 
@@ -286,64 +280,64 @@ describe("Worker fetch handler", () => {
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
     expect(response.status).toBe(400);
   });
+});
+
+it("includes decrypted bodies in Loki payload when env flags are enabled", async () => {
+  const { privateKeyPem, publicKeyPem } = await generateTestKeyPair();
+  const env = buildEnv({
+    RSA_PRIVATE_KEY_PEM: privateKeyPem,
+    INCLUDE_REQUEST_BODY: "true",
+    INCLUDE_RESPONSE_BODY: "true",
+    INCLUDE_METADATA: "true",
   });
 
-  it("includes decrypted bodies in Loki payload when env flags are enabled", async () => {
-    const { privateKeyPem, publicKeyPem } = await generateTestKeyPair();
-    const env = buildEnv({
-      RSA_PRIVATE_KEY_PEM: privateKeyPem,
-      INCLUDE_REQUEST_BODY: "true",
-      INCLUDE_RESPONSE_BODY: "true",
-      INCLUDE_METADATA: "true",
-    });
+  const metadata = await encryptForTest(publicKeyPem, JSON.stringify({ model: "gpt-4o" }));
+  const requestBody = await encryptForTest(publicKeyPem, JSON.stringify({ messages: [] }));
+  const responseBody = await encryptForTest(publicKeyPem, JSON.stringify({ choices: [] }));
 
-    const metadata = await encryptForTest(publicKeyPem, JSON.stringify({ model: "gpt-4o" }));
-    const requestBody = await encryptForTest(publicKeyPem, JSON.stringify({ messages: [] }));
-    const responseBody = await encryptForTest(publicKeyPem, JSON.stringify({ choices: [] }));
-
-    const ndjson = JSON.stringify({
-      RequestID: "req-encrypted",
-      RequestTime: 1720032000,
-      CacheStatus: "miss",
-      StatusCode: 200,
-      Model: "gpt-4o",
-      PromptTokens: 10,
-      CompletionTokens: 5,
-      TotalTokens: 15,
-      RequestDuration: 100,
-      Path: "/v1/chat/completions",
-      Method: "POST",
-      Metadata: metadata,
-      RequestBody: requestBody,
-      ResponseBody: responseBody,
-    });
-
-    let pushedBody: string | null = null;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
-      const url = typeof input === "string" ? input : input.url;
-      if (url.includes("/loki/api/v1/push")) {
-        pushedBody = init?.body as string;
-        return new Response("", { status: 200 });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-
-    const request = new Request("https://worker.example.com/", {
-      method: "POST",
-      body: await gzipText(ndjson),
-      headers: {
-        "Content-Encoding": "gzip",
-        "X-Origin-Secret": "test-origin-secret",
-      },
-    });
-    const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
-    expect(response.status).toBe(200);
-    expect(pushedBody).not.toBeNull();
-    const payload = JSON.parse(pushedBody!);
-    const logLine = JSON.parse(payload.streams[0].values[0][1]);
-    expect(logLine.metadata).toEqual({ model: "gpt-4o" });
-    expect(logLine.request_body).toEqual({ messages: [] });
-    expect(logLine.response_body).toEqual({ choices: [] });
-
-    vi.restoreAllMocks();
+  const ndjson = JSON.stringify({
+    RequestID: "req-encrypted",
+    RequestTime: 1720032000,
+    CacheStatus: "miss",
+    StatusCode: 200,
+    Model: "gpt-4o",
+    PromptTokens: 10,
+    CompletionTokens: 5,
+    TotalTokens: 15,
+    RequestDuration: 100,
+    Path: "/v1/chat/completions",
+    Method: "POST",
+    Metadata: metadata,
+    RequestBody: requestBody,
+    ResponseBody: responseBody,
   });
+
+  let pushedBody: string | null = null;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (url.includes("/loki/api/v1/push")) {
+      pushedBody = init?.body as string;
+      return new Response("", { status: 200 });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+
+  const request = new Request("https://worker.example.com/", {
+    method: "POST",
+    body: await gzipText(ndjson),
+    headers: {
+      "Content-Encoding": "gzip",
+      "X-Origin-Secret": "test-origin-secret",
+    },
+  });
+  const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
+  expect(response.status).toBe(200);
+  expect(pushedBody).not.toBeNull();
+  const payload = JSON.parse(pushedBody!);
+  const logLine = JSON.parse(payload.streams[0].values[0][1]);
+  expect(logLine.metadata).toEqual({ model: "gpt-4o" });
+  expect(logLine.request_body).toEqual({ messages: [] });
+  expect(logLine.response_body).toEqual({ choices: [] });
+
+  vi.restoreAllMocks();
+});

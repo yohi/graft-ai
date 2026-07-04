@@ -42,9 +42,7 @@ describe("pushToLoki", () => {
   });
 
   it("retries on HTTP 429 up to 3 times then returns not-ok", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response("Too Many Requests", { status: 429 }),
-    );
+    const mockFetch = vi.fn().mockResolvedValue(new Response("Too Many Requests", { status: 429 }));
     const result = await pushToLoki(testEnv, testPayload, mockFetch);
     expect(result.ok).toBe(false);
     expect(result.status).toBe(429);

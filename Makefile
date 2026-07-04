@@ -5,7 +5,7 @@ install:
 	cd workers && npx wrangler types
 
 fmt:
-	cd workers && npx tsc --noEmit
+	cd workers && npm run fmt
 	terraform fmt -recursive
 
 validate:

@@ -90,7 +90,7 @@ export function transformNdjsonToLokiPayload(
   gatewayName: string,
   envLabel: string,
   include?: Parameters<typeof buildLogLine>[1],
-  ): LokiPushPayload {
+): LokiPushPayload {
   const lines = ndjson.split("\n").filter((line) => line.trim().length > 0);
   const streamMap = new Map<string, LokiStream>();
 

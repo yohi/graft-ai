@@ -43,11 +43,7 @@ export function isEncryptedField(value: unknown): value is EncryptedField {
   }
 
   const v = value as Record<string, unknown>;
-  if (
-    typeof v.key !== "string" ||
-    typeof v.iv !== "string" ||
-    typeof v.data !== "string"
-  ) {
+  if (typeof v.key !== "string" || typeof v.iv !== "string" || typeof v.data !== "string") {
     return false;
   }
 

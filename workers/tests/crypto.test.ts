@@ -45,11 +45,10 @@ async function encryptForTest(publicKeyPem: string, plaintext: string): Promise<
     ["encrypt"],
   );
 
-  const aesKey = (await crypto.subtle.generateKey(
-    { name: "AES-GCM", length: 256 },
-    true,
-    ["encrypt", "decrypt"],
-  )) as CryptoKey;
+  const aesKey = (await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
+    "encrypt",
+    "decrypt",
+  ])) as CryptoKey;
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoder = new TextEncoder();
@@ -60,11 +59,7 @@ async function encryptForTest(publicKeyPem: string, plaintext: string): Promise<
   );
 
   const aesKeyRaw = (await crypto.subtle.exportKey("raw", aesKey)) as ArrayBuffer;
-  const wrappedKey = await crypto.subtle.encrypt(
-    { name: "RSA-OAEP" },
-    pubKey,
-    aesKeyRaw,
-  );
+  const wrappedKey = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, pubKey, aesKeyRaw);
 
   return {
     key: base64Encode(wrappedKey),

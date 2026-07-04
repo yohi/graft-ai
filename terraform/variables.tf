@@ -80,7 +80,7 @@ variable "env_label" {
 variable "logpush_dataset" {
   description = "Cloudflare Logpush dataset name for AI Gateway logs. Verify via Cloudflare API before applying (spec §9)."
   type        = string
-  default     = "gateway_http"
+  default     = "ai_gateway_events"
 }
 
 variable "worker_script_name" {

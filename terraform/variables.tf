@@ -43,17 +43,6 @@ variable "grafana_cloud_access_policy_token" {
   }
 }
 
-variable "origin_secret" {
-  description = "Shared secret for X-Origin-Secret header validation between Logpush and Worker"
-  type        = string
-  sensitive   = true
-
-  validation {
-    condition     = length(var.origin_secret) > 0
-    error_message = "origin_secret must not be empty."
-  }
-}
-
 variable "rsa_private_key_pem" {
   description = "RSA private key (PKCS#8 PEM) for decrypting AI Gateway logpush logs"
   type        = string

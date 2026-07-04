@@ -11,7 +11,7 @@ resource "cloudflare_logpush_job" "aig_logs" {
   dataset            = var.logpush_dataset
   name               = var.logpush_job_name
   enabled            = true
-  destination_conf   = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
+  destination_conf   = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev"
   max_upload_bytes   = var.max_upload_bytes
   max_upload_records = var.max_upload_records
 

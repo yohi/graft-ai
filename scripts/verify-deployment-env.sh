@@ -53,7 +53,6 @@ require_wrangler_secret() {
   fi
 }
 
-require_terraform_var "origin_secret"
 require_terraform_var "rsa_private_key_pem"
 require_terraform_var "grafana_cloud_loki_url"
 require_terraform_var "grafana_cloud_loki_username"
@@ -66,7 +65,6 @@ if ! load_wrangler_secrets; then
   missing+=("Could not verify Wrangler secrets")
 fi
 
-require_wrangler_secret "ORIGIN_SECRET"
 require_wrangler_secret "RSA_PRIVATE_KEY_PEM"
 require_wrangler_secret "GRAFANA_CLOUD_LOKI_URL"
 require_wrangler_secret "GRAFANA_CLOUD_LOKI_USERNAME"

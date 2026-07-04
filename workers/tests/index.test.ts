@@ -30,7 +30,6 @@ function buildEnv(overrides: Partial<Env> = {}): Env {
     GRAFANA_CLOUD_LOKI_URL: "https://logs-prod-xxx.grafana.net",
     GRAFANA_CLOUD_LOKI_USERNAME: "123456",
     GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "glc_testtoken",
-    ORIGIN_SECRET: "test-origin-secret",
     RSA_PRIVATE_KEY_PEM: "",
     GATEWAY_NAME: "main",
     ENV_LABEL: "prod",
@@ -155,29 +154,17 @@ function base64Encode(buf: ArrayBuffer): string {
 
 const mockCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 
+function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
 describe("Worker fetch handler", () => {
-  it("returns 401 when X-Origin-Secret header is missing", async () => {
-    const env = buildEnv({ RSA_PRIVATE_KEY_PEM: await getTestPrivateKeyPem() });
-    const request = new Request("https://worker.example.com/", {
-      method: "POST",
-      body: await gzipText(sampleNdjson),
-      headers: { "Content-Encoding": "gzip" },
-    });
-    const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
-    expect(response.status).toBe(401);
-  });
-
-  it("returns 401 when X-Origin-Secret header is wrong", async () => {
-    const env = buildEnv({ RSA_PRIVATE_KEY_PEM: await getTestPrivateKeyPem() });
-    const request = new Request("https://worker.example.com/", {
-      method: "POST",
-      body: await gzipText(sampleNdjson),
-      headers: { "Content-Encoding": "gzip", "X-Origin-Secret": "wrong-secret" },
-    });
-    const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
-    expect(response.status).toBe(401);
-  });
-
   it("returns 405 for GET requests", async () => {
     const env = buildEnv();
     const request = new Request("https://worker.example.com/", {
@@ -187,11 +174,11 @@ describe("Worker fetch handler", () => {
     expect(response.status).toBe(405);
   });
 
-  it("returns 200 on valid POST with correct origin secret and unencrypted logs", async () => {
+  it("returns 200 on valid POST with unencrypted logs", async () => {
     const env = buildEnv({ RSA_PRIVATE_KEY_PEM: await getTestPrivateKeyPem() });
 
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any) => {
-      const url = typeof input === "string" ? input : input.url;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: Parameters<typeof fetch>[0]) => {
+      const url = fetchInputUrl(input);
       if (url.includes("/loki/api/v1/push")) {
         return new Response("", { status: 200 });
       }
@@ -203,7 +190,6 @@ describe("Worker fetch handler", () => {
       body: await gzipText(sampleNdjson),
       headers: {
         "Content-Encoding": "gzip",
-        "X-Origin-Secret": "test-origin-secret",
       },
     });
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
@@ -215,8 +201,8 @@ describe("Worker fetch handler", () => {
   it("returns 503 when Loki push fails with 500", async () => {
     const env = buildEnv({ RSA_PRIVATE_KEY_PEM: await getTestPrivateKeyPem() });
 
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any) => {
-      const url = typeof input === "string" ? input : input.url;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: Parameters<typeof fetch>[0]) => {
+      const url = fetchInputUrl(input);
       if (url.includes("/loki/api/v1/push")) {
         return new Response("Internal Server Error", { status: 500 });
       }
@@ -228,7 +214,6 @@ describe("Worker fetch handler", () => {
       body: await gzipText(sampleNdjson),
       headers: {
         "Content-Encoding": "gzip",
-        "X-Origin-Secret": "test-origin-secret",
       },
     });
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
@@ -245,7 +230,6 @@ describe("Worker fetch handler", () => {
       body: new Uint8Array([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]),
       headers: {
         "Content-Encoding": "gzip",
-        "X-Origin-Secret": "test-origin-secret",
       },
     });
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
@@ -259,7 +243,6 @@ describe("Worker fetch handler", () => {
       method: "POST",
       headers: {
         "Content-Encoding": "gzip",
-        "X-Origin-Secret": "test-origin-secret",
       },
     });
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
@@ -274,7 +257,6 @@ describe("Worker fetch handler", () => {
       body: await gzipText("not-json\n{invalid\n"),
       headers: {
         "Content-Encoding": "gzip",
-        "X-Origin-Secret": "test-origin-secret",
       },
     });
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
@@ -313,22 +295,23 @@ it("includes decrypted bodies in Loki payload when env flags are enabled", async
   });
 
   let pushedBody: string | null = null;
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input: any, init: any) => {
-    const url = typeof input === "string" ? input : input.url;
-    if (url.includes("/loki/api/v1/push")) {
-      pushedBody = init?.body as string;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        const url = fetchInputUrl(input);
+        if (url.includes("/loki/api/v1/push")) {
+        pushedBody = init?.body as string;
       return new Response("", { status: 200 });
-    }
-    throw new Error(`Unexpected fetch: ${url}`);
-  });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+      },
+    );
 
   const request = new Request("https://worker.example.com/", {
     method: "POST",
-    body: await gzipText(ndjson),
-    headers: {
-      "Content-Encoding": "gzip",
-      "X-Origin-Secret": "test-origin-secret",
-    },
+      body: await gzipText(ndjson),
+      headers: {
+        "Content-Encoding": "gzip",
+      },
   });
   const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
   expect(response.status).toBe(200);

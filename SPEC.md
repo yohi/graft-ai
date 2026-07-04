@@ -82,7 +82,7 @@ Loki.
 | Invalid RSA private key         | Return `400`; no Logpush retry.                                            |
 | Unparseable NDJSON line         | Skip line and continue; other lines are processed.                         |
 | Loki 429                        | Retry up to 3 times with exponential backoff; final failure returns `503`. |
-| Loki 5xx or network failure     | Return `503`; Logpush retries the batch.                                   |
+| Loki 5xx or network failure     | Loki handler returns the upstream status; Worker maps `429` and `>=500` to `503`, other non-2xx to `400`. |
 | Loki 4xx (non-429)              | Return `400`; no Logpush retry.                                            |
 
 #### 2.6 Security

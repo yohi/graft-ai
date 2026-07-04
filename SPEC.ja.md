@@ -81,7 +81,7 @@ Loki に push します。
 | Invalid RSA private key         | `400` を返します。Logpush retry は発生しません。                            |
 | Unparseable NDJSON line         | 該当行を skip し、他の行の処理を継続します。                                |
 | Loki 429                        | Exponential backoff で最大3回 retry します。最終失敗時は `503` を返します。 |
-| Loki 5xx or network failure     | `503` を返します。Logpush が batch を retry します。                        |
+| Loki 5xx or network failure     | Loki 側の最終失敗時は upstream の status を返し、Worker 側で `429` と `>=500` を `503`、それ以外の non-2xx を `400` に変換します。 |
 | Loki 4xx (non-429)              | `400` を返します。Logpush retry は発生しません。                            |
 
 #### 2.6 セキュリティ

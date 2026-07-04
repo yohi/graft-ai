@@ -95,8 +95,9 @@ transforms them into Loki JSON streams, and pushes them to Grafana Cloud Loki.
   when `env.INCLUDE_*` flags are explicitly enabled; by default these are
   excluded to protect prompts, response bodies, and metadata.
 - **Retry policy:** Loki 429 responses are retried up to 3 times with
-  exponential backoff. 5xx or final 429 returns `503` so Logpush retries. Other
-  4xx returns `400` to stop retry.
+  exponential backoff. The Loki handler returns the upstream status on final
+  failure, and the Worker maps `429` and `>=500` responses to `503` while all
+  other non-2xx responses become `400`.
 - **Security:** Secrets are never stored in `*.tfvars`; use `TF_VAR_*`
   environment variables or Wrangler secrets.
 - **Encryption:** Logpush payload fields are encrypted with RSA-OAEP-wrapped

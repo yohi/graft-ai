@@ -98,9 +98,8 @@ Loki に push します。
   flags が明示的に有効な場合のみ含めます。デフォルトでは prompt、response
   body、metadata の保護のため除外します。
 - **Retry policy:** Loki 429
-  response は指数バックオフで最大3回 retry します。5xx または最終的な 429 は Logpush
-  retry を促すため `503` を返します。それ以外の 4xx は retry を止めるため `400`
-  を返します。
+  response は指数バックオフで最大3回 retry します。Loki 側の最終失敗時は upstream の status を返し、Worker 側で
+  `429` と `>=500` を `503`、それ以外の non-2xx を `400` に変換します。
 - **Security:** Secrets は `*.tfvars` に保存しません。`TF_VAR_*`
   環境変数または Wrangler secrets を使用します。
 - **Encryption:** Logpush payload fields は RSA-OAEP で wrap された AES-GCM

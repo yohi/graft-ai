@@ -114,22 +114,77 @@ make validate    # terraform validate
 make deploy      # wrangler deploy + terraform apply
 ```
 
-## 🛠️ Development & Deployment
+## 🛠️ Setup & Deployment
 
-1. Install dependencies and generate types:
+### Quick Start
+
+If this is your first time using this repo, follow the steps below in order.
+The goal is simple: by the end, `make test`, `make validate`, and `make deploy`
+should run without missing-file or missing-secret errors.
+
+### What You Need
+
+- A terminal
+- A recent Node.js LTS release for the Worker workspace under `workers/`
+- `npm`
+- Terraform `>= 1.5.0`
+- A Cloudflare account with AI Gateway and Logpush access
+- A Grafana Cloud Loki tenant URL, username, and access policy token
+- A Cloudflare API token with Logpush/Logs permissions
+
+### First-Time Setup
+
+1. Log in to Cloudflare from the Worker workspace:
+
+   ```bash
+   cd workers
+   npx wrangler login
+   cd ..
+   ```
+
+   This opens a browser and connects your local machine to Cloudflare.
+
+2. Install dependencies and generate Worker types:
 
    ```bash
    make install
    ```
 
-2. Copy example files and fill in real values:
+   If this fails, check that `npm` is installed and that you are in the repo
+   root.
+
+3. Copy the example files and fill in values in the right place:
 
    ```bash
    cp workers/.dev.vars.example workers/.dev.vars
    cp terraform/terraform.tfvars.example terraform/terraform.tfvars
    ```
 
-3. Set Worker runtime secrets via Wrangler:
+   - `workers/.dev.vars` is for local Worker development only.
+   - `terraform/terraform.tfvars` is for non-secret Terraform inputs only.
+   - Secret values should stay in `TF_VAR_*` environment variables or Wrangler
+     secrets.
+
+4. Fill in `workers/.dev.vars`:
+
+   - `GRAFANA_CLOUD_LOKI_URL` - your Loki endpoint
+   - `GRAFANA_CLOUD_LOKI_USERNAME` - your Loki tenant ID / username
+   - `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` - your Grafana token
+   - `ORIGIN_SECRET` - a random shared secret for Logpush → Worker
+   - `RSA_PRIVATE_KEY_PEM` - the private key used to decrypt Logpush payloads
+
+   Example: if you see `your-random-origin-secret-here`, replace it with your
+   own secret string.
+
+5. Fill in `terraform/terraform.tfvars`:
+
+   - `cloudflare_account_id` - your Cloudflare account ID
+   - `logpush_dataset` - usually `ai_gateway_events`
+   - `worker_script_name` - the Worker script name in Cloudflare
+   - `logpush_job_name` - the name for the Logpush job
+   - `workers_subdomain` - the subdomain used for the Worker
+
+6. Set Worker runtime secrets via Wrangler:
 
    ```bash
    cd workers
@@ -141,7 +196,9 @@ make deploy      # wrangler deploy + terraform apply
    cd ..
    ```
 
-4. Export Terraform variables (do not commit them):
+   When prompted, paste the matching values from your setup.
+
+7. Export Terraform variables in your shell (do not commit them):
 
    ```bash
    export TF_VAR_cloudflare_api_token="..."
@@ -154,7 +211,19 @@ make deploy      # wrangler deploy + terraform apply
    export TF_VAR_grafana_cloud_access_policy_token="..."
    ```
 
-5. Deploy and verify end-to-end:
+   Keep this terminal open while you run Terraform commands.
+
+8. Run local checks before deploying:
+
+   ```bash
+   make typecheck
+   make test
+   make validate
+   ```
+
+   Success means those commands finish without errors.
+
+9. Deploy and verify end-to-end:
 
    ```bash
    make deploy
@@ -173,6 +242,37 @@ Follow the same phased verification used during design:
    the log.
 5. Grafana dashboard — confirm `sum by (status_code) (count_over_time(...))`
    returns data.
+
+### Common Setup Checks
+
+- If `make install` fails, check that `npm` is installed and that you are in the
+  repo root.
+- If Terraform tries to manage secret values, move them back to `TF_VAR_*`
+  environment variables.
+- If `make deploy` fails before the Terraform apply step, re-check
+  `scripts/verify-deployment-env.sh` output and the Cloudflare login state.
+- If Logpush does not deliver data, confirm the dataset name in
+  `terraform/terraform.tfvars` matches the Cloudflare account and that the RSA
+  public key was uploaded to the Logpush settings.
+
+### Copy-Paste Checklist
+
+Use this if you want a quick self-check before deploying:
+
+- `workers/.dev.vars` exists and contains local Worker values
+- `terraform/terraform.tfvars` exists and contains only non-secret Terraform values
+- `npx wrangler login` has been run from `workers/`
+- `make install` completed successfully
+- `make typecheck`, `make test`, and `make validate` all passed
+- `TF_VAR_*` environment variables are set in the shell you are using
+
+### Typical Beginner Mistakes
+
+- Running `npx wrangler secret put ...` from the repo root instead of `workers/`
+- Putting a secret value into `terraform/terraform.tfvars`
+- Forgetting to replace placeholder text such as `your-random-origin-secret-here`
+- Using the wrong Cloudflare account ID or worker subdomain
+- Skipping `make install` and then trying to run `make test` first
 
 ## ⚠️ Operational Notes
 

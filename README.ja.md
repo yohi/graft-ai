@@ -116,22 +116,76 @@ make validate    # terraform validate
 make deploy      # wrangler deploy + terraform apply
 ```
 
-## 🛠️ 開発とデプロイ
+## 🛠️ セットアップとデプロイ
 
-1. 依存関係をインストールし、型を生成します。
+### クイックスタート
+
+このリポジトリを初めて使う場合は、下の手順を上から順に実行してください。
+目標はシンプルで、最後に `make test`、`make validate`、`make deploy` が
+ファイル不足や secret 不足で止まらない状態にすることです。
+
+### 必要なもの
+
+- ターミナル
+- `workers/` で使う最近の Node.js LTS
+- `npm`
+- Terraform `>= 1.5.0`
+- Cloudflare AI Gateway と Logpush へのアクセス権
+- Grafana Cloud Loki の tenant URL、username、access policy token
+- Logpush/Logs 権限を持つ Cloudflare API token
+
+### 初回セットアップ
+
+1. Worker ワークスペースから Cloudflare にログインします。
+
+   ```bash
+   cd workers
+   npx wrangler login
+   cd ..
+   ```
+
+   ブラウザが開き、ローカル環境と Cloudflare がつながります。
+
+2. 依存関係をインストールし、Worker の型を生成します。
 
    ```bash
    make install
    ```
 
-2. example file をコピーし、実際の値を入力します。
+   失敗する場合は、`npm` が入っているか、repo ルートで実行しているかを確認
+   してください。
+
+3. example file をコピーし、値を適切な場所に入れます。
 
    ```bash
    cp workers/.dev.vars.example workers/.dev.vars
    cp terraform/terraform.tfvars.example terraform/terraform.tfvars
    ```
 
-3. Worker runtime secrets を Wrangler で設定します。
+   - `workers/.dev.vars` はローカル Worker 開発用です。
+   - `terraform/terraform.tfvars` には secret 以外の Terraform 入力だけを置きます。
+   - secret 値は `TF_VAR_*` 環境変数か Wrangler secrets に保持します。
+
+4. `workers/.dev.vars` に値を入れます。
+
+   - `GRAFANA_CLOUD_LOKI_URL` - Loki の endpoint
+   - `GRAFANA_CLOUD_LOKI_USERNAME` - Loki の tenant ID / username
+   - `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` - Grafana token
+   - `ORIGIN_SECRET` - Logpush → Worker 用の共有 secret
+   - `RSA_PRIVATE_KEY_PEM` - Logpush payload を復号する private key
+
+   `your-random-origin-secret-here` のような値は、自分で決めた文字列に置き換えて
+   ください。
+
+5. `terraform/terraform.tfvars` に値を入れます。
+
+   - `cloudflare_account_id` - Cloudflare account ID
+   - `logpush_dataset` - 通常は `ai_gateway_events`
+   - `worker_script_name` - Cloudflare 上の Worker script 名
+   - `logpush_job_name` - Logpush job の名前
+   - `workers_subdomain` - Worker に使う subdomain
+
+6. Worker runtime secrets を Wrangler で設定します。
 
    ```bash
    cd workers
@@ -143,7 +197,9 @@ make deploy      # wrangler deploy + terraform apply
    cd ..
    ```
 
-4. Terraform variables を export します（commit しないでください）。
+   プロンプトが出たら、セットアップ済みの値をそのまま貼り付けます。
+
+7. Terraform variables を shell に export します（commit しないでください）。
 
    ```bash
    export TF_VAR_cloudflare_api_token="..."
@@ -156,7 +212,19 @@ make deploy      # wrangler deploy + terraform apply
    export TF_VAR_grafana_cloud_access_policy_token="..."
    ```
 
-5. デプロイし、end-to-end で検証します。
+   Terraform を実行する間は、このターミナルを開いたままにします。
+
+8. デプロイ前にローカルチェックを実行します。
+
+   ```bash
+   make typecheck
+   make test
+   make validate
+   ```
+
+   成功とは、これらのコマンドがエラーなしで終わることです。
+
+9. デプロイし、end-to-end で検証します。
 
    ```bash
    make deploy
@@ -177,6 +245,37 @@ make deploy      # wrangler deploy + terraform apply
    Gateway 経由で request を送信し、Loki に log が表示されるまで待ちます。
 5. Grafana dashboard — `sum by (status_code) (count_over_time(...))`
    が data を返すことを確認します。
+
+### セットアップ時の確認ポイント
+
+- `make install` が失敗する場合は、`npm` が入っているか、repo ルートで実行し
+  ているかを確認します。
+- Terraform に secret 値を入れないでください。必要な値は `TF_VAR_*`
+  環境変数に戻します。
+- `make deploy` が Terraform apply の前に失敗する場合は、
+  `scripts/verify-deployment-env.sh` の出力と Cloudflare の login 状態を確認します。
+- Logpush が届かない場合は、`terraform/terraform.tfvars` の dataset 名が
+  Cloudflare アカウントと一致しているか、RSA public key を Logpush settings に
+  upload 済みかを確認します。
+
+### コピペ確認リスト
+
+デプロイ前に、次を満たしているか確認してください。
+
+- `workers/.dev.vars` が存在し、ローカル Worker 用の値が入っている
+- `terraform/terraform.tfvars` が存在し、secret 以外の値だけが入っている
+- `workers/` で `npx wrangler login` を実行済み
+- `make install` が成功済み
+- `make typecheck`、`make test`、`make validate` がすべて成功済み
+- 使っている shell に `TF_VAR_*` 環境変数が入っている
+
+### よくある初心者のミス
+
+- `workers/` ではなく repo ルートで `npx wrangler secret put ...` を実行する
+- secret 値を `terraform/terraform.tfvars` に書いてしまう
+- `your-random-origin-secret-here` のような placeholder をそのまま残す
+- Cloudflare account ID や worker subdomain を間違える
+- `make install` を飛ばして先に `make test` を実行する
 
 ## ⚠️ 運用メモ
 

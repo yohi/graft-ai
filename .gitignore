@@ -1,0 +1,14 @@
+.DS_Store
+
+# Workers
+workers/node_modules/
+workers/.dev.vars
+workers/.wrangler/
+workers/dist/
+workers/worker-configuration.d.ts
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars

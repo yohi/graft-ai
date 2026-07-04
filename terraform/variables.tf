@@ -65,18 +65,6 @@ variable "rsa_private_key_pem" {
   }
 }
 
-variable "gateway_name" {
-  description = "AI Gateway name (used as Loki 'gateway' label and Worker GATEWAY_NAME var)"
-  type        = string
-  default     = "main"
-}
-
-variable "env_label" {
-  description = "Environment label for Loki 'env' label (prod / stg)"
-  type        = string
-  default     = "prod"
-}
-
 variable "logpush_dataset" {
   description = "Cloudflare Logpush dataset name for AI Gateway logs. Verify via Cloudflare API before applying (spec §9)."
   type        = string

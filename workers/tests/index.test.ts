@@ -273,65 +273,65 @@ describe("Worker fetch handler", () => {
     const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
     expect(response.status).toBe(400);
   });
-});
 
-it("includes decrypted bodies in Loki payload when env flags are enabled", async () => {
-  const { privateKeyPem, publicKeyPem } = await generateTestKeyPair();
-  const env = buildEnv({
-    RSA_PRIVATE_KEY_PEM: privateKeyPem,
-    INCLUDE_REQUEST_BODY: "true",
-    INCLUDE_RESPONSE_BODY: "true",
-    INCLUDE_METADATA: "true",
-  });
+  it("includes decrypted bodies in Loki payload when env flags are enabled", async () => {
+    const { privateKeyPem, publicKeyPem } = await generateTestKeyPair();
+    const env = buildEnv({
+      RSA_PRIVATE_KEY_PEM: privateKeyPem,
+      INCLUDE_REQUEST_BODY: "true",
+      INCLUDE_RESPONSE_BODY: "true",
+      INCLUDE_METADATA: "true",
+    });
 
-  const metadata = await encryptForTest(publicKeyPem, JSON.stringify({ model: "gpt-4o" }));
-  const requestBody = await encryptForTest(publicKeyPem, JSON.stringify({ messages: [] }));
-  const responseBody = await encryptForTest(publicKeyPem, JSON.stringify({ choices: [] }));
+    const metadata = await encryptForTest(publicKeyPem, JSON.stringify({ model: "gpt-4o" }));
+    const requestBody = await encryptForTest(publicKeyPem, JSON.stringify({ messages: [] }));
+    const responseBody = await encryptForTest(publicKeyPem, JSON.stringify({ choices: [] }));
 
-  const ndjson = JSON.stringify({
-    RequestID: "req-encrypted",
-    RequestTime: 1720032000,
-    CacheStatus: "miss",
-    StatusCode: 200,
-    Model: "gpt-4o",
-    PromptTokens: 10,
-    CompletionTokens: 5,
-    TotalTokens: 15,
-    RequestDuration: 100,
-    Path: "/v1/chat/completions",
-    Method: "POST",
-    Metadata: metadata,
-    RequestBody: requestBody,
-    ResponseBody: responseBody,
-  });
+    const ndjson = JSON.stringify({
+      RequestID: "req-encrypted",
+      RequestTime: 1720032000,
+      CacheStatus: "miss",
+      StatusCode: 200,
+      Model: "gpt-4o",
+      PromptTokens: 10,
+      CompletionTokens: 5,
+      TotalTokens: 15,
+      RequestDuration: 100,
+      Path: "/v1/chat/completions",
+      Method: "POST",
+      Metadata: metadata,
+      RequestBody: requestBody,
+      ResponseBody: responseBody,
+    });
 
-  let pushedBody: string | null = null;
+    let pushedBody: string | null = null;
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
         const url = fetchInputUrl(input);
         if (url.includes("/loki/api/v1/push")) {
-        pushedBody = init?.body as string;
-      return new Response("", { status: 200 });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
+          pushedBody = init?.body as string;
+          return new Response("", { status: 200 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
       },
     );
 
-  const request = new Request("https://worker.example.com/", {
-    method: "POST",
+    const request = new Request("https://worker.example.com/", {
+      method: "POST",
       body: await gzipText(ndjson),
       headers: {
         "Content-Encoding": "gzip",
       },
-  });
-  const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
-  expect(response.status).toBe(200);
-  expect(pushedBody).not.toBeNull();
-  const payload = JSON.parse(pushedBody!);
-  const logLine = JSON.parse(payload.streams[0].values[0][1]);
-  expect(logLine.metadata).toEqual({ model: "gpt-4o" });
-  expect(logLine.request_body).toEqual({ messages: [] });
-  expect(logLine.response_body).toEqual({ choices: [] });
+    });
+    const response = await handler.fetch!(request, env, mockCtx as unknown as ExecutionContext);
+    expect(response.status).toBe(200);
+    expect(pushedBody).not.toBeNull();
+    const payload = JSON.parse(pushedBody!);
+    const logLine = JSON.parse(payload.streams[0].values[0][1]);
+    expect(logLine.metadata).toEqual({ model: "gpt-4o" });
+    expect(logLine.request_body).toEqual({ messages: [] });
+    expect(logLine.response_body).toEqual({ choices: [] });
 
-  vi.restoreAllMocks();
+    vi.restoreAllMocks();
+  });
 });

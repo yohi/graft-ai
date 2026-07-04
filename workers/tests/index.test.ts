@@ -25,12 +25,14 @@ async function getTestPrivateKeyPem(): Promise<string> {
   return `-----BEGIN PRIVATE KEY-----\n${lines.join("\n")}\n-----END PRIVATE KEY-----`;
 }
 
+const TEST_ORIGIN_SECRET = "test-origin-secret";
+
 function buildEnv(overrides: Partial<Env> = {}): Env {
   return {
     GRAFANA_CLOUD_LOKI_URL: "https://logs-prod-xxx.grafana.net",
     GRAFANA_CLOUD_LOKI_USERNAME: "123456",
     GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "glc_testtoken",
-    ORIGIN_SECRET: "test-origin-secret",
+    ORIGIN_SECRET: TEST_ORIGIN_SECRET,
     RSA_PRIVATE_KEY_PEM: "",
     GATEWAY_NAME: "main",
     ENV_LABEL: "prod",
@@ -43,7 +45,7 @@ function buildRequest(body: BodyInit | null, headers: Record<string, string> = {
     method: "POST",
     body,
     headers: {
-      "X-Origin-Secret": "test-origin-secret",
+      "X-Origin-Secret": TEST_ORIGIN_SECRET,
       ...headers,
     },
   });

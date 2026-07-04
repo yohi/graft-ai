@@ -238,7 +238,8 @@ GRAFANA_CLOUD_LOKI_URL=https://logs-prod-xxx.grafana.net
 GRAFANA_CLOUD_LOKI_USERNAME=123456
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
 ORIGIN_SECRET=your-random-origin-secret-here
-RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
+RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----
+```
 
 - [x] **Step 7: Update `.gitignore`**
 

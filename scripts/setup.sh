@@ -152,6 +152,7 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
   fi
 
   if [[ "$TERRAFORM_AUTO" == true ]]; then
+    export TF_VAR_grafana_stack_slug="$STACK_SLUG"
     cd "${REPO_ROOT}/terraform/grafana"
     info "Terraform init を実行中..."
     TF_LOG_FILE="${REPO_ROOT}/.terraform-init.log"

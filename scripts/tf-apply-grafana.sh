@@ -55,6 +55,8 @@ ask TF_VAR_grafana_cloud_api_key "Paste your Grafana Cloud API key" secret
 # The Grafana provider also needs region set — read from tfvars or use default
 TF_VAR_grafana_stack_region_slug="${TF_VAR_grafana_stack_region_slug:-prod-ap-northeast-0}"
 export TF_VAR_grafana_stack_region_slug
+TF_VAR_grafana_stack_slug="${TF_VAR_grafana_stack_slug:-$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "")}"
+export TF_VAR_grafana_stack_slug
 
 ###############################################################################
 # 2. terraform init + apply (Grafana resources only)

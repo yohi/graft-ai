@@ -154,12 +154,14 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
   if [[ "$TERRAFORM_AUTO" == true ]]; then
     cd "${REPO_ROOT}/terraform"
     info "Terraform init を実行中..."
-    if terraform init -upgrade >/dev/null 2>&1; then
+    TF_LOG_FILE="${REPO_ROOT}/.terraform-init.log"
+    if terraform init -upgrade >"$TF_LOG_FILE" 2>&1; then
+      TF_APPLY_LOG="${REPO_ROOT}/.terraform-apply.log"
       info "Terraform apply で Access Policy + Token を自動構築中..."
-      if terraform apply \
-        -target=grafana_cloud_access_policy.loki_write \
-        -target=grafana_cloud_access_policy_token.loki_write \
-        -auto-approve >/dev/null 2>&1; then
+      if terraform apply \\
+        -target=grafana_cloud_access_policy.loki_write \\
+        -target=grafana_cloud_access_policy_token.loki_write \\
+        -auto-approve >"$TF_APPLY_LOG" 2>&1; then
 
         GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
         if [[ -n "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" ]]; then
@@ -170,9 +172,17 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
         fi
       else
         warn "Terraform apply に失敗しました。手動入力にフォールバックします。"
+        if [[ -f "$TF_APPLY_LOG" ]]; then
+          warn "詳細ログ: ${TF_APPLY_LOG}"
+          tail -n 20 "$TF_APPLY_LOG" >&2
+        fi
       fi
     else
       warn "terraform init に失敗しました。手動入力にフォールバックします。"
+      if [[ -f "$TF_LOG_FILE" ]]; then
+        warn "詳細ログ: ${TF_LOG_FILE}"
+        tail -n 20 "$TF_LOG_FILE" >&2
+      fi
     fi
     cd "$REPO_ROOT"
   fi
@@ -365,13 +375,13 @@ ${GREEN}╔═══════════════════════
 ╚══════════════════════════════════════════════════════╝${NC}
 
 ${BOLD}Proxy Worker URL:${NC}
-  ${CYAN}https://graft-ai-aig-proxy.yohi-consadole12.workers.dev${NC}
+  ${CYAN}${PROXY_URL}${NC}
 
 ${BOLD}X-Proxy-Secret:${NC}
   ${CYAN}${PROXY_SECRET}${NC}
 
 ${BOLD}テストリクエスト:${NC}
-  curl -X POST https://graft-ai-aig-proxy.yohi-consadole12.workers.dev/workers-ai/v1/chat/completions \\
+  curl -X POST ${PROXY_URL}/workers-ai/v1/chat/completions \\
     -H 'Content-Type: application/json' \\
     -H 'Authorization: Bearer <CF_API_TOKEN>' \\
     -H 'X-Proxy-Secret: ${PROXY_SECRET}' \\

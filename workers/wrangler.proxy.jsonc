@@ -11,7 +11,7 @@
   "vars": {
     "GATEWAY_NAME": "main",
     "ENV_LABEL": "prod",
-    "CF_ACCOUNT_ID": "4bc6b4d26ae21d2b0d5bbb7ce91f1cda",
-    "AI_GATEWAY_ID": "my-gateway"
+    "CF_ACCOUNT_ID": "replace-with-cloudflare-account-id",
+    "AI_GATEWAY_ID": "main"
   }
 }

@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # scripts/setup-free-tier.sh
 # -------------------------------------------------------------------
+# ⚠️  DEPRECATED: This script is superseded by scripts/setup.sh
+# ⚠️  WARNING: This script contains hardcoded URLs from the original
+#     developer's environment. It is provided for reference only.
+#     If you use this script, replace URLs with your own Workers URL.
+#
+# Free Tier Proxy Mode — fully automated setup script
+#
+# Authentication strategy (no extra API key needed):
+# scripts/setup-free-tier.sh
+# -------------------------------------------------------------------
 # Deprecated: superseded by scripts/setup.sh
 #
 # Free Tier Proxy Mode — fully automated setup script
@@ -242,13 +252,19 @@ ${GREEN}  graft-ai Free Tier setup complete!  ${NC}
 ${GREEN}========================================${NC}
 
 Proxy Worker URL:
+  ${CYAN}(Please check your Cloudflare Workers dashboard for the actual URL)${NC}
+  ${YELLOW}Note: The URL below is from the developer's personal environment:${NC}
+  ${CYAN}https://graft-ai-aig-proxy.yohi-consadole12.workers.dev${NC}
   ${CYAN}https://graft-ai-aig-proxy.yohi-consadole12.workers.dev${NC}
 
 X-Proxy-Secret (add this header to all client requests):
   ${CYAN}${PROXY_SECRET}${NC}
 
 Test request (Cloudflare Workers AI — no external API key needed):
-  curl -X POST https://graft-ai-aig-proxy.yohi-consadole12.workers.dev/workers-ai/v1/chat/completions \\
+  curl -X POST <YOUR_PROXY_WORKER_URL>/workers-ai/v1/chat/completions \\
+    -H 'Content-Type: application/json' \
+    -H 'X-Proxy-Secret: ${PROXY_SECRET}' \
+    -d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Hello graft-ai!"}]}'
     -H 'Content-Type: application/json' \\
     -H 'X-Proxy-Secret: ${PROXY_SECRET}' \\
     -d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Hello graft-ai!"}]}'

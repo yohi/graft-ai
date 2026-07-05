@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy clean setup-free-tier setup-grafana
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama clean setup-free-tier setup-grafana
 
 install:
 	cd workers && npm install
@@ -45,3 +45,6 @@ setup-grafana:
 
 clean:
 	rm -rf terraform/.terraform
+
+deploy-ollama:
+	cd workers && npx wrangler deploy --config wrangler.ollama.jsonc

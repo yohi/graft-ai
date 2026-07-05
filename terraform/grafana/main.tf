@@ -3,14 +3,6 @@
 # Free Tier proxy mode only (no Logpush job here)
 # ------------------------------------------------------------------------------
 
-terraform {
-  required_providers {
-    grafana = {
-      source  = "grafana/grafana"
-      version = "~> 3.0"
-    }
-  }
-}
 
 # ------------------------------------------------------------------
 # Provider
@@ -53,7 +45,11 @@ resource "grafana_cloud_access_policy_token" "loki_write" {
   access_policy_id = grafana_cloud_access_policy.loki_write.policy_id
   name             = "graft-ai-loki-write-token"
   display_name     = "graft-ai Loki write token"
-  expires_at       = "2026-12-31T23:59:59Z"
+  expires_at       = timeadd(timestamp(), "8760h")
+
+  lifecycle {
+    ignore_changes = [expires_at]
+  }
 }
 
 # ------------------------------------------------------------------

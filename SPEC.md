@@ -68,7 +68,7 @@ Loki.
 | Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, emits telemetry. |
 | Tail Worker | Wrangler (`workers/src/tail-worker.ts`) | Filters telemetry logs, transforms to Loki streams. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
-| Grafana Access Policy | Terraform (`terraform/grafana.tf`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
+| Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
 
 #### 2.4 Data Transformation Rules
 

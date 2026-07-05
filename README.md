@@ -153,7 +153,7 @@ make fmt              # format Terraform and Workers sources
 make validate         # terraform validate (Logpush mode only)
 make deploy           # wrangler deploy + terraform apply (Logpush mode only)
 make setup-free-tier  # run scripts/setup.sh (Free Tier proxy mode, one-command)
-make setup-grafana    # import Grafana dashboard via gcx API
+make setup-grafana    # run scripts/tf-apply-grafana.sh to create/rotate Access Policy token and re-register Wrangler secrets
 ```
 
 ### Free Tier Setup (No Logpush)
@@ -175,16 +175,16 @@ bash scripts/setup.sh
 
 The script performs these 10 steps automatically:
 
-1. Verify prerequisites (wrangler, terraform, gcx CLI)
-2. Fetch Grafana Cloud Loki connection info via gcx API
-3. Auto-detect the Cloudflare AI Gateway ID (`AI_GATEWAY_ID`)
-4. Prompt for remaining values (`CF_ACCOUNT_ID`, `PROXY_SECRET`, labels)
-5. Write non-secret values to `workers/wrangler.proxy.jsonc`
-6. Register Wrangler secrets on the Tail Worker
-7. Deploy the Tail Worker (`wrangler.tail.jsonc`)
-8. Deploy the Proxy Worker (`wrangler.proxy.jsonc`)
-9. Import the Grafana dashboard (`grafana/dashboards/graft-ai-overview.json`) via gcx API
-10. Print the dashboard URL and a smoke-test curl command
+1. Verify prerequisites (`npx wrangler`, `curl`, `jq`, `gcx`)
+2. Verify Grafana `gcx` login status
+3. Fetch Grafana Cloud Loki connection info (URL, username) via gcx API
+4. Obtain the Cloud Access Policy token (using Terraform auto-provisioning or manual input fallback)
+5. Auto-detect the Cloudflare AI Gateway ID (reads `CF_ACCOUNT_ID` from `wrangler.proxy.jsonc` and aborts if empty or placeholder)
+6. Auto-generate a random `PROXY_SECRET`
+7. Register Wrangler secrets (like `PROXY_SECRET`) on both the Proxy Worker and the Tail Worker
+8. Generate `.dev.vars` for local development
+9. Deploy both the Tail Worker (`wrangler.tail.jsonc`) and the Proxy Worker (`wrangler.proxy.jsonc`)
+10. Import the Grafana dashboard (`grafana/dashboards/graft-ai-overview.json`) via gcx API and print summary
 
 Alternatively, run `make setup-free-tier` from the repo root.
 
@@ -197,7 +197,7 @@ to push logs to Grafana Cloud Loki.
 > not the grafana.com portal. Navigate to:
 > `https://{stack}.grafana.net/admin/access-policies`
 > (Administration → Cloud access policies)
-
+>
 > **Note:** Grafana Cloud API Keys (from `grafana.com/orgs/.../api-keys`) are
 > deprecated. Service Account tokens also **cannot** push to Loki — you must
 > use a Cloud Access Policy token with `logs:write` scope.
@@ -263,10 +263,16 @@ npx wrangler deploy --config wrangler.tail.jsonc
 npx wrangler deploy --config wrangler.proxy.jsonc
 ```
 
-To import the Grafana dashboard manually:
+To create or rotate the Grafana Cloud Access Policy token and re-register the Wrangler secrets manually:
 
 ```bash
 make setup-grafana
+```
+
+To import the Grafana dashboard manually, use the gcx CLI directly:
+
+```bash
+gcx api /api/dashboards/db -d @grafana/dashboards/graft-ai-overview.json
 ```
 
 After deployment, send one client request through the proxy Worker and confirm

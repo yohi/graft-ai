@@ -151,7 +151,7 @@ make fmt              # Terraform と Workers source を format
 make validate         # terraform validate（Logpush mode only）
 make deploy           # wrangler deploy + terraform apply（Logpush mode only）
 make setup-free-tier  # scripts/setup.sh を実行（Free Tier proxy mode、ワンコマンド）
-make setup-grafana    # gcx API 経由で Grafana ダッシュボードをインポート
+make setup-grafana    # scripts/tf-apply-grafana.sh を実行し、Access Policy トークンの作成/ローテーションと Wrangler シークレットの再登録を行う
 ```
 
 ### Free Tier セットアップ（No Logpush）
@@ -168,16 +168,16 @@ bash scripts/setup.sh
 
 スクリプトは次の 10 ステップを自動で実行します。
 
-1. 前提条件の確認（wrangler、terraform、gcx CLI）
-2. gcx API 経由で Grafana Cloud Loki 接続情報を取得
-3. Cloudflare AI Gateway ID（`AI_GATEWAY_ID`）を自動検出
-4. 残りの値（`CF_ACCOUNT_ID`、`PROXY_SECRET`、ラベル値）をプロンプトで入力
-5. 非シークレット値を `workers/wrangler.proxy.jsonc` に書き込み
-6. Tail Worker に Wrangler secrets を登録
-7. Tail Worker（`wrangler.tail.jsonc`）をデプロイ
-8. Proxy Worker（`wrangler.proxy.jsonc`）をデプロイ
-9. gcx API 経由で Grafana ダッシュボード（`grafana/dashboards/graft-ai-overview.json`）をインポート
-10. ダッシュボード URL とスモークテスト用 curl コマンドを表示
+1. 前提ツールの確認（`npx wrangler`、`curl`、`jq`、`gcx`）
+2. `gcx` ログイン状態の確認
+3. `gcx` API を使用した Loki 接続情報（URL、ユーザー名）の自動取得
+4. Cloud Access Policy トークンの取得（Terraform による自動構築、または手動入力フォールバック）
+5. Cloudflare AI Gateway ID の自動検出（`CF_ACCOUNT_ID` は `wrangler.proxy.jsonc` から読み取られ、未設定または初期値の場合は処理を中断）
+6. `PROXY_SECRET` の自動生成
+7. Proxy Worker および Tail Worker への Wrangler secrets（`PROXY_SECRET`等）の登録
+8. ローカル開発用の `.dev.vars` ファイルの生成
+9. Tail Worker（`wrangler.tail.jsonc`）および Proxy Worker（`wrangler.proxy.jsonc`）のデプロイ
+10. `gcx` API を使用した Grafana ダッシュボード（`grafana/dashboards/graft-ai-overview.json`）の自動インポートとサマリー表示
 
 `make setup-free-tier` でも実行できます。
 
@@ -189,7 +189,7 @@ Tail Worker が Grafana Cloud Loki にログを push するには、`logs:write`
 > 次の URL からアクセスしてください:
 > `https://{stack}.grafana.net/admin/access-policies`
 > （Administration → Cloud access policies）
-
+>
 > **注意:** Grafana Cloud API Key（`grafana.com/orgs/.../api-keys`）は**廃止**されています。Service Account トークンも Loki への push には**使えません**。`logs:write` スコープを持つ Cloud Access Policy トークンを必ず使用してください。
 
 `scripts/setup.sh` は gcx CLI 経由で Loki URL と username を自動取得します。Access Policy トークンの作成のみ手動で行い、プロンプトに貼り付けてください。

@@ -109,6 +109,9 @@ export default {
     }
 
     payload.streams.push(...streamMap.values());
+    for (const stream of payload.streams) {
+      stream.values.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    }
     if (payload.streams.length === 0) {
       return;
     }

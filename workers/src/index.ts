@@ -15,8 +15,7 @@ async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
   const bPadded = new Uint8Array(maxLen);
   aPadded.set(aBytes);
   bPadded.set(bBytes);
-  crypto.subtle.timingSafeEqual(aPadded, bPadded);
-  return aBytes.length === bBytes.length;
+  return crypto.subtle.timingSafeEqual(aPadded, bPadded) && aBytes.length === bBytes.length;
 }
 
 async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {
@@ -67,8 +66,12 @@ export default {
     // 3. Import RSA private key (cached across warm Worker invocations)
     //    An invalid PEM is non-recoverable; return 4xx so Logpush does not retry.
     let privateKey: CryptoKey;
+    if (!env.RSA_PRIVATE_KEY_PEM) {
+      console.error("Missing RSA_PRIVATE_KEY_PEM");
+      return new Response("Worker misconfigured", { status: 503 });
+    }
     try {
-      privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM ?? "");
+      privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM);
     } catch (err) {
       console.error(
         `Failed to import RSA private key: ${err instanceof Error ? err.message : String(err)}`,

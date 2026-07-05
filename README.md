@@ -75,10 +75,14 @@ This subsystem supports two modes:
 
 #### Data Flow
 
+#### Data Flow
+
+##### Logpush Mode (Workers Paid Plan)
+
 ```text
 [Cloudflare AI Gateway] ── logs ──→ [Cloudflare Logpush]
                                        ↓ gzip + RSA-encrypted NDJSON
-[Cloudflare Workers]
+[Cloudflare Workers - workers/src/index.ts]
   ├─ verify X-Origin-Secret header
   ├─ decompress gzip body
   ├─ decrypt encrypted fields (RSA-OAEP unwrap AES key, AES-GCM decrypt)
@@ -88,6 +92,23 @@ This subsystem supports two modes:
   │     ├─ labels: model, status_code, env, gateway
   │     └─ log line: selected fields in snake_case
   └─ push to Grafana Cloud Loki via HTTPS + Basic Auth
+```
+
+##### Free Tier Proxy Mode (No Logpush)
+
+```text
+[Client/App]
+  └─ calls proxy Worker instead of AI Gateway directly
+       ↓
+[Cloudflare Workers - workers/src/proxy.ts]
+  ├─ forwards request to Cloudflare AI Gateway
+  ├─ streams AI Gateway response back to client
+  └─ emits one JSON telemetry line per request
+       ↓ Tail Worker logs
+[Cloudflare Workers - workers/src/tail-worker.ts]
+  ├─ filters marked console.log lines
+  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
+  └─ pushes Loki JSON streams via loki.ts
 ```
 
 #### Key Design Rules
@@ -150,21 +171,26 @@ is deployed via `wrangler.tail.jsonc`.
 [workers/src/tail-worker.ts]
   ├─ filters marked console.log lines
   ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
-  └─ pushes Loki JSON streams via loki.ts
-```
-
-#### Free Tier Configuration
+  #### Free Tier Configuration
 
 The client must call your proxy Worker URL instead of calling
 `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...` directly.
-The proxy Worker reconstructs that AI Gateway URL from these non-secret values:
+The proxy Worker reconstructs the AI Gateway URL from these non-secret routing
+values:
 
-- `CF_ACCOUNT_ID` - your Cloudflare account ID
-- `AI_GATEWAY_ID` - the AI Gateway ID in the URL
-- `GATEWAY_NAME` - low-cardinality Loki label value, usually the same gateway
+- `CF_ACCOUNT_ID` - your Cloudflare account ID (used to build the upstream URL
+  path)
+- `AI_GATEWAY_ID` - the AI Gateway ID in the URL path
+
+The following values are used **only** as low-cardinality Loki labels and are
+not required for routing:
+
+- `GATEWAY_NAME` - appears as the `gateway` label in Loki; usually the same
   name such as `main`
-- `ENV_LABEL` - low-cardinality Loki label value such as `prod` or `staging`
+- `ENV_LABEL` - appears as the `env` label in Loki; such as `prod` or
+  `staging`
 
+Set these values in `workers/wrangler.proxy.jsonc` before deploying.
 Set these values in `workers/wrangler.proxy.jsonc` before deploying.
 
 Free Tier mode does **not** need `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`,

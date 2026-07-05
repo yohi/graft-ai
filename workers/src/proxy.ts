@@ -12,8 +12,7 @@ async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
   const bPadded = new Uint8Array(maxLen);
   aPadded.set(aBytes);
   bPadded.set(bBytes);
-  crypto.subtle.timingSafeEqual(aPadded, bPadded);
-  return aBytes.length === bBytes.length;
+  return crypto.subtle.timingSafeEqual(aPadded, bPadded) && aBytes.length === bBytes.length;
 }
 
 type TokenCounts = {
@@ -108,10 +107,11 @@ function buildTelemetryEvent(
 
 function buildUpstreamInit(request: Request): RequestInit {
   const headers = new Headers(request.headers);
+  headers.delete("X-Proxy-Secret");
   if (request.method === "GET" || request.method === "HEAD") {
     return { method: request.method, headers, redirect: "manual" };
   }
-  return { method: request.method, headers, body: request.body, redirect: "manual" };
+  return { method: request.method, headers, body: request.body, redirect: "manual", duplex: "half" } as RequestInit;
 }
 
 export default {

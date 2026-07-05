@@ -99,3 +99,10 @@ variable "origin_secret" {
     error_message = "origin_secret must not be empty."
   }
 }
+
+variable "grafana_cloud_api_key" {
+  description = "Grafana Cloud API key (org-level, Admin role) for managing Access Policies via Terraform. Optional — leave empty to skip Terraform-managed Access Policy creation."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

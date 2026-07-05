@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy clean
+.PHONY: install fmt validate test typecheck plan apply dev deploy clean setup-free-tier setup-grafana
 
 install:
 	cd workers && npm install
@@ -34,6 +34,14 @@ deploy:
 	cd workers && npx wrangler deploy
 	terraform -chdir=terraform init
 	terraform -chdir=terraform apply
+
+# Free Tier: full automated setup (Grafana Access Policy + Wrangler secrets + deploy)
+setup-free-tier:
+	bash scripts/setup.sh
+
+# Free Tier: create/rotate Grafana Access Policy token via Terraform and re-register secrets
+setup-grafana:
+	bash scripts/tf-apply-grafana.sh
 
 clean:
 	rm -rf terraform/.terraform

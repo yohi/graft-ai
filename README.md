@@ -51,13 +51,20 @@ graft-ai/
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
 │   └── wrangler.tail.jsonc  # Free Tier Tail Worker config
-├── terraform/        # Terraform: only the Cloudflare Logpush job (Worker is Wrangler)
+├── grafana/
+│   └── dashboards/
+│       └── graft-ai-overview.json  # Grafana dashboard definition (13 panels)
+├── scripts/
+│   ├── setup.sh              # One-command full setup (Free Tier proxy mode)
+│   └── setup-free-tier.sh   # Legacy: superseded by setup.sh
+├── terraform/        # Terraform: Cloudflare Logpush job + optional Grafana resources
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
+│   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
-├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy
+├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, setup-free-tier, setup-grafana
 └── README.md         # this file
 ```
 
@@ -140,11 +147,13 @@ This subsystem supports two modes:
 #### Quick Commands
 
 ```bash
-make typecheck   # TypeScript type check
-make test        # run Vitest suite
-make fmt         # format Terraform and Workers sources
-make validate    # terraform validate (Logpush mode only)
-make deploy      # wrangler deploy + terraform apply (Logpush mode only)
+make typecheck        # TypeScript type check
+make test             # run Vitest suite
+make fmt              # format Terraform and Workers sources
+make validate         # terraform validate (Logpush mode only)
+make deploy           # wrangler deploy + terraform apply (Logpush mode only)
+make setup-free-tier  # run scripts/setup.sh (Free Tier proxy mode, one-command)
+make setup-grafana    # import Grafana dashboard via gcx API
 ```
 
 ### Free Tier Setup (No Logpush)
@@ -156,6 +165,64 @@ Worker is in `workers/src/proxy.ts` and is deployed via
 `wrangler.proxy.jsonc`. The Tail Worker is in `workers/src/tail-worker.ts` and
 is deployed via `wrangler.tail.jsonc`.
 
+#### One-Command Setup (Recommended)
+
+Run the following script to set up the entire Free Tier pipeline automatically:
+
+```bash
+bash scripts/setup.sh
+```
+
+The script performs these 10 steps automatically:
+
+1. Verify prerequisites (wrangler, terraform, gcx CLI)
+2. Fetch Grafana Cloud Loki connection info via gcx API
+3. Auto-detect the Cloudflare AI Gateway ID (`AI_GATEWAY_ID`)
+4. Prompt for remaining values (`CF_ACCOUNT_ID`, `PROXY_SECRET`, labels)
+5. Write non-secret values to `workers/wrangler.proxy.jsonc`
+6. Register Wrangler secrets on the Tail Worker
+7. Deploy the Tail Worker (`wrangler.tail.jsonc`)
+8. Deploy the Proxy Worker (`wrangler.proxy.jsonc`)
+9. Import the Grafana dashboard (`grafana/dashboards/graft-ai-overview.json`) via gcx API
+10. Print the dashboard URL and a smoke-test curl command
+
+Alternatively, run `make setup-free-tier` from the repo root.
+
+#### Cloud Access Policy Token
+
+The Tail Worker needs a **Cloud Access Policy token** with `logs:write` scope
+to push logs to Grafana Cloud Loki.
+
+> **Important:** The Cloud Access Policy UI is inside your **Grafana instance**,
+> not the grafana.com portal. Navigate to:
+> `https://{stack}.grafana.net/admin/access-policies`
+> (Administration → Cloud access policies)
+
+> **Note:** Grafana Cloud API Keys (from `grafana.com/orgs/.../api-keys`) are
+> deprecated. Service Account tokens also **cannot** push to Loki — you must
+> use a Cloud Access Policy token with `logs:write` scope.
+
+`scripts/setup.sh` fetches the Loki URL and username automatically via the gcx
+CLI. You only need to create the Access Policy token manually and paste it when
+prompted.
+
+#### Variable Reference
+
+**Routing variables** (used to build the upstream AI Gateway URL):
+
+- `CF_ACCOUNT_ID` — your Cloudflare account ID
+- `AI_GATEWAY_ID` — the AI Gateway slug used in the URL path
+  (e.g., `my-gateway`). Automatically detected by `scripts/setup.sh`.
+  **This must match the actual gateway slug**, not an arbitrary name.
+
+**Loki label variables** (low-cardinality labels only, not used for routing):
+
+- `GATEWAY_NAME` — value of the `gateway` label in Loki. Can differ from
+  `AI_GATEWAY_ID`; it is a human-readable identifier for dashboards.
+- `ENV_LABEL` — value of the `env` label in Loki; e.g., `prod` or `staging`.
+
+Set non-secret values in `workers/wrangler.proxy.jsonc` before deploying.
+
 #### Free Tier Data Flow
 
 ```text
@@ -163,6 +230,7 @@ is deployed via `wrangler.tail.jsonc`.
   └─ calls proxy Worker instead of the AI Gateway URL directly
        ↓
 [workers/src/proxy.ts]
+  ├─ validates X-Proxy-Secret header
   ├─ forwards method, headers, body, path, and query to Cloudflare AI Gateway
   ├─ streams the AI Gateway response back to the client unchanged
   └─ emits one JSON telemetry line marked with "_graft_ai_telemetry": true
@@ -173,31 +241,14 @@ is deployed via `wrangler.tail.jsonc`.
   └─ pushes Loki JSON streams via loki.ts
 ```
 
-The client must call your proxy Worker URL instead of calling
-`https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...` directly.
-The proxy Worker reconstructs the AI Gateway URL from these non-secret routing
-values:
+#### Manual Setup (Alternative)
 
-- `CF_ACCOUNT_ID` - your Cloudflare account ID (used to build the upstream URL
-  path)
-- `AI_GATEWAY_ID` - the AI Gateway ID in the URL path
-
-The following values are used **only** as low-cardinality Loki labels and are
-not required for routing:
-
-- `GATEWAY_NAME` - appears as the `gateway` label in Loki; usually the same
-  name such as `main`
-- `ENV_LABEL` - appears as the `env` label in Loki; such as `prod` or
-  `staging`
-
-Set these values in `workers/wrangler.proxy.jsonc` before deploying.
-
-Free Tier mode does **not** need `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`,
-Terraform, or a Cloudflare Logpush job. It only needs Grafana Cloud Loki write
-secrets on the Tail Worker:
+If you prefer not to use `scripts/setup.sh`, register secrets and deploy
+manually:
 
 ```bash
 cd workers
+npx wrangler secret put PROXY_SECRET --config wrangler.proxy.jsonc
 npx wrangler secret put GRAFANA_CLOUD_LOKI_URL --config wrangler.tail.jsonc
 npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME --config wrangler.tail.jsonc
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.tail.jsonc
@@ -212,13 +263,19 @@ npx wrangler deploy --config wrangler.tail.jsonc
 npx wrangler deploy --config wrangler.proxy.jsonc
 ```
 
+To import the Grafana dashboard manually:
+
+```bash
+make setup-grafana
+```
+
 After deployment, send one client request through the proxy Worker and confirm
 that Grafana Cloud Loki receives a log stream with only these labels: `model`,
 `status_code`, `env`, and `gateway`.
 
 > **Note:** `make deploy` and `make validate` run Terraform and only apply
-> to the Logpush mode. For Free Tier mode, deploy the Workers directly with
-> the `npx wrangler deploy` commands shown above.
+> to the Logpush mode. For Free Tier mode, use `make setup-free-tier` or
+> the manual `npx wrangler deploy` commands shown above.
 
 ## 🛠️ Logpush Setup & Deployment (Workers Paid)
 

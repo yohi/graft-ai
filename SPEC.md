@@ -22,6 +22,8 @@ Loki.
 
 #### 2.2 Architecture
 
+##### Logpush Mode
+
 ```text
 [Client/App]
     ↓
@@ -36,15 +38,37 @@ Loki.
 [Grafana Cloud Dashboard]
 ```
 
+##### Free Tier Proxy Mode
+
+```text
+[Client/App]
+    ↓ X-Proxy-Secret header
+[Cloudflare Workers - proxy.ts (graft-ai-aig-proxy)]
+    ├─ validates X-Proxy-Secret
+    ├─ forwards to Cloudflare AI Gateway (my-gateway)
+    └─ emits JSON telemetry log line
+         ↓ Tail Worker
+[Cloudflare Workers - tail-worker.ts (graft-ai-aig-tail)]
+    └─ pushes Loki JSON stream via loki.ts
+         ↓
+[Grafana Cloud Loki]
+         ↓
+[Grafana Dashboard (graft-ai-aig-overview)]
+```
+
 #### 2.3 Components
 
-| Component        | Managed By                             | Responsibility                                                             |
-| ---------------- | -------------------------------------- | -------------------------------------------------------------------------- |
-| AI Gateway       | Existing service                       | Proxies AI requests and generates access logs.                             |
-| Logpush Job      | Terraform (`cloudflare_logpush_job`)   | Fetches gateway logs and POSTs NDJSON to the Worker.                       |
-| Transform Worker | Wrangler (`workers/src/index.ts`)      | Validates ingress, decompresses, decrypts, transforms, and pushes to Loki. |
-| Credentials      | Wrangler secrets + `TF_VAR_*` env vars | Holds Grafana token, origin secret, and RSA private key.                   |
-| Loki             | Grafana Cloud managed                  | Stores transformed logs for 14 days.                                       |
+| Component | Managed By | Responsibility |
+| --------- | ---------- | -------------- |
+| AI Gateway | Existing service | Proxies AI requests and generates access logs. |
+| Logpush Job | Terraform (`cloudflare_logpush_job`) | Fetches gateway logs and POSTs NDJSON to the Worker. |
+| Transform Worker | Wrangler (`workers/src/index.ts`) | Validates ingress, decompresses, decrypts, transforms, and pushes to Loki. |
+| Credentials | Wrangler secrets + `TF_VAR_*` env vars | Holds Grafana token, origin secret, and RSA private key. |
+| Loki | Grafana Cloud managed | Stores transformed logs for 14 days. |
+| Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, emits telemetry. |
+| Tail Worker | Wrangler (`workers/src/tail-worker.ts`) | Filters telemetry logs, transforms to Loki streams. |
+| Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
+| Grafana Access Policy | Terraform (`terraform/grafana.tf`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
 
 #### 2.4 Data Transformation Rules
 
@@ -108,7 +132,10 @@ Loki.
 
 - Workers implementation language: TypeScript.
 - Terraform provider: `cloudflare/cloudflare` v5.x.
-- Worker deployment via Wrangler; Terraform manages only the Logpush job.
+- Terraform provider (optional): `grafana/grafana ~> 3.0` for managing Grafana Cloud Access Policy and token.
+- Worker deployment via Wrangler; Terraform manages only the Logpush job (and optionally Grafana Access Policy).
+- Free Tier proxy mode requires no Terraform; deploy via `scripts/setup.sh` or the manual Wrangler commands.
+- Cloud Access Policy with `logs:write` scope is required for Loki push. Service Account tokens do **not** work for Loki push.
 - Grafana Cloud Free Tier limits apply.
 
 ## 4. Operational Notes
@@ -125,3 +152,14 @@ Loki.
 - **Quota estimate:** Transformed logs are ~0.5–1.5 KB per request vs. ~3–8 KB
   raw. At 100k requests/day, expect roughly 1.5–4.5 GB/month, which fits within
   the Grafana Cloud Free Tier 50 GB/month logs allowance.
+- **Grafana dashboard URL:** `https://{stack}.grafana.net/d/graft-ai-aig-overview`
+  (imported automatically by `scripts/setup.sh` via gcx API).
+- **AI Gateway ID vs. GATEWAY_NAME:** `AI_GATEWAY_ID` must match the actual
+  gateway slug used in the Cloudflare AI Gateway URL path (e.g., `my-gateway`);
+  it is auto-detected by `scripts/setup.sh`. `GATEWAY_NAME` is a separate Loki
+  label value and does not need to match the gateway slug.
+- **Cloud Access Policy UI:** The Access Policy is created inside the Grafana
+  instance at `https://{stack}.grafana.net/admin/access-policies`
+  (Administration → Cloud access policies), **not** on the grafana.com portal.
+  Grafana Cloud API Keys are deprecated; Service Account tokens cannot push to
+  Loki. Use a Cloud Access Policy token with `logs:write` scope.

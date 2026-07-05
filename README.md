@@ -168,9 +168,10 @@ is deployed via `wrangler.tail.jsonc`.
   └─ emits one JSON telemetry line marked with "_graft_ai_telemetry": true
        ↓ Tail Worker logs
 [workers/src/tail-worker.ts]
-  ZN|  ├─ filters marked console.log lines
-  JW|  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
-  SM|  └─ loki.ts 経由で Loki JSON streams を push
+  ├─ filters marked console.log lines
+  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
+  └─ pushes Loki JSON streams via loki.ts
+```
 
 The client must call your proxy Worker URL instead of calling
 `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...` directly.
@@ -189,7 +190,7 @@ not required for routing:
 - `ENV_LABEL` - appears as the `env` label in Loki; such as `prod` or
   `staging`
 
-QX|Set these values in `workers/wrangler.proxy.jsonc` before deploying.
+Set these values in `workers/wrangler.proxy.jsonc` before deploying.
 
 Free Tier mode does **not** need `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`,
 Terraform, or a Cloudflare Logpush job. It only needs Grafana Cloud Loki write

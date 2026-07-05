@@ -15,8 +15,12 @@ aggregator for Grafana Cloud.
 usages, and access logs from multiple AI provider endpoints into a unified
 **Grafana Cloud** dashboard.
 
-This project is fully optimized to run within the constraints of the **Grafana
-Cloud Free Tier** (14-day retention, 10k active series, 50GB logs).
+HT|This project is optimized to run within the **Grafana Cloud Free Tier**
+VS|(14-day retention, 10k active series, 50GB logs). The default deployment path
+WY|uses Cloudflare **Workers Logpush**, which requires a **Cloudflare Workers
+MB|Paid plan**. An alternative ** autopilot proxy mode is available and routes traffic
+ZZ|through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
+NV|> **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise plan**; the "Free Tier" refers to Grafana Cloud's free tier, not Cloudflare's.
 
 ## 🏗️ Architecture
 
@@ -31,18 +35,22 @@ Cloud Free Tier** (14-day retention, 10k active series, 50GB logs).
 
 ```text
 graft-ai/
-├── workers/          # TypeScript Cloudflare Worker for AI Gateway log collection
+├── workers/          # TypeScript Cloudflare Workers for AI Gateway telemetry
 │   ├── src/
 │   │   ├── index.ts      # fetch handler: auth → decompress → decrypt → transform → push
+│   │   ├── proxy.ts      # Free Tier proxy: client → AI Gateway + telemetry log
+│   │   ├── tail-worker.ts # Tail Worker: telemetry log → Loki
 │   │   ├── crypto.ts     # RSA-OAEP unwrap + AES-GCM decrypt for encrypted log fields
 │   │   ├── transform.ts  # NDJSON → Loki JSON streams (labels, timestamp, log line)
 │   │   ├── loki.ts       # Loki HTTP push client with Basic Auth and 429 retry
 │   │   └── types.ts      # shared TypeScript types
-│   ├── tests/        # unit and integration tests (46 cases via Vitest)
+│   ├── tests/        # unit and integration tests (50 cases via Vitest)
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vitest.config.ts
-│   └── wrangler.jsonc
+│   ├── wrangler.jsonc       # Logpush mode Worker config
+│   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
+│   └── wrangler.tail.jsonc  # Free Tier Tail Worker config
 ├── terraform/        # Terraform: only the Cloudflare Logpush job (Worker is Wrangler)
 │   ├── main.tf
 │   ├── variables.tf
@@ -57,15 +65,23 @@ graft-ai/
 
 ### Subsystem 1 — Cloudflare AI Gateway Log Collection
 
-This subsystem receives encrypted AI Gateway access logs via Cloudflare Logpush,
-transforms them into Loki JSON streams, and pushes them to Grafana Cloud Loki.
+This subsystem supports two modes:
+
+- **Logpush mode:** receives encrypted AI Gateway access logs via Cloudflare
+  Logpush, transforms them into Loki JSON streams, and pushes them to Grafana
+  Cloud Loki.
+- **Free Tier proxy mode:** routes client traffic through a proxy Worker, emits
+  one marked structured `console.log()` telemetry line per request, and uses a
+  Tail Worker to transform those logs and push them to Grafana Cloud Loki.
 
 #### Data Flow
+
+##### Logpush Mode (Workers Paid Plan)
 
 ```text
 [Cloudflare AI Gateway] ── logs ──→ [Cloudflare Logpush]
                                        ↓ gzip + RSA-encrypted NDJSON
-[Cloudflare Workers]
+[Cloudflare Workers - workers/src/index.ts]
   ├─ verify X-Origin-Secret header
   ├─ decompress gzip body
   ├─ decrypt encrypted fields (RSA-OAEP unwrap AES key, AES-GCM decrypt)
@@ -75,6 +91,23 @@ transforms them into Loki JSON streams, and pushes them to Grafana Cloud Loki.
   │     ├─ labels: model, status_code, env, gateway
   │     └─ log line: selected fields in snake_case
   └─ push to Grafana Cloud Loki via HTTPS + Basic Auth
+```
+
+##### Free Tier Proxy Mode (No Logpush)
+
+```text
+[Client/App]
+  └─ calls proxy Worker instead of AI Gateway directly
+       ↓
+[Cloudflare Workers - workers/src/proxy.ts]
+  ├─ forwards request to Cloudflare AI Gateway
+  ├─ streams AI Gateway response back to client
+  └─ emits one JSON telemetry line per request
+       ↓ Tail Worker logs
+[Cloudflare Workers - workers/src/tail-worker.ts]
+  ├─ filters marked console.log lines
+  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
+  └─ pushes Loki JSON streams via loki.ts
 ```
 
 #### Key Design Rules
@@ -110,11 +143,84 @@ transforms them into Loki JSON streams, and pushes them to Grafana Cloud Loki.
 make typecheck   # TypeScript type check
 make test        # run Vitest suite
 make fmt         # format Terraform and Workers sources
-make validate    # terraform validate
-make deploy      # wrangler deploy + terraform apply
+make validate    # terraform validate (Logpush mode only)
+make deploy      # wrangler deploy + terraform apply (Logpush mode only)
 ```
 
-## 🛠️ Setup & Deployment
+### Free Tier Setup (No Logpush)
+
+Use this mode when your Cloudflare account cannot use Workers Logpush because
+Logpush requires a Paid Workers plan. The existing Logpush receiver remains in
+`workers/src/index.ts` and is deployed via `wrangler.jsonc`. The Free Tier proxy
+Worker is in `workers/src/proxy.ts` and is deployed via
+`wrangler.proxy.jsonc`. The Tail Worker is in `workers/src/tail-worker.ts` and
+is deployed via `wrangler.tail.jsonc`.
+
+#### Free Tier Data Flow
+
+```text
+[Client/App]
+  └─ calls proxy Worker instead of the AI Gateway URL directly
+       ↓
+[workers/src/proxy.ts]
+  ├─ forwards method, headers, body, path, and query to Cloudflare AI Gateway
+  ├─ streams the AI Gateway response back to the client unchanged
+  └─ emits one JSON telemetry line marked with "_graft_ai_telemetry": true
+       ↓ Tail Worker logs
+[workers/src/tail-worker.ts]
+  ├─ filters marked console.log lines
+  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
+  └─ pushes Loki JSON streams via loki.ts
+```
+
+The client must call your proxy Worker URL instead of calling
+`https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...` directly.
+The proxy Worker reconstructs the AI Gateway URL from these non-secret routing
+values:
+
+- `CF_ACCOUNT_ID` - your Cloudflare account ID (used to build the upstream URL
+  path)
+- `AI_GATEWAY_ID` - the AI Gateway ID in the URL path
+
+The following values are used **only** as low-cardinality Loki labels and are
+not required for routing:
+
+- `GATEWAY_NAME` - appears as the `gateway` label in Loki; usually the same
+  name such as `main`
+- `ENV_LABEL` - appears as the `env` label in Loki; such as `prod` or
+  `staging`
+
+Set these values in `workers/wrangler.proxy.jsonc` before deploying.
+
+Free Tier mode does **not** need `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`,
+Terraform, or a Cloudflare Logpush job. It only needs Grafana Cloud Loki write
+secrets on the Tail Worker:
+
+```bash
+cd workers
+npx wrangler secret put GRAFANA_CLOUD_LOKI_URL --config wrangler.tail.jsonc
+npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME --config wrangler.tail.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.tail.jsonc
+```
+
+Deploy the Tail Worker first, then deploy the proxy Worker with the configured
+tail consumer:
+
+```bash
+cd workers
+npx wrangler deploy --config wrangler.tail.jsonc
+npx wrangler deploy --config wrangler.proxy.jsonc
+```
+
+After deployment, send one client request through the proxy Worker and confirm
+that Grafana Cloud Loki receives a log stream with only these labels: `model`,
+`status_code`, `env`, and `gateway`.
+
+> **Note:** `make deploy` and `make validate` run Terraform and only apply
+> to the Logpush mode. For Free Tier mode, deploy the Workers directly with
+> the `npx wrangler deploy` commands shown above.
+
+## 🛠️ Logpush Setup & Deployment (Workers Paid)
 
 ### Quick Start
 
@@ -166,7 +272,6 @@ should run without missing-file or missing-secret errors.
      secrets.
 
 4. Fill in `workers/.dev.vars`:
-
    - `GRAFANA_CLOUD_LOKI_URL` - your Loki endpoint
    - `GRAFANA_CLOUD_LOKI_USERNAME` - your Loki tenant ID / username
    - `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` - your Grafana token
@@ -177,7 +282,6 @@ should run without missing-file or missing-secret errors.
    own secret string.
 
 5. Fill in `terraform/terraform.tfvars`:
-
    - `cloudflare_account_id` - your Cloudflare account ID
    - `logpush_dataset` - usually `ai_gateway_events`
    - `worker_script_name` - the Worker script name in Cloudflare

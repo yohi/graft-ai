@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import handler from "../src/index";
-import type { Env, EncryptedField } from "../src/types";
+import type { LogpushEnv, EncryptedField } from "../src/types";
 
 // Helper to generate a test RSA key pair and return PEM strings
 async function getTestPrivateKeyPem(): Promise<string> {
@@ -27,7 +27,7 @@ async function getTestPrivateKeyPem(): Promise<string> {
 
 const TEST_ORIGIN_SECRET = "test-origin-secret";
 
-function buildEnv(overrides: Partial<Env> = {}): Env {
+function buildEnv(overrides: Partial<LogpushEnv> = {}): LogpushEnv {
   return {
     GRAFANA_CLOUD_LOKI_URL: "https://logs-prod-xxx.grafana.net",
     GRAFANA_CLOUD_LOKI_USERNAME: "123456",

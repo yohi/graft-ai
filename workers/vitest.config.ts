@@ -5,6 +5,15 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      miniflare: {
+        workers: [
+          {
+            name: "graft-ai-aig-tail",
+            modules: true,
+            script: "export default { async tail() {} };",
+          },
+        ],
+      },
     }),
   ],
 });

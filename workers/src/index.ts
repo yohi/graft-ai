@@ -10,13 +10,11 @@ async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
   const enc = new TextEncoder();
   const aBytes = enc.encode(a);
   const bBytes = enc.encode(b);
-  const maxLen = Math.max(aBytes.length, bBytes.length);
-  const aPadded = new Uint8Array(maxLen);
-  const bPadded = new Uint8Array(maxLen);
-  aPadded.set(aBytes);
-  bPadded.set(bBytes);
-  crypto.subtle.timingSafeEqual(aPadded, bPadded);
-  return aBytes.length === bBytes.length;
+  const [aHash, bHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", aBytes),
+    crypto.subtle.digest("SHA-256", bBytes),
+  ]);
+  return crypto.subtle.timingSafeEqual(new Uint8Array(aHash), new Uint8Array(bHash));
 }
 
 async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {
@@ -36,7 +34,7 @@ export default {
 
     // 1. Validate origin secret using constant-time comparison
     const originSecret = request.headers.get("X-Origin-Secret");
-    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET))) {
+    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET ?? ""))) {
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -67,6 +65,10 @@ export default {
     // 3. Import RSA private key (cached across warm Worker invocations)
     //    An invalid PEM is non-recoverable; return 4xx so Logpush does not retry.
     let privateKey: CryptoKey;
+    if (!env.RSA_PRIVATE_KEY_PEM) {
+      console.error("Missing RSA_PRIVATE_KEY_PEM");
+      return new Response("Worker misconfigured", { status: 503 });
+    }
     try {
       privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM);
     } catch (err) {

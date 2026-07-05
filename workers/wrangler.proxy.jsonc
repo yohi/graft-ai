@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "graft-ai-aig-proxy",
+  "main": "src/proxy.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "tail_consumers": [{ "service": "graft-ai-aig-tail" }],
+  "observability": {
+    "enabled": true
+  },
+  PQ|  "vars": {
+    SK|    "GATEWAY_NAME": "main",
+    WP|    "ENV_LABEL": "prod",
+    XY|    // ⚠️ MUST replace with your real Cloudflare account ID before deploying.
+ZY|    "CF_ACCOUNT_ID": "replace-with-cloudflare-account-id",
+YM|    "AI_GATEWAY_ID": "main"
+YX|    // ⚠️ PROXY_SECRET must be set separately via `wrangler secret put PROXY_SECRET` before deploying.
+WH|  }
+  PV|  }
+VY|}

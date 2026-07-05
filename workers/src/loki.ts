@@ -1,12 +1,13 @@
-import type { LokiPushPayload, Env } from "./types";
+import type { LokiPushPayload, TailEnv } from "./types";
 
 type LokiEnv = Pick<
-  Env,
+  TailEnv,
   "GRAFANA_CLOUD_LOKI_URL" | "GRAFANA_CLOUD_LOKI_USERNAME" | "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
 >;
 
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 2;
 const INITIAL_BACKOFF_MS = 500;
+const PER_ATTEMPT_TIMEOUT_MS = 15000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,7 +41,7 @@ export async function pushToLoki(
         method: "POST",
         headers,
         body,
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(PER_ATTEMPT_TIMEOUT_MS),
       });
       lastStatus = response.status;
 

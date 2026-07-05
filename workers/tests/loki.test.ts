@@ -41,12 +41,12 @@ describe("pushToLoki", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("retries on HTTP 429 up to 3 times then returns not-ok", async () => {
+  it("retries on HTTP 429 up to 2 times then returns not-ok", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("Too Many Requests", { status: 429 }));
     const result = await pushToLoki(testEnv, testPayload, mockFetch);
     expect(result.ok).toBe(false);
     expect(result.status).toBe(429);
-    expect(mockFetch).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
+    expect(mockFetch).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
   });
 
   it("retries on network failure and eventually returns the last error", async () => {
@@ -54,7 +54,7 @@ describe("pushToLoki", () => {
     const result = await pushToLoki(testEnv, testPayload, mockFetch);
     expect(result.ok).toBe(false);
     expect(result.status).toBe(0);
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it("succeeds on retry after initial 429", async () => {

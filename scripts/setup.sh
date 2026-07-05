@@ -159,9 +159,9 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
     if terraform init -upgrade >"$TF_LOG_FILE" 2>&1; then
       TF_APPLY_LOG="${REPO_ROOT}/.terraform-apply.log"
       info "Terraform apply で Access Policy + Token を自動構築中..."
-      if terraform apply \\
-        -target=grafana_cloud_access_policy.loki_write \\
-        -target=grafana_cloud_access_policy_token.loki_write \\
+      if terraform apply \
+        -target=grafana_cloud_access_policy.loki_write \
+        -target=grafana_cloud_access_policy_token.loki_write \
         -auto-approve >"$TF_APPLY_LOG" 2>&1; then
 
         GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
@@ -196,11 +196,11 @@ ${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━�
 ${BOLD}Loki への書き込みには Cloud Access Policy トークンが必要です。${NC}
 
 以下の手順で作成してください:
-  1. ${CYAN}${GCX_URL:-https://micrococoa889.grafana.net}/admin/access-policies${NC} を開く
+  1. ${CYAN}${GCX_URL:-https://your-stack.grafana.net}/admin/access-policies${NC} を開く
      (左メニュー: Administration → Cloud access policies)
   2. 「Create access policy」をクリック
   3. Display name: graft-ai-loki-write
-  4. Realms: ${STACK_SLUG:-micrococoa889} (Stack を選択)
+  4. Realms: ${STACK_SLUG:-your-stack} (Stack を選択)
   5. Scopes: logs → Write にチェック
   6. 「Create」→ 「Add token」→ トークン名を入力 → 「Create」
   7. 表示された glc_... トークンをコピー
@@ -235,7 +235,9 @@ fi
 step "STEP 5/10: Cloudflare AI Gateway ID の自動検出"
 
 CF_ACCOUNT_ID=$(jq -r '.vars.CF_ACCOUNT_ID // empty' "$PROXY_WRANGLER" || echo "")
-[[ -z "$CF_ACCOUNT_ID" ]] && die "wrangler.proxy.jsonc から CF_ACCOUNT_ID を取得できませんでした。"
+if [[ -z "$CF_ACCOUNT_ID" || "$CF_ACCOUNT_ID" == "replace-with-cloudflare-account-id" ]]; then
+  die "wrangler.proxy.jsonc の CF_ACCOUNT_ID が未設定または初期値です。Cloudflare アカウント ID を設定してください。"
+fi
 
 info "Cloudflare アカウント: ${CF_ACCOUNT_ID}"
 
@@ -244,11 +246,16 @@ AI_GW_LIST=$(env -u CLOUDFLARE_API_TOKEN npx wrangler ai gateway list 2>/dev/nul
   | jq -r '.id' 2>/dev/null || echo "")
 
 if [[ -z "$AI_GW_LIST" ]]; then
-  # フォールバック: npx wrangler secret list から CF token を使って API 直叩き
-  warn "wrangler から AI Gateway 一覧を取得できません。gcx/curl でフォールバック..."
-  # wrangler whoami でトークンを確認しながら API をたたく
-  AI_GW_LIST=$(env -u CLOUDFLARE_API_TOKEN npx wrangler ai gateway list 2>&1 \
-    | grep '"id"' | awk -F'"' '{print $4}' | head -1 || echo "")
+  # フォールバック: CLOUDFLARE_API_TOKEN がある場合は cURL で Cloudflare API を直接実行
+  if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+    warn "wrangler から AI Gateway 一覧を取得できません。cURL で API を直接実行します..."
+    AI_GW_LIST=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai-gateway/gateways" \
+      -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      | jq -r '.result[].id' 2>/dev/null || echo "")
+  else
+    warn "wrangler から AI Gateway 一覧を取得できません。かつ CLOUDFLARE_API_TOKEN も未設定のためフォールバックできません。"
+  fi
 fi
 
 if [[ -z "$AI_GW_LIST" ]]; then
@@ -353,7 +360,7 @@ else
 
   if [[ "$DASH_STATUS" == "success" ]]; then
     success "ダッシュボードをインポートしました!"
-    info "URL: ${GCX_URL:-https://micrococoa889.grafana.net}${DASH_URL}"
+    info "URL: ${GCX_URL:-https://your-stack.grafana.net}${DASH_URL}"
   else
     warn "ダッシュボードのインポートに失敗しました: ${IMPORT_RESULT}"
     warn "手動で以下を実行してください:"
@@ -364,10 +371,9 @@ fi
 # =============================================================================
 # 完了サマリー
 # =============================================================================
-PROXY_URL="https://graft-ai-aig-proxy.$(jq -r '.vars.CF_ACCOUNT_ID' "$PROXY_WRANGLER" | head -c 8)*.workers.dev"
 PROXY_URL=$(grep -m1 'workers.dev' <<< "$(env -u CLOUDFLARE_API_TOKEN npx wrangler deployments list \
   --config "$PROXY_WRANGLER" 2>/dev/null | grep 'workers.dev')" \
-  | awk '{print $NF}' || echo "https://graft-ai-aig-proxy.yohi-consadole12.workers.dev")
+  | awk '{print $NF}' || echo "https://graft-ai-aig-proxy.<your-namespace>.workers.dev")
 
 cat <<SUMMARY
 
@@ -389,7 +395,7 @@ ${BOLD}テストリクエスト:${NC}
     -d '{"model":"@cf/meta/llama-3.2-1b-instruct","messages":[{"role":"user","content":"Hello!"}]}'
 
 ${BOLD}Grafana ダッシュボード:${NC}
-  ${CYAN}${GCX_URL:-https://micrococoa889.grafana.net}/d/graft-ai-aig-overview${NC}
+  ${CYAN}${GCX_URL:-https://your-stack.grafana.net}/d/graft-ai-aig-overview${NC}
 
 ${BOLD}ログクエリ (Grafana Explore):${NC}
   {gateway="main"}

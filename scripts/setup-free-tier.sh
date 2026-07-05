@@ -9,16 +9,9 @@
 # Free Tier Proxy Mode — fully automated setup script
 #
 # Authentication strategy (no extra API key needed):
-# scripts/setup-free-tier.sh
-# -------------------------------------------------------------------
-# Deprecated: superseded by scripts/setup.sh
-#
-# Free Tier Proxy Mode — fully automated setup script
-# Free Tier Proxy Mode — fully automated setup script
-#
-# Authentication strategy (no extra API key needed):
 #   - Grafana Loki write token  → created via gcx api (Service Account)
 #   - Cloudflare Wrangler       → uses existing OAuth session (env -u CLOUDFLARE_API_TOKEN)
+# -------------------------------------------------------------------
 #
 # What this script does:
 #   1. Validates prerequisites (npx, curl, jq, gcx)
@@ -87,13 +80,16 @@ success "Logged in as: $GCX_USER"
 ###############################################################################
 info "Fetching Loki datasource info..."
 
+# Read stack slug from gcx config
+STACK_SLUG=$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "")
+[[ -z "$STACK_SLUG" ]] && STACK_SLUG="micrococoa889" # Fallback to original default if config not found
+
 LOKI_DS=$(gcx api /api/datasources -o json 2>/dev/null | \
-  jq -r '[.[] | select(.type=="loki" and (.name | test("micrococoa889-logs")))] | first' || echo "")
+  jq -r "[.[] | select(.type==\"loki\" and (.name | test(\"${STACK_SLUG}\")))] | first" || echo "")
 
 GRAFANA_LOKI_URL=$(echo "$LOKI_DS" | jq -r '.url // empty' | sed 's|/$||')
 # Loki username (tenant ID) is stored in basicAuthUser on the datasource JSON
-GRAFANA_LOKI_USERNAME=$(gcx api /api/datasources/name/grafanacloud-micrococoa889-logs -o json 2>/dev/null | \
-  jq -r '.basicAuthUser // empty' || echo "")
+GRAFANA_LOKI_USERNAME=$(echo "$LOKI_DS" | jq -r '.basicAuthUser // empty')
 
 if [[ -z "$GRAFANA_LOKI_URL" ]]; then
   warn "Could not auto-detect Loki URL from datasource API."
@@ -148,7 +144,7 @@ if [[ -z "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" ]]; then
 
 ${YELLOW}--- Manual step required ---${NC}
 Please create the token manually:
-  1. Open https://micrococoa889.grafana.net/org/serviceaccounts
+  1. Open https://${STACK_SLUG}.grafana.net/org/serviceaccounts
   2. Find or create a service account named '${SA_NAME}'
   3. Generate a token and paste it below.
 
@@ -177,7 +173,7 @@ ${YELLOW}--- Fallback: Cloud Access Policy token ---${NC}
 A Grafana Cloud Access Policy token with 'logs:write' scope is required for Loki push.
 
 Steps to create one:
-  1. Go to ${CYAN}https://micrococoa889.grafana.net/admin/access-policies${NC}
+  1. Go to ${CYAN}https://${STACK_SLUG}.grafana.net/admin/access-policies${NC}
      (Administration → Cloud access policies in the left menu)
   2. Click "Create access policy"
   3. Name: graft-ai-loki-write
@@ -194,8 +190,14 @@ fi
 # 6. Proxy secret
 ###############################################################################
 if [[ -z "${PROXY_SECRET:-}" ]]; then
-  PROXY_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9_-' </dev/urandom 2>/dev/null | head -c 48 || \
-    python3 -c "import secrets; print(secrets.token_urlsafe(36))")
+  if command -v python3 &>/dev/null; then
+    PROXY_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(36))")
+  else
+    # Temporarily disable pipefail to prevent SIGPIPE issues
+    set +o pipefail
+    PROXY_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9_-' </dev/urandom | head -c 48)
+    set -o pipefail
+  fi
   info "Auto-generated PROXY_SECRET."
 fi
 
@@ -253,18 +255,14 @@ ${GREEN}========================================${NC}
 
 Proxy Worker URL:
   ${CYAN}(Please check your Cloudflare Workers dashboard for the actual URL)${NC}
-  ${YELLOW}Note: The URL below is from the developer's personal environment:${NC}
-  ${CYAN}https://graft-ai-aig-proxy.yohi-consadole12.workers.dev${NC}
-  ${CYAN}https://graft-ai-aig-proxy.yohi-consadole12.workers.dev${NC}
+  ${YELLOW}Note: The URL below is a placeholder:${NC}
+  ${CYAN}https://graft-ai-aig-proxy.<your-namespace>.workers.dev${NC}
 
 X-Proxy-Secret (add this header to all client requests):
   ${CYAN}${PROXY_SECRET}${NC}
 
 Test request (Cloudflare Workers AI — no external API key needed):
   curl -X POST <YOUR_PROXY_WORKER_URL>/workers-ai/v1/chat/completions \\
-    -H 'Content-Type: application/json' \
-    -H 'X-Proxy-Secret: ${PROXY_SECRET}' \
-    -d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Hello graft-ai!"}]}'
     -H 'Content-Type: application/json' \\
     -H 'X-Proxy-Secret: ${PROXY_SECRET}' \\
     -d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Hello graft-ai!"}]}'

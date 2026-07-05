@@ -100,9 +100,4 @@ variable "origin_secret" {
   }
 }
 
-variable "grafana_cloud_api_key" {
-  description = "Grafana Cloud API key (org-level, Admin role) for managing Access Policies via Terraform. Optional — leave empty to skip Terraform-managed Access Policy creation."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
+

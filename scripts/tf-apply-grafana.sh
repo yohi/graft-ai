@@ -47,7 +47,7 @@ cat <<MSG
 
 ${YELLOW}--- Grafana Cloud org-level API Key ---${NC}
 Required to manage Access Policies via Terraform.
-Generate at: https://grafana.com/orgs/micrococoa889/api-keys (role: Admin)
+Generate at: https://grafana.com/orgs/<your-org>/api-keys (role: Admin)
 
 MSG
 ask TF_VAR_grafana_cloud_api_key "Paste your Grafana Cloud API key" secret
@@ -55,8 +55,15 @@ ask TF_VAR_grafana_cloud_api_key "Paste your Grafana Cloud API key" secret
 # The Grafana provider also needs region set — read from tfvars or use default
 TF_VAR_grafana_stack_region_slug="${TF_VAR_grafana_stack_region_slug:-prod-ap-northeast-0}"
 export TF_VAR_grafana_stack_region_slug
-TF_VAR_grafana_stack_slug="${TF_VAR_grafana_stack_slug:-$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "")}"
-export TF_VAR_grafana_stack_slug
+
+if [[ -z "${TF_VAR_grafana_stack_slug:-}" ]]; then
+  DETECTED_SLUG=$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "")
+  if [[ -n "$DETECTED_SLUG" ]]; then
+    export TF_VAR_grafana_stack_slug="$DETECTED_SLUG"
+  fi
+else
+  export TF_VAR_grafana_stack_slug
+fi
 
 ###############################################################################
 # 2. terraform init + apply (Grafana resources only)

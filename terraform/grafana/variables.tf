@@ -5,13 +5,11 @@ variable "grafana_cloud_api_key" {
 }
 
 variable "grafana_stack_slug" {
-  description = "Grafana Cloud stack slug (e.g. micrococoa889)"
+  description = "Grafana Cloud stack slug (e.g. <your-stack-slug>)"
   type        = string
-  default     = "micrococoa889"
 }
 
 variable "grafana_stack_region_slug" {
   description = "Grafana Cloud stack region slug (e.g. prod-ap-northeast-0)"
   type        = string
-  default     = "prod-ap-northeast-0"
 }

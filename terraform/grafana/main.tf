@@ -8,8 +8,8 @@
 # Provider
 # ------------------------------------------------------------------
 provider "grafana" {
-  alias         = "cloud"
-  cloud_api_key = var.grafana_cloud_api_key
+  alias                     = "cloud"
+  cloud_access_policy_token = var.grafana_cloud_api_key
 }
 
 # ------------------------------------------------------------------

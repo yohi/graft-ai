@@ -9,11 +9,11 @@ terraform {
   }
 
   # Remote backend — configure before production use (spec §3.3, §6.2)
-  # backend "s3" {
-  #   bucket         = "graft-ai-tfstate"
-  #   key            = "terraform.tfstate"
-  #   region         = "us-east-1"
-  #   encrypt        = true
-  #   dynamodb_table = "graft-ai-tf-locks"
-  # }
+  backend "s3" {
+    bucket         = "graft-ai-tfstate"
+    key            = "terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "graft-ai-tf-locks"
+  }
 }

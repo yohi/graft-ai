@@ -19,7 +19,7 @@ export interface OllamaCloudWorker {
 }
 
 const worker: OllamaCloudWorker = {
-  async scheduled(event, env, ctx) {
+  async scheduled(event, env, _ctx) {
     const anchorIso = env.OLLAMA_CLOUD_RESET_ANCHOR_ISO;
     if (!anchorIso) {
       console.error("OLLAMA_CLOUD_RESET_ANCHOR_ISO is not configured");

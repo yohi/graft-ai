@@ -22,7 +22,9 @@ function buildOtlpPayload(
   nowUnixNano: string,
 ): Record<string, unknown> {
   const metrics = calculations.flatMap((calc) => {
-    const baseAttrs = [{ key: "period", value: { stringValue: calc.period } }];
+    const baseAttrs: Record<string, unknown>[] = [
+      { key: "period", value: { stringValue: calc.period } },
+    ];
     return [
       {
         name: "ollama_cloud_reset_seconds_remaining",

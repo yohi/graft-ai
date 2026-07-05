@@ -28,7 +28,8 @@ describe("pushMetrics", () => {
   it("sends JSON Content-Type and Basic Auth", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     await pushMetrics(env, [calc], "pro", mockFetch);
-    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const call = mockFetch.mock.calls[0]!;
+    const init = call[1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/json");
     expect(headers["Authorization"]).toBe(`Basic ${btoa("123456:test-token")}`);
@@ -37,7 +38,7 @@ describe("pushMetrics", () => {
   it("posts to the OTLP metrics endpoint", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     await pushMetrics(env, [calc], "pro", mockFetch);
-    const url = mockFetch.mock.calls[0][0] as string;
+    const url = mockFetch.mock.calls[0]![0] as string;
     expect(url).toBe("https://otlp-gateway-prod-us-central1.grafana.net/otlp/v1/metrics");
   });
 
@@ -68,7 +69,8 @@ describe("pushMetrics", () => {
   it("includes all metric names in the payload", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     await pushMetrics(env, [calc], "pro", mockFetch);
-    const init = mockFetch.mock.calls[0][1] as RequestInit;
+    const call = mockFetch.mock.calls[0]!;
+    const init = call[1] as RequestInit;
     const body = JSON.parse(init.body as string);
     const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics;
     const names = metrics.map((m: { name: string }) => m.name);

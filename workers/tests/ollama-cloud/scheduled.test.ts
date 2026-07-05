@@ -33,7 +33,7 @@ describe("ollama-cloud scheduled handler", () => {
     );
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    const url = mockFetch.mock.calls[0][0] as string;
+    const url = mockFetch.mock.calls[0]![0] as string;
     expect(url).toBe("https://otlp-gateway-prod-us-central1.grafana.net/otlp/v1/metrics");
 
     vi.unstubAllGlobals();

@@ -111,7 +111,13 @@ function buildUpstreamInit(request: Request): RequestInit {
   if (request.method === "GET" || request.method === "HEAD") {
     return { method: request.method, headers, redirect: "manual" };
   }
-  return { method: request.method, headers, body: request.body, redirect: "manual", duplex: "half" } as RequestInit;
+  return {
+    method: request.method,
+    headers,
+    body: request.body,
+    redirect: "manual",
+    duplex: "half",
+  } as RequestInit;
 }
 
 export default {
@@ -125,8 +131,22 @@ export default {
     // NOTE: For streaming (SSE / chunked) responses this measures time-to-first-byte.
     // The full stream completion time is only available when the gateway returns
     // cf-aig-duration-ms, which is preferred below (see parseNumberHeader fallback).
+    let upstreamUrl: string;
+    try {
+      upstreamUrl = buildGatewayUrl(request.url, env);
+    } catch (err) {
+      console.error(
+        `Proxy configuration error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return new Response(
+        JSON.stringify({
+          error: "Proxy misconfigured",
+          message: "CF_ACCOUNT_ID and AI_GATEWAY_ID are required",
+        }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      );
+    }
     const startedAt = Date.now();
-    const upstreamUrl = buildGatewayUrl(request.url, env);
     const upstreamResponse = await fetch(upstreamUrl, buildUpstreamInit(request));
     const durationMs = Date.now() - startedAt;
     console.log(JSON.stringify(buildTelemetryEvent(request, upstreamResponse, env, durationMs)));

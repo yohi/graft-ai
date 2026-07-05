@@ -127,4 +127,44 @@ describe("AI Gateway telemetry Tail Worker", () => {
 
     vi.restoreAllMocks();
   });
+
+  it("merges multiple telemetry logs with same stream labels and sorts values by timestamp", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+
+    // 同一ラベル、異なるタイムスタンプ（順不同で入力）
+    const telemetry1 = { ...telemetry, timestamp: "2024-07-04T00:00:01.000Z" };
+    const telemetry2 = { ...telemetry, timestamp: "2024-07-04T00:00:03.000Z" };
+    const telemetry3 = { ...telemetry, timestamp: "2024-07-04T00:00:02.000Z" };
+
+    await tailWorker.tail?.(
+      [
+        buildTraceItem([
+          JSON.stringify(telemetry1),
+          JSON.stringify(telemetry3),
+          JSON.stringify(telemetry2),
+        ]),
+      ],
+      buildEnv(),
+      mockCtx as unknown as ExecutionContext,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [, init] = fetchSpy.mock.calls[0] ?? [];
+    expect(typeof init?.body).toBe("string");
+    const payload = JSON.parse(String(init?.body)) as LokiPushPayload;
+
+    // 同一ラベルは1つの stream にマージされる
+    expect(payload.streams).toHaveLength(1);
+
+    // values はタイムスタンプ昇順にソートされる
+    const values = payload.streams[0]?.values ?? [];
+    expect(values).toHaveLength(3);
+    expect(values[0]?.[0]).toBe("1720051201000000000");
+    expect(values[1]?.[0]).toBe("1720051202000000000");
+    expect(values[2]?.[0]).toBe("1720051203000000000");
+
+    vi.restoreAllMocks();
+  });
 });

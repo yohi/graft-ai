@@ -15,11 +15,12 @@ aggregator for Grafana Cloud.
 usages, and access logs from multiple AI provider endpoints into a unified
 **Grafana Cloud** dashboard.
 
-This project is optimized to run within the **Grafana Cloud Free Tier**
-(14-day retention, 10k active series, 50GB logs). The default deployment path
-uses Cloudflare **Workers Logpush**, which requires a **Cloudflare Workers
-Paid plan**. A **Free Tier proxy mode** is also available and routes traffic
-through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
+HT|This project is optimized to run within the **Grafana Cloud Free Tier**
+VS|(14-day retention, 10k active series, 50GB logs). The default deployment path
+WY|uses Cloudflare **Workers Logpush**, which requires a **Cloudflare Workers
+MB|Paid plan**. An alternative ** autopilot proxy mode is available and routes traffic
+ZZ|through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
+NV|> **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise plan**; the "Free Tier" refers to Grafana Cloud's free tier, not Cloudflare's.
 
 ## 🏗️ Architecture
 
@@ -72,8 +73,6 @@ This subsystem supports two modes:
 - **Free Tier proxy mode:** routes client traffic through a proxy Worker, emits
   one marked structured `console.log()` telemetry line per request, and uses a
   Tail Worker to transform those logs and push them to Grafana Cloud Loki.
-
-#### Data Flow
 
 #### Data Flow
 
@@ -169,9 +168,9 @@ is deployed via `wrangler.tail.jsonc`.
   └─ emits one JSON telemetry line marked with "_graft_ai_telemetry": true
        ↓ Tail Worker logs
 [workers/src/tail-worker.ts]
-  ├─ filters marked console.log lines
-  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
-  #### Free Tier Configuration
+  ZN|  ├─ filters marked console.log lines
+  JW|  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
+  SM|  └─ loki.ts 経由で Loki JSON streams を push
 
 The client must call your proxy Worker URL instead of calling
 `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...` directly.
@@ -190,8 +189,7 @@ not required for routing:
 - `ENV_LABEL` - appears as the `env` label in Loki; such as `prod` or
   `staging`
 
-Set these values in `workers/wrangler.proxy.jsonc` before deploying.
-Set these values in `workers/wrangler.proxy.jsonc` before deploying.
+QX|Set these values in `workers/wrangler.proxy.jsonc` before deploying.
 
 Free Tier mode does **not** need `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`,
 Terraform, or a Cloudflare Logpush job. It only needs Grafana Cloud Loki write

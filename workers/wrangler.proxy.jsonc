@@ -8,11 +8,13 @@
   "observability": {
     "enabled": true
   },
-  "vars": {
-    "GATEWAY_NAME": "main",
-    "ENV_LABEL": "prod",
-    // ⚠️ MUST replace with your real Cloudflare account ID before deploying.
-    "CF_ACCOUNT_ID": "replace-with-cloudflare-account-id",
-    "AI_GATEWAY_ID": "main"
-  }
-}
+  PQ|  "vars": {
+    SK|    "GATEWAY_NAME": "main",
+    WP|    "ENV_LABEL": "prod",
+    XY|    // ⚠️ MUST replace with your real Cloudflare account ID before deploying.
+ZY|    "CF_ACCOUNT_ID": "replace-with-cloudflare-account-id",
+YM|    "AI_GATEWAY_ID": "main"
+YX|    // ⚠️ PROXY_SECRET must be set separately via `wrangler secret put PROXY_SECRET` before deploying.
+WH|  }
+  PV|  }
+VY|}

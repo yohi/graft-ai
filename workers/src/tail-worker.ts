@@ -110,7 +110,11 @@ export default {
 
     payload.streams.push(...streamMap.values());
     for (const stream of payload.streams) {
-      stream.values.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      stream.values.sort((a, b) => {
+        const aTime = BigInt(a[0]);
+        const bTime = BigInt(b[0]);
+        return aTime < bTime ? -1 : aTime > bTime ? 1 : 0;
+      });
     }
     if (payload.streams.length === 0) {
       return;

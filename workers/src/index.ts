@@ -10,12 +10,11 @@ async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
   const enc = new TextEncoder();
   const aBytes = enc.encode(a);
   const bBytes = enc.encode(b);
-  const maxLen = Math.max(aBytes.length, bBytes.length);
-  const aPadded = new Uint8Array(maxLen);
-  const bPadded = new Uint8Array(maxLen);
-  aPadded.set(aBytes);
-  bPadded.set(bBytes);
-  return crypto.subtle.timingSafeEqual(aPadded, bPadded) && aBytes.length === bBytes.length;
+  const [aHash, bHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", aBytes),
+    crypto.subtle.digest("SHA-256", bBytes),
+  ]);
+  return crypto.subtle.timingSafeEqual(new Uint8Array(aHash), new Uint8Array(bHash));
 }
 
 async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {

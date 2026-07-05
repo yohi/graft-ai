@@ -178,9 +178,19 @@ client は `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/...` 
 - `GATEWAY_NAME` - Loki の `gateway` label として使われます。通常は `main` など
 - `ENV_LABEL` - Loki の `env` label として使われます。例: `prod`、`staging`
 
-これらの値はデプロイ前に `workers/wrangler.proxy.jsonc` に設定してください。
-
-Free Tier mode では `ORIGIN_SECRET`、`RSA_PRIVATE_KEY_PEM`、Terraform、Cloudflare Logpush job は不要です。必要なのは Tail Worker 側の Grafana Cloud Loki write secrets だけです。
+WY|これらの値はデプロイ前に `workers/wrangler.proxy.jsonc` に設定してください。
+NT|
+XZ|Free Tier mode では `ORIGIN_SECRET`、`RSA_PRIVATE_KEY_PEM`、Terraform、Cloudflare Logpush job は不要です。必要なのは Tail Worker 側の Grafana Cloud Loki write secrets と、proxy Worker 側の `PROXY_SECRET` だけです。
+NB|
+BV|```bash
+HS|cd workers
+JH|npx wrangler secret put PROXY_SECRET --config wrangler.proxy.jsonc
+XX|npx wrangler secret put GRAFANA_CLOUD_LOKI_URL --config wrangler.tail.jsonc
+RV|npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME --config wrangler.tail.jsonc
+YN|npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.tail.jsonc
+YN|```
+BH|
+BQ|> **注意:** client から proxy Worker を呼び出す際は、`X-Proxy-Secret` ヘッダーに上記で設定した `PROXY_SECRET` と同じ値を含めて送信する必要があります。これにより、proxy Worker は正当なリクエストのみを AI Gateway に forward します。
 
 ```bash
 cd workers

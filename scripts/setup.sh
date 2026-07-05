@@ -152,7 +152,7 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
   fi
 
   if [[ "$TERRAFORM_AUTO" == true ]]; then
-    cd "${REPO_ROOT}/terraform"
+    cd "${REPO_ROOT}/terraform/grafana"
     info "Terraform init を実行中..."
     TF_LOG_FILE="${REPO_ROOT}/.terraform-init.log"
     if terraform init -upgrade >"$TF_LOG_FILE" 2>&1; then

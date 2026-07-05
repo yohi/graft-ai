@@ -60,7 +60,7 @@ export TF_VAR_grafana_stack_region_slug
 # 2. terraform init + apply (Grafana resources only)
 ###############################################################################
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT/terraform"
+cd "$REPO_ROOT/terraform/grafana"
 
 info "Running terraform init..."
 terraform init -upgrade

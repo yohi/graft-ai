@@ -36,7 +36,7 @@ export default {
 
     // 1. Validate origin secret using constant-time comparison
     const originSecret = request.headers.get("X-Origin-Secret");
-    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET))) {
+    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET ?? ""))) {
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -68,7 +68,7 @@ export default {
     //    An invalid PEM is non-recoverable; return 4xx so Logpush does not retry.
     let privateKey: CryptoKey;
     try {
-      privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM);
+      privateKey = await getCachedPrivateKey(env.RSA_PRIVATE_KEY_PEM ?? "");
     } catch (err) {
       console.error(
         `Failed to import RSA private key: ${err instanceof Error ? err.message : String(err)}`,

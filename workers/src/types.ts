@@ -2,13 +2,32 @@ export interface Env {
   GRAFANA_CLOUD_LOKI_URL: string;
   GRAFANA_CLOUD_LOKI_USERNAME: string;
   GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string;
-  ORIGIN_SECRET: string;
-  RSA_PRIVATE_KEY_PEM: string;
+  ORIGIN_SECRET?: string;
+  RSA_PRIVATE_KEY_PEM?: string;
   GATEWAY_NAME: string;
   ENV_LABEL: string;
+  CF_ACCOUNT_ID?: string;
+  AI_GATEWAY_ID?: string;
   INCLUDE_REQUEST_BODY?: string; // "true" to include decrypted request body
   INCLUDE_RESPONSE_BODY?: string; // "true" to include decrypted response body
   INCLUDE_METADATA?: string; // "true" to include decrypted metadata
+}
+
+export interface TelemetryEvent {
+  _graft_ai_telemetry: true;
+  request_id: string;
+  timestamp: string;
+  model: string;
+  status_code: number;
+  cache_status: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  duration_ms: number;
+  path: string;
+  method: string;
+  gateway: string;
+  env: string;
 }
 
 export interface AIGatewayLog {

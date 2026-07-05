@@ -3,5 +3,13 @@
 GRAFANA_CLOUD_LOKI_URL=https://logs-prod-xxx.grafana.net
 GRAFANA_CLOUD_LOKI_USERNAME=123456
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
+
+# Free Tier proxy mode (no Logpush)
+CF_ACCOUNT_ID=your-cloudflare-account-id
+AI_GATEWAY_ID=main
+GATEWAY_NAME=main
+ENV_LABEL=prod
+
+# Logpush mode only
 ORIGIN_SECRET=your-random-origin-secret-here
 RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----

@@ -1,6 +1,6 @@
 import { pushToLoki } from "./loki";
 import { transformLogToLokiStream } from "./transform";
-import type { AIGatewayLog, Env, LokiPushPayload, LokiStream, TelemetryEvent } from "./types";
+import type { AIGatewayLog, TailEnv, LokiPushPayload, LokiStream, TelemetryEvent } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -85,7 +85,7 @@ function telemetryToAIGatewayLog(event: TelemetryEvent): AIGatewayLog {
 }
 
 export default {
-  async tail(events: TraceItem[], env: Env, _ctx: ExecutionContext): Promise<void> {
+  async tail(events: TraceItem[], env: TailEnv, _ctx: ExecutionContext): Promise<void> {
     const payload: LokiPushPayload = { streams: [] };
     const streamMap = new Map<string, LokiStream>();
     for (const event of events) {
@@ -118,4 +118,4 @@ export default {
       console.error(`Tail Worker Loki push failed: ${result.status}`);
     }
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<TailEnv>;

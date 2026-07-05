@@ -1,7 +1,7 @@
-import type { LokiPushPayload, Env } from "./types";
+import type { LokiPushPayload, TailEnv } from "./types";
 
 type LokiEnv = Pick<
-  Env,
+  TailEnv,
   "GRAFANA_CLOUD_LOKI_URL" | "GRAFANA_CLOUD_LOKI_USERNAME" | "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
 >;
 

@@ -1,17 +1,30 @@
-export interface Env {
-  GRAFANA_CLOUD_LOKI_URL: string;
-  GRAFANA_CLOUD_LOKI_USERNAME: string;
-  GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string;
-  ORIGIN_SECRET?: string;
-  RSA_PRIVATE_KEY_PEM?: string;
+export interface BaseEnv {
   GATEWAY_NAME: string;
   ENV_LABEL: string;
-  CF_ACCOUNT_ID?: string;
-  AI_GATEWAY_ID?: string;
   INCLUDE_REQUEST_BODY?: string; // "true" to include decrypted request body
   INCLUDE_RESPONSE_BODY?: string; // "true" to include decrypted response body
   INCLUDE_METADATA?: string; // "true" to include decrypted metadata
 }
+
+export interface ProxyEnv extends BaseEnv {
+  CF_ACCOUNT_ID: string;
+  AI_GATEWAY_ID: string;
+  PROXY_SECRET: string;
+}
+
+export interface TailEnv extends BaseEnv {
+  GRAFANA_CLOUD_LOKI_URL: string;
+  GRAFANA_CLOUD_LOKI_USERNAME: string;
+  GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string;
+}
+
+export interface LogpushEnv extends TailEnv {
+  ORIGIN_SECRET: string;
+  RSA_PRIVATE_KEY_PEM: string;
+}
+
+// Backward-compatible alias for existing Logpush mode code
+export type Env = LogpushEnv;
 
 export interface TelemetryEvent {
   _graft_ai_telemetry: true;

@@ -1,7 +1,20 @@
-import type { Env, TelemetryEvent } from "./types";
+import type { ProxyEnv, TelemetryEvent } from "./types";
 
 const AI_GATEWAY_ORIGIN = "https://gateway.ai.cloudflare.com";
 const TOKEN_PAIR_PATTERN = /(?:^|[,\s])([^=,\s]+)=(\d+)/g;
+
+async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const maxLen = Math.max(aBytes.length, bBytes.length);
+  const aPadded = new Uint8Array(maxLen);
+  const bPadded = new Uint8Array(maxLen);
+  aPadded.set(aBytes);
+  bPadded.set(bBytes);
+  crypto.subtle.timingSafeEqual(aPadded, bPadded);
+  return aBytes.length === bBytes.length;
+}
 
 type TokenCounts = {
   readonly prompt: number;
@@ -9,14 +22,17 @@ type TokenCounts = {
   readonly total: number;
 };
 
-function requireProxyConfig(env: Env): { readonly accountId: string; readonly gatewayId: string } {
+function requireProxyConfig(env: ProxyEnv): {
+  readonly accountId: string;
+  readonly gatewayId: string;
+} {
   if (!env.CF_ACCOUNT_ID || !env.AI_GATEWAY_ID) {
     throw new Error("CF_ACCOUNT_ID and AI_GATEWAY_ID are required for proxy mode");
   }
   return { accountId: env.CF_ACCOUNT_ID, gatewayId: env.AI_GATEWAY_ID };
 }
 
-function buildGatewayUrl(requestUrl: string, env: Env): string {
+function buildGatewayUrl(requestUrl: string, env: ProxyEnv): string {
   const { accountId, gatewayId } = requireProxyConfig(env);
   const url = new URL(requestUrl);
   const path = url.pathname.replace(/^\/+/, "");
@@ -65,7 +81,7 @@ function parseTokenHeader(headers: Headers): TokenCounts {
 function buildTelemetryEvent(
   request: Request,
   response: Response,
-  env: Env,
+  env: ProxyEnv,
   durationMs: number,
 ): TelemetryEvent {
   const url = new URL(request.url);
@@ -80,6 +96,8 @@ function buildTelemetryEvent(
     prompt_tokens: tokens.prompt,
     completion_tokens: tokens.completion,
     total_tokens: tokens.total,
+    // If cf-aig-duration-ms is absent, durationMs is time-to-headers only, which
+    // may under-report the true latency for streaming responses.
     duration_ms: parseNumberHeader(response.headers, "cf-aig-duration-ms") || durationMs,
     path: url.pathname,
     method: request.method,
@@ -97,7 +115,16 @@ function buildUpstreamInit(request: Request): RequestInit {
 }
 
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: ProxyEnv, _ctx: ExecutionContext): Promise<Response> {
+    // Validate proxy secret using constant-time comparison
+    const proxySecret = request.headers.get("X-Proxy-Secret");
+    if (!proxySecret || !(await timingSafeSecretEqual(proxySecret, env.PROXY_SECRET ?? ""))) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    // NOTE: For streaming (SSE / chunked) responses this measures time-to-first-byte.
+    // The full stream completion time is only available when the gateway returns
+    // cf-aig-duration-ms, which is preferred below (see parseNumberHeader fallback).
     const startedAt = Date.now();
     const upstreamUrl = buildGatewayUrl(request.url, env);
     const upstreamResponse = await fetch(upstreamUrl, buildUpstreamInit(request));
@@ -105,4 +132,4 @@ export default {
     console.log(JSON.stringify(buildTelemetryEvent(request, upstreamResponse, env, durationMs)));
     return upstreamResponse;
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<ProxyEnv>;

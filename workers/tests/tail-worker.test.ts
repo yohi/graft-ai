@@ -1,20 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import tailWorker from "../src/tail-worker";
-import type { Env, LokiPushPayload, TelemetryEvent } from "../src/types";
+import type { TailEnv, LokiPushPayload, TelemetryEvent } from "../src/types";
 
 const mockCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 
-function buildEnv(overrides: Partial<Env> = {}): Env {
+function buildEnv(overrides: Partial<TailEnv> = {}): TailEnv {
   return {
     GRAFANA_CLOUD_LOKI_URL: "https://logs-prod-xxx.grafana.net",
     GRAFANA_CLOUD_LOKI_USERNAME: "123456",
     GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "glc_testtoken",
-    ORIGIN_SECRET: "test-origin-secret",
-    RSA_PRIVATE_KEY_PEM: "unused-in-tail-mode",
     GATEWAY_NAME: "main",
     ENV_LABEL: "prod",
-    CF_ACCOUNT_ID: "account-123",
-    AI_GATEWAY_ID: "gateway-main",
     ...overrides,
   };
 }

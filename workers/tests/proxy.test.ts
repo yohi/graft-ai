@@ -1,16 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import proxyWorker from "../src/proxy";
-import type { Env, TelemetryEvent } from "../src/types";
+import type { ProxyEnv, TelemetryEvent } from "../src/types";
 
 const mockCtx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() };
 
-function buildEnv(overrides: Partial<Env> = {}): Env {
+function buildEnv(overrides: Partial<ProxyEnv> = {}): ProxyEnv {
   return {
-    GRAFANA_CLOUD_LOKI_URL: "https://logs-prod-xxx.grafana.net",
-    GRAFANA_CLOUD_LOKI_USERNAME: "123456",
-    GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "glc_testtoken",
-    ORIGIN_SECRET: "test-origin-secret",
-    RSA_PRIVATE_KEY_PEM: "unused-in-proxy-mode",
+    PROXY_SECRET: "test-proxy-secret",
     GATEWAY_NAME: "main",
     ENV_LABEL: "prod",
     CF_ACCOUNT_ID: "account-123",
@@ -49,6 +45,7 @@ describe("AI Gateway proxy Worker", () => {
         authorization: "Bearer user-token",
         "content-type": "application/json",
         "x-client-trace": "trace-1",
+        "x-proxy-secret": "test-proxy-secret",
       },
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
@@ -79,6 +76,31 @@ describe("AI Gateway proxy Worker", () => {
     vi.restoreAllMocks();
   });
 
+  it("returns 401 when X-Proxy-Secret header is missing", async () => {
+    const request = new Request("https://proxy.example.com/v1/chat/completions", {
+      method: "POST",
+    });
+    const response = await proxyWorker.fetch?.(
+      request,
+      buildEnv(),
+      mockCtx as unknown as ExecutionContext,
+    );
+    expect(response?.status).toBe(401);
+  });
+
+  it("returns 401 when X-Proxy-Secret header is wrong", async () => {
+    const request = new Request("https://proxy.example.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "x-proxy-secret": "wrong-secret" },
+    });
+    const response = await proxyWorker.fetch?.(
+      request,
+      buildEnv(),
+      mockCtx as unknown as ExecutionContext,
+    );
+    expect(response?.status).toBe(401);
+  });
+
   it("emits one marked telemetry JSON line with response header fields", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("{}", {
@@ -94,7 +116,10 @@ describe("AI Gateway proxy Worker", () => {
     );
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const request = new Request("https://proxy.example.com/openai/v1/responses", { method: "GET" });
+    const request = new Request("https://proxy.example.com/openai/v1/responses", {
+      method: "GET",
+      headers: { "x-proxy-secret": "test-proxy-secret" },
+    });
     const response = await proxyWorker.fetch?.(
       request,
       buildEnv(),

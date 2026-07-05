@@ -3,17 +3,13 @@
 # Free Tier proxy mode only (no Logpush job here)
 # ------------------------------------------------------------------------------
 
-
-variable "grafana_stack_slug" {
-  description = "Grafana Cloud stack slug (e.g. micrococoa889)"
-  type        = string
-  default     = "micrococoa889"
-}
-
-variable "grafana_stack_region_slug" {
-  description = "Grafana Cloud stack region slug (e.g. prod-ap-northeast-0)"
-  type        = string
-  default     = "prod-ap-northeast-0"
+terraform {
+  required_providers {
+    grafana = {
+      source  = "grafana/grafana"
+      version = "~> 3.0"
+    }
+  }
 }
 
 # ------------------------------------------------------------------
@@ -57,6 +53,7 @@ resource "grafana_cloud_access_policy_token" "loki_write" {
   access_policy_id = grafana_cloud_access_policy.loki_write.policy_id
   name             = "graft-ai-loki-write-token"
   display_name     = "graft-ai Loki write token"
+  expires_at       = "2026-12-31T23:59:59Z"
 }
 
 # ------------------------------------------------------------------

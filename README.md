@@ -28,8 +28,8 @@ NV|> **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise pl
   Loki via Workers Logpush.
 - **OpenAI GPT Usage:** Scrapes token consumption and dollar-based costs via
   Management API to Grafana Prometheus.
-- **Ollama Cloud:** Tracks GPU execution duration metrics and account
-  limitations to Grafana Prometheus.
+- **Ollama Cloud:** Derives session / weekly rate-limit reset times from
+  configured anchor and intervals, pushes them to Grafana Cloud Metrics.
 
 ## 📁 Directory Layout
 
@@ -44,16 +44,22 @@ graft-ai/
 │   │   ├── transform.ts  # NDJSON → Loki JSON streams (labels, timestamp, log line)
 │   │   ├── loki.ts       # Loki HTTP push client with Basic Auth and 429 retry
 │   │   └── types.ts      # shared TypeScript types
+|   │   ├── ollama-cloud.ts      # Cron Worker: derive reset metrics and push to Grafana
+|   │   └── ollama-cloud/        # reset calculator + OTLP/JSON metrics client
+|   │       ├── calc.ts
+|   │       └── prometheus.ts
 │   ├── tests/        # unit and integration tests (50 cases via Vitest)
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vitest.config.ts
-│   ├── wrangler.jsonc       # Logpush mode Worker config
-│   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
-│   └── wrangler.tail.jsonc  # Free Tier Tail Worker config
+|   ├── wrangler.jsonc       # Logpush mode Worker config
+|   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
+|   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
+|   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
 ├── grafana/
-│   └── dashboards/
-│       └── graft-ai-overview.json  # Grafana dashboard definition (13 panels)
+|   └── dashboards/
+|       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)
+|       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics dashboard
 ├── scripts/
 │   ├── setup.sh              # One-command full setup (Free Tier proxy mode)
 │   └── setup-free-tier.sh   # Legacy: superseded by setup.sh
@@ -64,7 +70,7 @@ graft-ai/
 │   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
-├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, setup-free-tier, setup-grafana
+├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, setup-free-tier, setup-grafana
 └── README.md         # this file
 ```
 

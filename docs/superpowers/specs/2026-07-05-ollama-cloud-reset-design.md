@@ -42,7 +42,7 @@ refs:
 本設計の範囲は以下に限定します。
 
 - Ollama Cloud の `session` / `weekly` リセット時刻の派生メトリクス
-- Grafana Cloud Prometheus への remote write
+- Grafana Cloud Metrics（Prometheus バックエンド）への OTLP/HTTP JSON プッシュ
 - 専用 Grafana ダッシュボードの提供
 
 範囲外：
@@ -62,8 +62,8 @@ refs:
   ├─ loads configuration (anchor, intervals, plan)
   ├─ computes next session / weekly reset timestamps
   ├─ computes remaining seconds and progress ratio
-  ├─ builds Prometheus remote write payload
-  └─ POST to Grafana Cloud Prometheus
+  ├─ builds OTLP/HTTP JSON payload
+  └─ POST to Grafana Cloud OTLP endpoint
        ↓
 [Grafana Cloud Prometheus]
        ↓
@@ -74,7 +74,7 @@ refs:
 | --- | --- | --- |
 | Scheduled Worker | `workers/src/ollama-cloud.ts` | Cron entry point. Validates config, computes metrics, pushes to Prometheus. |
 | Reset calculator | `workers/src/ollama-cloud/calc.ts` | Computes next reset, remaining seconds, and progress ratio from anchor and interval. |
-| Prometheus client | `workers/src/ollama-cloud/prometheus.ts` | Builds remote write payload and sends with retry. |
+| Prometheus client | `workers/src/ollama-cloud/prometheus.ts` | Builds OTLP/HTTP JSON payload and sends with retry. |
 | Worker config | `workers/wrangler.ollama.jsonc` | Cron trigger, environment bindings. |
 | Dashboard | `grafana/dashboards/graft-ai-ollama-cloud.json` | Visualizes reset metrics and alerts. |
 
@@ -121,8 +121,8 @@ const nextResetTimestamp = nowSeconds + remaining;
 | `OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS` | Yes | `18000` | Session reset interval in seconds (5h). |
 | `OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS` | Yes | `604800` | Weekly reset interval in seconds (7d). |
 | `OLLAMA_CLOUD_RESET_ANCHOR_ISO` | Yes | - | Last known reset time in ISO 8601 format. |
-| `GRAFANA_CLOUD_PROMETHEUS_URL` | Yes | - | Grafana Cloud Prometheus remote write URL. |
-| `GRAFANA_CLOUD_PROMETHEUS_USERNAME` | Yes | - | Prometheus tenant ID / username. |
+| `GRAFANA_CLOUD_PROMETHEUS_URL` | Yes | - | Grafana Cloud OTLP endpoint URL. |
+| `GRAFANA_CLOUD_PROMETHEUS_USERNAME` | Yes | - | Grafana Cloud instance ID / username. |
 | `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Yes (secret) | - | Access Policy Token with `metrics:write` scope. |
 
 ### 6.2 Cron Schedule

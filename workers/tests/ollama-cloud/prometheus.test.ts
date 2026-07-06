@@ -79,4 +79,26 @@ describe("pushMetrics", () => {
     expect(names).toContain("ollama_cloud_reset_progress_ratio");
     expect(names).toContain("ollama_cloud_plan_info");
   });
+
+  it("derives session_interval and weekly_interval attributes from calculations", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    const customCalcs: ResetCalculation[] = [
+      { ...calc, period: "session", intervalSeconds: 7200 },
+      { ...calc, period: "weekly", intervalSeconds: 1209600 },
+    ];
+    await pushMetrics(env, customCalcs, "pro", mockFetch);
+    const call = mockFetch.mock.calls[0]!;
+    const init = call[1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics;
+    const planInfo = metrics.find((m: { name: string }) => m.name === "ollama_cloud_plan_info");
+    const attrs = planInfo.gauge.dataPoints[0].attributes as Array<{
+      key: string;
+      value: { stringValue: string };
+    }>;
+    const sessionInterval = attrs.find((a) => a.key === "session_interval");
+    const weeklyInterval = attrs.find((a) => a.key === "weekly_interval");
+    expect(sessionInterval?.value.stringValue).toBe("7200");
+    expect(weeklyInterval?.value.stringValue).toBe("1209600");
+  });
 });

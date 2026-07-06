@@ -72,8 +72,22 @@ function buildOtlpPayload(
         {
           attributes: [
             { key: "plan", value: { stringValue: plan } },
-            { key: "session_interval", value: { stringValue: "18000" } },
-            { key: "weekly_interval", value: { stringValue: "604800" } },
+            {
+              key: "session_interval",
+              value: {
+                stringValue: String(
+                  calculations.find((c) => c.period === "session")?.intervalSeconds ?? 18000,
+                ),
+              },
+            },
+            {
+              key: "weekly_interval",
+              value: {
+                stringValue: String(
+                  calculations.find((c) => c.period === "weekly")?.intervalSeconds ?? 604800,
+                ),
+              },
+            },
           ],
           asDouble: 1,
           timeUnixNano: nowUnixNano,

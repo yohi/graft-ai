@@ -6,9 +6,13 @@
 
 ## 1. Purpose
 
-Aggregate telemetry from Cloudflare AI Gateway, OpenAI, and Ollama Cloud into a
-unified Grafana Cloud dashboard, while remaining within the Grafana Cloud Free
+Transform encrypted Cloudflare AI Gateway access logs into Loki JSON streams and
+push them to Grafana Cloud Loki, while remaining within the Grafana Cloud Free
 Tier limits (14-day retention, 10k active series, 50GB logs).
+
+> **Note:** Ollama Cloud rate-limit reset metrics are specified separately in
+> [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md).
+> OpenAI usage scraping is a future subsystem.
 
 ## 2. Subsystems
 
@@ -106,7 +110,8 @@ Loki.
 | Invalid RSA private key         | Return `400`; no Logpush retry.                                            |
 | Unparseable NDJSON line         | Skip line and continue; other lines are processed.                         |
 | Loki 429                        | Retry up to 3 times with exponential backoff; final failure returns `503`. |
-| Loki 5xx or network failure     | Loki handler returns the upstream status; Worker maps `429` and `>=500` to `503`, other non-2xx to `400`. |
+| Loki 5xx                        | Retry up to 3 times with exponential backoff; final failure returns `503`. |
+| Loki network failure (status 0) | Fetch fails; Loki handler returns status 0; Worker maps to `503`.          |
 | Loki 4xx (non-429)              | Return `400`; no Logpush retry.                                            |
 
 #### 2.6 Security

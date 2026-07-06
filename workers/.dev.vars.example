@@ -4,12 +4,21 @@ GRAFANA_CLOUD_LOKI_URL=https://logs-prod-xxx.grafana.net
 GRAFANA_CLOUD_LOKI_USERNAME=123456
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
 
-ZH|# Free Tier proxy mode (no Logpush)
-YB|CF_ACCOUNT_ID=your-cloudflare-account-id
-KV|AI_GATEWAY_ID=main
-BY|GATEWAY_NAME=main
-PB|ENV_LABEL=prod
-TX|PROXY_SECRET=your-random-proxy-secret-here
+# Free Tier proxy mode (no Logpush)
+CF_ACCOUNT_ID=your-cloudflare-account-id
+AI_GATEWAY_ID=main
+GATEWAY_NAME=main
+ENV_LABEL=prod
+PROXY_SECRET=your-random-proxy-secret-here
 # Logpush mode only
 ORIGIN_SECRET=your-random-origin-secret-here
 RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
+
+# Ollama Cloud reset metrics
+OLLAMA_CLOUD_PLAN=
+OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS=18000
+OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS=604800
+OLLAMA_CLOUD_RESET_ANCHOR_ISO=2026-01-01T00:00:00Z
+GRAFANA_CLOUD_PROMETHEUS_URL=https://otlp-gateway-prod-us-central1.grafana.net/otlp
+GRAFANA_CLOUD_PROMETHEUS_USERNAME=123456
+GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx

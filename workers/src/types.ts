@@ -26,6 +26,16 @@ export interface LogpushEnv extends TailEnv {
 // Backward-compatible alias for existing Logpush mode code
 export type Env = LogpushEnv;
 
+export interface OllamaCloudEnv {
+  OLLAMA_CLOUD_PLAN?: string;
+  OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS?: string;
+  OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS?: string;
+  OLLAMA_CLOUD_RESET_ANCHOR_ISO: string;
+  GRAFANA_CLOUD_PROMETHEUS_URL: string;
+  GRAFANA_CLOUD_PROMETHEUS_USERNAME: string;
+  GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string;
+}
+
 export interface TelemetryEvent {
   _graft_ai_telemetry: true;
   request_id: string;

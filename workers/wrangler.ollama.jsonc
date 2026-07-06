@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "graft-ai-ollama-cloud",
+  "main": "src/ollama-cloud.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "vars": {
+    "OLLAMA_CLOUD_PLAN": "unknown",
+    "OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS": "18000",
+    "OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS": "604800"
+  }
+}

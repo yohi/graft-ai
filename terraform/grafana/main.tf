@@ -25,7 +25,7 @@ data "grafana_cloud_stack" "this" {
 # ------------------------------------------------------------------
 resource "grafana_cloud_access_policy" "loki_write" {
   provider     = grafana.cloud
-  region       = var.grafana_stack_region_slug
+  region       = data.grafana_cloud_stack.this.region_slug
   name         = "graft-ai-loki-write"
   display_name = "graft-ai Loki write policy"
   scopes       = ["logs:write"]
@@ -41,7 +41,7 @@ resource "grafana_cloud_access_policy" "loki_write" {
 # ------------------------------------------------------------------
 resource "grafana_cloud_access_policy_token" "loki_write" {
   provider         = grafana.cloud
-  region           = var.grafana_stack_region_slug
+  region           = data.grafana_cloud_stack.this.region_slug
   access_policy_id = grafana_cloud_access_policy.loki_write.policy_id
   name             = "graft-ai-loki-write-token"
   display_name     = "graft-ai Loki write token"

@@ -10,6 +10,7 @@
 #
 # Usage (from repo root):
 #   export TF_VAR_grafana_cloud_api_key="<your-org-api-key>"
+#   export TF_BACKEND_CONFIG_FILE="terraform/grafana/backend.hcl" # S3 backend bucket/key/region
 #   bash scripts/tf-apply-grafana.sh
 # -------------------------------------------------------------------
 set -euo pipefail
@@ -38,7 +39,8 @@ ask() {
 # 0. Prereqs
 ###############################################################################
 command -v terraform &>/dev/null || die "terraform is not installed."
-command -v wrangler  &>/dev/null || die "wrangler is not installed."
+(cd "$(dirname "$0")/../workers" && npx --no -- wrangler --version &>/dev/null) \
+  || die "wrangler is not available via npx. Run 'make install' first."
 
 ###############################################################################
 # 1. Grafana Cloud API key
@@ -72,7 +74,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT/terraform/grafana"
 
 info "Running terraform init..."
-terraform init -upgrade
+[[ -n "${TF_BACKEND_CONFIG_FILE:-}" ]] \
+  || die "TF_BACKEND_CONFIG_FILE is not set. Export it to the path of a backend.hcl file providing the S3 backend's bucket/key/region (see terraform/grafana/versions.tf)."
+terraform init -upgrade -backend-config="$TF_BACKEND_CONFIG_FILE"
 
 info "Running terraform apply (Grafana Access Policy + Token)..."
 terraform apply \

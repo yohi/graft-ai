@@ -32,6 +32,26 @@ function intervalAttribute(
   };
 }
 
+function gaugeMetric(
+  name: string,
+  attributes: Record<string, unknown>[],
+  value: number,
+  nowUnixNano: string,
+): Record<string, unknown> {
+  return {
+    name,
+    gauge: {
+      dataPoints: [
+        {
+          attributes,
+          asDouble: value,
+          timeUnixNano: nowUnixNano,
+        },
+      ],
+    },
+  };
+}
+
 function buildOtlpPayload(
   calculations: ResetCalculation[],
   plan: string,
@@ -42,42 +62,19 @@ function buildOtlpPayload(
       { key: "period", value: { stringValue: calc.period } },
     ];
     return [
-      {
-        name: "ollama_cloud_reset_seconds_remaining",
-        gauge: {
-          dataPoints: [
-            {
-              attributes: baseAttrs,
-              asDouble: calc.remainingSeconds,
-              timeUnixNano: nowUnixNano,
-            },
-          ],
-        },
-      },
-      {
-        name: "ollama_cloud_reset_timestamp_seconds",
-        gauge: {
-          dataPoints: [
-            {
-              attributes: baseAttrs,
-              asDouble: calc.nextResetTimestampSeconds,
-              timeUnixNano: nowUnixNano,
-            },
-          ],
-        },
-      },
-      {
-        name: "ollama_cloud_reset_progress_ratio",
-        gauge: {
-          dataPoints: [
-            {
-              attributes: baseAttrs,
-              asDouble: calc.progressRatio,
-              timeUnixNano: nowUnixNano,
-            },
-          ],
-        },
-      },
+      gaugeMetric(
+        "ollama_cloud_reset_seconds_remaining",
+        baseAttrs,
+        calc.remainingSeconds,
+        nowUnixNano,
+      ),
+      gaugeMetric(
+        "ollama_cloud_reset_timestamp_seconds",
+        baseAttrs,
+        calc.nextResetTimestampSeconds,
+        nowUnixNano,
+      ),
+      gaugeMetric("ollama_cloud_reset_progress_ratio", baseAttrs, calc.progressRatio, nowUnixNano),
     ];
   });
 

@@ -27,7 +27,7 @@ export async function pushToLoki(
     body,
     fetchFn,
     logLabel: "Loki push",
-    // Non-429 errors (including 5xx) are not retried; let the caller decide.
-    isRetryableStatus: (status) => status === 429,
+    // Retry transient Loki failures here; Tail Workers cannot signal upstream retries.
+    isRetryableStatus: (status) => status === 429 || status >= 500,
   });
 }

@@ -68,14 +68,14 @@ describe("pushToLoki", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("does not retry on HTTP 500", async () => {
+  it("retries on HTTP 500 up to 2 times then returns not-ok", async () => {
     const mockFetch = vi
       .fn()
       .mockResolvedValue(new Response("Internal Server Error", { status: 500 }));
     const result = await pushToLoki(testEnv, testPayload, mockFetch);
     expect(result.ok).toBe(false);
     expect(result.status).toBe(500);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
   });
 
   it("sends Basic Auth header with username:token", async () => {

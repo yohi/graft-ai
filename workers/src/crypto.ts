@@ -67,3 +67,14 @@ export async function tryDecryptField(privateKey: CryptoKey, value: unknown): Pr
     return value;
   }
 }
+
+export async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const aBytes = enc.encode(a);
+  const bBytes = enc.encode(b);
+  const [aHash, bHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", aBytes),
+    crypto.subtle.digest("SHA-256", bBytes),
+  ]);
+  return crypto.subtle.timingSafeEqual(new Uint8Array(aHash), new Uint8Array(bHash));
+}

@@ -1,19 +1,8 @@
 import type { ProxyEnv, TelemetryEvent } from "./types";
+import { timingSafeSecretEqual } from "./crypto";
 
 const AI_GATEWAY_ORIGIN = "https://gateway.ai.cloudflare.com";
 const TOKEN_PAIR_PATTERN = /(?:^|[,\s])([^=,\s]+)=(\d+)/g;
-
-async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const aBytes = enc.encode(a);
-  const bBytes = enc.encode(b);
-  const maxLen = Math.max(aBytes.length, bBytes.length);
-  const aPadded = new Uint8Array(maxLen);
-  const bPadded = new Uint8Array(maxLen);
-  aPadded.set(aBytes);
-  bPadded.set(bBytes);
-  return crypto.subtle.timingSafeEqual(aPadded, bPadded) && aBytes.length === bBytes.length;
-}
 
 type TokenCounts = {
   readonly prompt: number;

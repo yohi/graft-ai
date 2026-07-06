@@ -51,6 +51,9 @@ export async function postWithRetry({
         signal: AbortSignal.timeout(perAttemptTimeoutMs),
       });
       lastStatus = response.status;
+      // Release the response body stream before returning or retrying so it
+      // does not leak on the Workers runtime.
+      await response.body?.cancel().catch(() => undefined);
 
       if (response.status >= 200 && response.status < 300) {
         return { ok: true, status: response.status };

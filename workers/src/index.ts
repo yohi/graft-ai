@@ -1,21 +1,10 @@
 import type { Env, AIGatewayLog, LokiPushPayload } from "./types";
-import { importRsaPrivateKey, tryDecryptField } from "./crypto";
+import { importRsaPrivateKey, tryDecryptField, timingSafeSecretEqual } from "./crypto";
 import { transformNdjsonToLokiPayload } from "./transform";
 import { pushToLoki } from "./loki";
 
 // Cache imported RSA private keys across warm Worker invocations
 const privateKeyCache = new Map<string, CryptoKey>();
-
-async function timingSafeSecretEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const aBytes = enc.encode(a);
-  const bBytes = enc.encode(b);
-  const [aHash, bHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", aBytes),
-    crypto.subtle.digest("SHA-256", bBytes),
-  ]);
-  return crypto.subtle.timingSafeEqual(new Uint8Array(aHash), new Uint8Array(bHash));
-}
 
 async function getCachedPrivateKey(pem: string): Promise<CryptoKey> {
   let key = privateKeyCache.get(pem);
@@ -33,8 +22,12 @@ export default {
     }
 
     // 1. Validate origin secret using constant-time comparison
+    if (!env.ORIGIN_SECRET) {
+      console.error("Missing ORIGIN_SECRET");
+      return new Response("Worker misconfigured", { status: 503 });
+    }
     const originSecret = request.headers.get("X-Origin-Secret");
-    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET ?? ""))) {
+    if (!originSecret || !(await timingSafeSecretEqual(originSecret, env.ORIGIN_SECRET))) {
       return new Response("Unauthorized", { status: 401 });
     }
 

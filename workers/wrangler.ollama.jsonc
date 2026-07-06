@@ -11,7 +11,7 @@
     "crons": ["*/5 * * * *"]
   },
   "vars": {
-    "OLLAMA_CLOUD_PLAN": "",
+    "OLLAMA_CLOUD_PLAN": "unknown",
     "OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS": "18000",
     "OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS": "604800"
   }

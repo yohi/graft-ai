@@ -7,7 +7,7 @@ const DEFAULT_WEEKLY_INTERVAL_SECONDS = 604800;
 
 function parseInterval(value: string | undefined, defaultValue: number): number {
   if (!value) return defaultValue;
-  const parsed = parseInt(value, 10);
+  const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
     throw new Error(`Invalid interval: ${value}`);
   }

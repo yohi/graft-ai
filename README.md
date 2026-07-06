@@ -44,22 +44,22 @@ graft-ai/
 │   │   ├── transform.ts  # NDJSON → Loki JSON streams (labels, timestamp, log line)
 │   │   ├── loki.ts       # Loki HTTP push client with Basic Auth and 429 retry
 │   │   └── types.ts      # shared TypeScript types
-|   │   ├── ollama-cloud.ts      # Cron Worker: derive reset metrics and push to Grafana
-|   │   └── ollama-cloud/        # reset calculator + OTLP/JSON metrics client
-|   │       ├── calc.ts
-|   │       └── prometheus.ts
+│   │   ├── ollama-cloud.ts      # Cron Worker: derive reset metrics and push to Grafana
+│   │   └── ollama-cloud/        # reset calculator + OTLP/JSON metrics client
+│   │       ├── calc.ts
+│   │       └── prometheus.ts
 │   ├── tests/        # unit and integration tests (50 cases via Vitest)
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vitest.config.ts
-|   ├── wrangler.jsonc       # Logpush mode Worker config
-|   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
-|   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
-|   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   ├── wrangler.jsonc       # Logpush mode Worker config
+│   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
+│   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
+│   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
 ├── grafana/
-|   └── dashboards/
-|       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)
-|       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics dashboard
+│   └── dashboards/
+│       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)
+│       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics dashboard
 ├── scripts/
 │   ├── setup.sh              # One-command full setup (Free Tier proxy mode)
 │   └── setup-free-tier.sh   # Legacy: superseded by setup.sh

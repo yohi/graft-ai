@@ -71,22 +71,18 @@ function buildOtlpPayload(
     ];
   });
 
-  metrics.push({
-    name: "ollama_cloud_plan_info",
-    gauge: {
-      dataPoints: [
-        {
-          attributes: [
-            { key: "plan", value: { stringValue: plan } },
-            intervalAttribute(calculations, "session", "session_interval", 18000),
-            intervalAttribute(calculations, "weekly", "weekly_interval", 604800),
-          ],
-          asDouble: 1,
-          timeUnixNano: nowUnixNano,
-        },
+  metrics.push(
+    gaugeMetric(
+      "ollama_cloud_plan_info",
+      [
+        { key: "plan", value: { stringValue: plan } },
+        intervalAttribute(calculations, "session", "session_interval", 18000),
+        intervalAttribute(calculations, "weekly", "weekly_interval", 604800),
       ],
-    },
-  });
+      1,
+      nowUnixNano,
+    ),
+  );
 
   return {
     resourceMetrics: [

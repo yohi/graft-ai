@@ -16,6 +16,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function intervalAttribute(
+  calculations: ResetCalculation[],
+  period: "session" | "weekly",
+  key: string,
+  defaultValue: number,
+): Record<string, unknown> {
+  return {
+    key,
+    value: {
+      stringValue: String(
+        calculations.find((c) => c.period === period)?.intervalSeconds ?? defaultValue,
+      ),
+    },
+  };
+}
+
 function buildOtlpPayload(
   calculations: ResetCalculation[],
   plan: string,
@@ -72,22 +88,8 @@ function buildOtlpPayload(
         {
           attributes: [
             { key: "plan", value: { stringValue: plan } },
-            {
-              key: "session_interval",
-              value: {
-                stringValue: String(
-                  calculations.find((c) => c.period === "session")?.intervalSeconds ?? 18000,
-                ),
-              },
-            },
-            {
-              key: "weekly_interval",
-              value: {
-                stringValue: String(
-                  calculations.find((c) => c.period === "weekly")?.intervalSeconds ?? 604800,
-                ),
-              },
-            },
+            intervalAttribute(calculations, "session", "session_interval", 18000),
+            intervalAttribute(calculations, "weekly", "weekly_interval", 604800),
           ],
           asDouble: 1,
           timeUnixNano: nowUnixNano,

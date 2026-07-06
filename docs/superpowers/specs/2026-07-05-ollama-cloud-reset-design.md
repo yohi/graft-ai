@@ -99,10 +99,14 @@ refs:
 
 ```typescript
 const elapsed = nowSeconds - anchorSeconds;
-const progress = (elapsed % intervalSeconds) / intervalSeconds;
-const remaining = intervalSeconds - (elapsed % intervalSeconds);
-const nextResetTimestamp = nowSeconds + remaining;
+const remainder = ((elapsed % intervalSeconds) + intervalSeconds) % intervalSeconds;
+const progressRatio = remainder / intervalSeconds;
+const remainingSeconds = intervalSeconds - remainder;
+const nextResetTimestamp = nowSeconds + remainingSeconds;
 ```
+
+The double-modulo pattern `((elapsed % intervalSeconds) + intervalSeconds) % intervalSeconds` ensures
+that `remainder` is always in the range `[0, intervalSeconds)`, even when `elapsed` is negative.
 
 ### 5.3 Dashboard Panels
 
@@ -118,8 +122,8 @@ const nextResetTimestamp = nowSeconds + remaining;
 | Name | Required | Default | Description |
 | --- | --- | --- | --- |
 | `OLLAMA_CLOUD_PLAN` | No | - | Plan name for `ollama_cloud_plan_info`. |
-| `OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS` | Yes | `18000` | Session reset interval in seconds (5h). |
-| `OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS` | Yes | `604800` | Weekly reset interval in seconds (7d). |
+| `OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS` | No | `18000` | Session reset interval in seconds (5h). |
+| `OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS` | No | `604800` | Weekly reset interval in seconds (7d). |
 | `OLLAMA_CLOUD_RESET_ANCHOR_ISO` | Yes | - | Last known reset time in ISO 8601 format. |
 | `GRAFANA_CLOUD_PROMETHEUS_URL` | Yes | - | Grafana Cloud OTLP endpoint URL. |
 | `GRAFANA_CLOUD_PROMETHEUS_USERNAME` | Yes | - | Grafana Cloud instance ID / username. |

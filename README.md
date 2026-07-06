@@ -15,12 +15,12 @@ aggregator for Grafana Cloud.
 usages, and access logs from multiple AI provider endpoints into a unified
 **Grafana Cloud** dashboard.
 
-HT|This project is optimized to run within the **Grafana Cloud Free Tier**
-VS|(14-day retention, 10k active series, 50GB logs). The default deployment path
-WY|uses Cloudflare **Workers Logpush**, which requires a **Cloudflare Workers
-MB|Paid plan**. An alternative ** autopilot proxy mode is available and routes traffic
-ZZ|through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
-NV|> **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise plan**; the "Free Tier" refers to Grafana Cloud's free tier, not Cloudflare's.
+This project is optimized to run within the **Grafana Cloud Free Tier**
+(14-day retention, 10k active series, 50GB logs). The default deployment path
+uses Cloudflare **Workers Logpush**, which requires a **Cloudflare Workers
+Paid plan**. An alternative **Free Tier proxy mode** is available and routes traffic
+through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
+> **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise plan**; the "Free Tier" refers to Grafana Cloud's free tier, not Cloudflare's.
 
 ## 🏗️ Architecture
 

@@ -146,8 +146,8 @@ describe("computeReset", () => {
 
   it("handles negative elapsed time gracefully", () => {
     const result = computeReset(0, 3600, 18000, "session");
-    expect(result.remainingSeconds).toBe(14400);
-    expect(result.nextResetTimestampSeconds).toBe(18000);
+    expect(result.remainingSeconds).toBe(3600);
+    expect(result.nextResetTimestampSeconds).toBe(3600);
   });
 
   it("throws on non-positive interval", () => {

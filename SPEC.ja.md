@@ -6,9 +6,13 @@ English version: [SPEC.md](./SPEC.md)
 
 ## 1. 目的
 
-Cloudflare AI Gateway、OpenAI、Ollama Cloud からのテレメトリを統一された Grafana
-Cloud dashboard に集約します。同時に、Grafana Cloud Free
+暗号化された Cloudflare AI Gateway access logs を Loki JSON streams に変換し、Grafana Cloud
+Loki に push します。同時に、Grafana Cloud Free
 Tier の制限（14日間保持、10k active series、50GB logs）内に収めます。
+
+> **注記:** Ollama Cloud レート制限リセットメトリクスは
+> [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md)
+> で別途に定義されています。OpenAI 利用メトリクス収集は future subsystem です。
 
 ## 2. サブシステム
 
@@ -81,7 +85,8 @@ Loki に push します。
 | Invalid RSA private key         | `400` を返します。Logpush retry は発生しません。                            |
 | Unparseable NDJSON line         | 該当行を skip し、他の行の処理を継続します。                                |
 | Loki 429                        | Exponential backoff で最大3回 retry します。最終失敗時は `503` を返します。 |
-| Loki 5xx or network failure     | Loki 側の最終失敗時は upstream の status を返し、Worker 側で `429` と `>=500` を `503`、それ以外の non-2xx を `400` に変換します。 |
+| Loki 5xx                        | Exponential backoff で最大5回 retry します。最終失敗時は `503` を返します。 |
+| Loki ネットワーク障害 (status 0) | Fetch 失敗。Loki handler は status 0 を返します。Worker は `503` に変換します。 |
 | Loki 4xx (non-429)              | `400` を返します。Logpush retry は発生しません。                            |
 
 #### 2.6 セキュリティ

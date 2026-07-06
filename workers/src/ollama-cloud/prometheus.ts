@@ -1,5 +1,6 @@
 import type { OllamaCloudEnv } from "../types";
 import type { ResetCalculation } from "./calc";
+import { postWithRetry } from "../http-retry";
 
 type PrometheusEnv = Pick<
   OllamaCloudEnv,
@@ -7,14 +8,6 @@ type PrometheusEnv = Pick<
   | "GRAFANA_CLOUD_PROMETHEUS_USERNAME"
   | "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
 >;
-
-const MAX_RETRIES = 2;
-const INITIAL_BACKOFF_MS = 500;
-const PER_ATTEMPT_TIMEOUT_MS = 15000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function intervalAttribute(
   calculations: ResetCalculation[],
@@ -134,37 +127,13 @@ export async function pushMetrics(
     Authorization: `Basic ${basicAuth}`,
   };
 
-  let lastStatus = 0;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      const backoffMs = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-      await sleep(backoffMs);
-    }
-
-    try {
-      const response = await fetchFn(url, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(PER_ATTEMPT_TIMEOUT_MS),
-      });
-      lastStatus = response.status;
-
-      if (response.status >= 200 && response.status < 300) {
-        return { ok: true, status: response.status };
-      }
-
-      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-        return { ok: false, status: response.status };
-      }
-    } catch (err) {
-      lastStatus = 0;
-      console.error(
-        `Ollama Cloud metrics push attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  return { ok: false, status: lastStatus };
+  return postWithRetry({
+    url,
+    headers,
+    body,
+    fetchFn,
+    logLabel: "Ollama Cloud metrics push",
+    // 4xx (except 429) fail immediately; 429 and 5xx are retried.
+    isRetryableStatus: (status) => !(status >= 400 && status < 500 && status !== 429),
+  });
 }

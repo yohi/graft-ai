@@ -38,7 +38,8 @@ ask() {
 # 0. Prereqs
 ###############################################################################
 command -v terraform &>/dev/null || die "terraform is not installed."
-command -v wrangler  &>/dev/null || die "wrangler is not installed."
+(cd "$(dirname "$0")/../workers" && npx wrangler --version &>/dev/null) \
+  || die "wrangler is not available via npx. Run 'make install' first."
 
 ###############################################################################
 # 1. Grafana Cloud API key

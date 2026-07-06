@@ -220,7 +220,7 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
   -u "${GRAFANA_LOKI_USERNAME}:${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}" \
   -H "Content-Type: application/json" \
   "${GRAFANA_LOKI_URL}/loki/api/v1/push" \
-  -d "{\"streams\":[{\"stream\":{\"env\":\"prod\",\"test\":\"setup-check\"},\"values\":[[\"$(date +%s%N)\",\"graft-ai setup connectivity check\"]]}]}" \
+  -d "{\"streams\":[{\"stream\":{\"env\":\"setup\"},\"values\":[[\"$(date +%s%N)\",\"graft-ai setup connectivity check\"]]}]}" \
   || echo "000")
 
 if [[ "$HTTP_STATUS" == "204" ]]; then
@@ -267,7 +267,15 @@ if [[ -z "$AI_GW_LIST" ]]; then
   AI_GW_LIST="$AI_GATEWAY_ID"
 fi
 
-DETECTED_GW=$(echo "$AI_GW_LIST" | head -1)
+GW_COUNT=$(echo "$AI_GW_LIST" | wc -l)
+if [[ "$GW_COUNT" -gt 1 ]]; then
+  warn "複数の AI Gateway が検出されました。使用する Gateway ID を選択してください:"
+  awk '{print "  - " $0}' <<< "$AI_GW_LIST"
+  ask AI_GATEWAY_ID "使用する AI Gateway ID を入力してください"
+  DETECTED_GW="$AI_GATEWAY_ID"
+else
+  DETECTED_GW=$(echo "$AI_GW_LIST" | head -1)
+fi
 success "AI Gateway ID: ${DETECTED_GW}"
 
 # wrangler.proxy.jsonc の AI_GATEWAY_ID を更新
@@ -290,8 +298,13 @@ fi
 step "STEP 6/10: PROXY_SECRET 生成"
 
 if [[ -z "${PROXY_SECRET:-}" ]]; then
-  PROXY_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9_-' </dev/urandom 2>/dev/null | head -c 48 \
-    || python3 -c "import secrets; print(secrets.token_urlsafe(36))")
+  if command -v python3 &>/dev/null; then
+    PROXY_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(36))")
+  else
+    set +o pipefail
+    PROXY_SECRET=$(LC_ALL=C tr -dc 'A-Za-z0-9_-' </dev/urandom | head -c 48)
+    set -o pipefail
+  fi
   success "PROXY_SECRET を自動生成しました。"
 else
   success "PROXY_SECRET は既に設定済みです。"
@@ -329,6 +342,7 @@ GRAFANA_CLOUD_LOKI_USERNAME=${GRAFANA_LOKI_USERNAME}
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}
 PROXY_SECRET=${PROXY_SECRET}
 EOF
+chmod 600 "$DEV_VARS"
 success ".dev.vars を書き出しました: ${DEV_VARS}"
 
 # =============================================================================

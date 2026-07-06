@@ -82,7 +82,10 @@ info "Fetching Loki datasource info..."
 
 # Read stack slug from gcx config
 STACK_SLUG=$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "")
-[[ -z "$STACK_SLUG" ]] && STACK_SLUG="micrococoa889" # Fallback to original default if config not found
+if [[ -z "$STACK_SLUG" ]]; then
+  warn "Could not auto-detect Grafana stack slug from gcx config."
+  ask STACK_SLUG "Enter your Grafana stack slug"
+fi
 
 LOKI_DS=$(gcx api /api/datasources -o json 2>/dev/null | \
   jq -r "[.[] | select(.type==\"loki\" and (.name | test(\"${STACK_SLUG}\")))] | first" || echo "")
@@ -158,12 +161,16 @@ fi
 # 5. Verify Loki write access
 ###############################################################################
 info "Verifying Loki write access..."
+NOW_NS="$(date +%s)000000000"
 HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST \
+  -H 'Content-Type: application/json' \
   -u "${GRAFANA_LOKI_USERNAME}:${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}" \
-  "${GRAFANA_LOKI_URL}/loki/api/v1/labels" || echo "000")
+  -d "{\"streams\":[{\"stream\":{\"env\":\"setup\"},\"values\":[[\"${NOW_NS}\",\"graft-ai setup write verification\"]]}]}" \
+  "${GRAFANA_LOKI_URL}/loki/api/v1/push" || echo "000")
 
-if [[ "$HTTP_STATUS" == "200" ]]; then
-  success "Loki connection verified (HTTP ${HTTP_STATUS})"
+if [[ "$HTTP_STATUS" == "204" ]]; then
+  success "Loki write access verified (HTTP ${HTTP_STATUS})"
 elif [[ "$HTTP_STATUS" == "401" ]]; then
   warn "Loki auth failed (HTTP 401). Service Account token may lack Loki write permissions."
   warn "The Grafana Service Account approach requires Cloud Access Policy for Loki push."
@@ -183,7 +190,7 @@ Steps to create one:
 MSG
   ask GRAFANA_CLOUD_ACCESS_POLICY_TOKEN "Paste the Cloud Access Policy token (logs:write)" secret
 else
-  warn "Unexpected HTTP status ${HTTP_STATUS} from Loki labels endpoint — continuing anyway."
+  die "Unexpected HTTP status ${HTTP_STATUS} from Loki push endpoint — write access could not be verified."
 fi
 
 ###############################################################################

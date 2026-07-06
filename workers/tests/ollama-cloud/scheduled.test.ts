@@ -71,4 +71,41 @@ describe("ollama-cloud scheduled handler", () => {
     consoleError.mockRestore();
     vi.unstubAllGlobals();
   });
+
+  it("logs error and skips when an interval env var is invalid", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const scheduledEvent = {
+      scheduledTime: new Date("2026-01-01T00:00:00Z").getTime(),
+      cron: "*/5 * * * *",
+    } as ScheduledEvent;
+
+    const ctx = {
+      waitUntil: vi.fn(),
+      passThroughOnException: vi.fn(),
+    } as unknown as ExecutionContext;
+
+    await expect(
+      worker.scheduled(
+        scheduledEvent,
+        {
+          ...baseEnv,
+          OLLAMA_CLOUD_RESET_ANCHOR_ISO: "2026-01-01T00:00:00Z",
+          OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS: "abc",
+        } as typeof baseEnv & {
+          OLLAMA_CLOUD_RESET_ANCHOR_ISO: string;
+          OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS: string;
+        },
+        ctx,
+      ),
+    ).resolves.not.toThrow();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("Invalid interval"));
+
+    consoleError.mockRestore();
+    vi.unstubAllGlobals();
+  });
 });

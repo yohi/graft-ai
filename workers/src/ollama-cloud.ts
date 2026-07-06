@@ -35,14 +35,23 @@ const worker: OllamaCloudWorker = {
     const anchorSeconds = Math.floor(anchorMs / 1000);
     const nowSeconds = Math.floor(event.scheduledTime / 1000);
 
-    const sessionInterval = parseInterval(
-      env.OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS,
-      DEFAULT_SESSION_INTERVAL_SECONDS,
-    );
-    const weeklyInterval = parseInterval(
-      env.OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS,
-      DEFAULT_WEEKLY_INTERVAL_SECONDS,
-    );
+    let sessionInterval: number;
+    let weeklyInterval: number;
+    try {
+      sessionInterval = parseInterval(
+        env.OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS,
+        DEFAULT_SESSION_INTERVAL_SECONDS,
+      );
+      weeklyInterval = parseInterval(
+        env.OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS,
+        DEFAULT_WEEKLY_INTERVAL_SECONDS,
+      );
+    } catch (err) {
+      console.error(
+        `Invalid Ollama Cloud interval configuration: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
 
     const calculations = [
       computeReset(nowSeconds, anchorSeconds, sessionInterval, "session"),

@@ -50,6 +50,16 @@ describe("pushMetrics", () => {
     expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
+  it("retries on HTTP 500 up to 2 times", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response("Internal Server Error", { status: 500 }));
+    const result = await pushMetrics(env, [calc], "pro", mockFetch);
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(500);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
   it("does not retry on HTTP 400", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("Bad Request", { status: 400 }));
     const result = await pushMetrics(env, [calc], "pro", mockFetch);

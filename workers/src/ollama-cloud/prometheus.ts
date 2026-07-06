@@ -156,7 +156,7 @@ export async function pushMetrics(
         return { ok: true, status: response.status };
       }
 
-      if (response.status !== 429) {
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
         return { ok: false, status: response.status };
       }
     } catch (err) {

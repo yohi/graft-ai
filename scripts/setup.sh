@@ -247,6 +247,9 @@ if [[ -z "$CF_ACCOUNT_ID" || "$CF_ACCOUNT_ID" == "replace-with-cloudflare-accoun
     CF_ACCOUNT_ID=""
     ask CF_ACCOUNT_ID "Cloudflare アカウント ID を入力してください"
   fi
+  if [[ ! "$CF_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]; then
+    die "CF_ACCOUNT_ID の形式が不正です（32桁の16進数文字列である必要があります）: ${CF_ACCOUNT_ID}"
+  fi
   info "wrangler.proxy.jsonc の CF_ACCOUNT_ID を更新中..."
   TMP_FILE=$(mktemp)
   sed "s|\"CF_ACCOUNT_ID\": \"replace-with-cloudflare-account-id\"|\"CF_ACCOUNT_ID\": \"${CF_ACCOUNT_ID}\"|g" \

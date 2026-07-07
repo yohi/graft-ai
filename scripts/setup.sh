@@ -238,6 +238,8 @@ step "STEP 5/10: Cloudflare AI Gateway ID の自動検出"
 
 CF_ACCOUNT_ID_ENV="${CF_ACCOUNT_ID:-}"
 CF_ACCOUNT_ID=$(jq -r '.vars.CF_ACCOUNT_ID // empty' "$PROXY_WRANGLER" || echo "")
+CF_ACCOUNT_ID_FROM_FILE="$CF_ACCOUNT_ID"
+
 if [[ -z "$CF_ACCOUNT_ID" || "$CF_ACCOUNT_ID" == "replace-with-cloudflare-account-id" ]]; then
   warn "wrangler.proxy.jsonc の CF_ACCOUNT_ID が未設定または初期値です。"
   if [[ -n "$CF_ACCOUNT_ID_ENV" && "$CF_ACCOUNT_ID_ENV" != "replace-with-cloudflare-account-id" ]]; then
@@ -247,13 +249,25 @@ if [[ -z "$CF_ACCOUNT_ID" || "$CF_ACCOUNT_ID" == "replace-with-cloudflare-accoun
     CF_ACCOUNT_ID=""
     ask CF_ACCOUNT_ID "Cloudflare アカウント ID を入力してください"
   fi
-  if [[ ! "$CF_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]; then
-    die "CF_ACCOUNT_ID の形式が不正です（32桁の16進数文字列である必要があります）: ${CF_ACCOUNT_ID}"
-  fi
+fi
+
+# 既存値・環境変数・ask 入力のいずれから来た値でも、最終値を必ず形式検証する
+if [[ ! "$CF_ACCOUNT_ID" =~ ^[0-9a-f]{32}$ ]]; then
+  die "CF_ACCOUNT_ID の形式が不正です（32桁の16進数文字列である必要があります）: ${CF_ACCOUNT_ID}"
+fi
+
+# 検証済みの最終値を wrangler.proxy.jsonc に確実に書き戻す (placeholder 置換だけに依存しない)
+if [[ "$CF_ACCOUNT_ID_FROM_FILE" != "$CF_ACCOUNT_ID" ]]; then
   info "wrangler.proxy.jsonc の CF_ACCOUNT_ID を更新中..."
   TMP_FILE=$(mktemp)
-  sed "s|\"CF_ACCOUNT_ID\": \"replace-with-cloudflare-account-id\"|\"CF_ACCOUNT_ID\": \"${CF_ACCOUNT_ID}\"|g" \
-    "$PROXY_WRANGLER" > "$TMP_FILE" && mv "$TMP_FILE" "$PROXY_WRANGLER"
+  if [[ -n "$CF_ACCOUNT_ID_FROM_FILE" ]]; then
+    # jsonc はコメントがある可能性があるため sed で置換 (既存値が何であっても対応)
+    sed "s|\"CF_ACCOUNT_ID\": \"${CF_ACCOUNT_ID_FROM_FILE}\"|\"CF_ACCOUNT_ID\": \"${CF_ACCOUNT_ID}\"|g" \
+      "$PROXY_WRANGLER" > "$TMP_FILE" && mv "$TMP_FILE" "$PROXY_WRANGLER"
+  else
+    # ファイル内に既存値が無い場合は jq でキーを新設する
+    jq --arg id "$CF_ACCOUNT_ID" '.vars.CF_ACCOUNT_ID = $id' "$PROXY_WRANGLER" > "$TMP_FILE" && mv "$TMP_FILE" "$PROXY_WRANGLER"
+  fi
   success "wrangler.proxy.jsonc の CF_ACCOUNT_ID を更新しました。"
 fi
 

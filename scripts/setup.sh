@@ -423,7 +423,7 @@ PROXY_URL=$(grep -m1 'workers.dev' <<< "$(npx wrangler deployments list \
   --config "$PROXY_WRANGLER" </dev/null 2>/dev/null | grep 'workers.dev')" \
   | awk '{print $NF}' || echo "https://graft-ai-aig-proxy.<your-namespace>.workers.dev")
 
-echo -e "$(cat <<SUMMARY
+cat <<SUMMARY
 
 ${GREEN}╔══════════════════════════════════════════════════════╗
 ║        graft-ai セットアップ完了！                    ║
@@ -450,4 +450,3 @@ ${BOLD}ログクエリ (Grafana Explore):${NC}
 
 ${GREEN}══════════════════════════════════════════════════════${NC}
 SUMMARY
-)"

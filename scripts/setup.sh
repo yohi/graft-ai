@@ -338,12 +338,12 @@ register_secret() {
   local worker
   worker=$(jq -r '.name // ""' "$config" 2>/dev/null || grep '"name"' "$config" | head -1 | awk -F'"' '{print $4}')
   if ! echo "$value" | npx wrangler secret put "$name" --config "$config" ; then
-    echo -e "${RED}[ERROR]${NC} Secret '$name' の登録に失敗しました。"
-    echo -e "${YELLOW}Cloudflare API トークン (CLOUDFLARE_API_TOKEN) の権限が不足している可能性があります。${NC}"
-    echo -e "以下の権限が付与されていることをご確認ください："
-    echo -e "  - アカウント (Account) > Workers スクリプト (Workers Scripts) > 編集 (Edit)"
-    echo -e "  - アカウント (Account) > AI Gateway > 表示 (Read)"
-    echo -e "  - ユーザー (User) > メンバーシップ (Memberships) > 表示 (Read)"
+    echo -e "${RED}[ERROR]${NC} Secret '$name' の登録に失敗しました。" >&2
+    echo -e "${YELLOW}Cloudflare API トークン (CLOUDFLARE_API_TOKEN) の権限が不足している可能性があります。${NC}" >&2
+    echo -e "以下の権限が付与されていることをご確認ください：" >&2
+    echo -e "  - アカウント (Account) > Workers スクリプト (Workers Scripts) > 編集 (Edit)" >&2
+    echo -e "  - アカウント (Account) > AI Gateway > 表示 (Read)" >&2
+    echo -e "  - ユーザー (User) > メンバーシップ (Memberships) > 表示 (Read)" >&2
     exit 1
   fi
   success "Secret '$name' → ${worker}"
@@ -376,16 +376,16 @@ step "STEP 9/10: Workers デプロイ"
 
 info "Tail Worker をデプロイ中..."
 if ! npx wrangler deploy --config "$TAIL_WRANGLER" ; then
-  echo -e "${RED}[ERROR]${NC} Tail Worker のデプロイに失敗しました。"
-  echo -e "${YELLOW}CLOUDFLARE_API_TOKEN の権限（Workers 編集権限等）をご確認ください。${NC}"
+  echo -e "${RED}[ERROR]${NC} Tail Worker のデプロイに失敗しました。" >&2
+  echo -e "${YELLOW}CLOUDFLARE_API_TOKEN の権限（Workers 編集権限等）をご確認ください。${NC}" >&2
   exit 1
 fi
 success "Tail Worker デプロイ完了"
 
 info "Proxy Worker をデプロイ中..."
 if ! npx wrangler deploy --config "$PROXY_WRANGLER" ; then
-  echo -e "${RED}[ERROR]${NC} Proxy Worker のデプロイに失敗しました。"
-  echo -e "${YELLOW}CLOUDFLARE_API_TOKEN の権限（Workers 編集権限等）をご確認ください。${NC}"
+  echo -e "${RED}[ERROR]${NC} Proxy Worker のデプロイに失敗しました。" >&2
+  echo -e "${YELLOW}CLOUDFLARE_API_TOKEN の権限（Workers 編集権限等）をご確認ください。${NC}" >&2
   exit 1
 fi
 success "Proxy Worker デプロイ完了"

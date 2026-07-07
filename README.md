@@ -318,7 +318,7 @@ should run without missing-file or missing-secret errors.
 - Terraform `>= 1.5.0`
 - A Cloudflare account with AI Gateway and Logpush access
 - A Grafana Cloud Loki tenant URL, username, and access policy token
-- A Cloudflare API token (requires `Account.Workers Scripts: Edit`, `Account.AI Gateway: Read`, and `User.Memberships: Read` permissions if deploying Workers or managing secrets)
+- A Cloudflare API token (requires `Account.Workers Scripts: Edit`, `Account.AI Gateway: Read`, and `User.Memberships: Read` permissions if deploying Workers or managing secrets. This same token is also used as `TF_VAR_cloudflare_api_token` by `make deploy`'s Terraform Logpush apply step, which needs additional Logpush/Logs permissions — see the "⚠️ Operational Notes" section below for the full permission set)
 
 ### First-Time Setup
 

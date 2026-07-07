@@ -264,7 +264,7 @@ Tail Worker が Grafana Cloud Loki にログを push するには、`logs:write`
 - Terraform `>= 1.5.0`
 - Cloudflare AI Gateway と Logpush へのアクセス権
 - Grafana Cloud Loki の tenant URL、username、access policy token
-- Cloudflare API token (Workers のデプロイやシークレットの書き込みを行う場合、`Account.Workers Scripts: Edit`、`Account.AI Gateway: Read`、`User.Memberships: Read` の権限を持つトークンが必要です)
+- Cloudflare API token (Workers のデプロイやシークレットの書き込みを行う場合、`Account.Workers Scripts: Edit`、`Account.AI Gateway: Read`、`User.Memberships: Read` の権限を持つトークンが必要です。同じトークンは `TF_VAR_cloudflare_api_token` として `make deploy` の Terraform Logpush apply でも使用されるため、追加で Logpush/Logs 権限が必要です。詳細は後述の「⚠️ 運用メモ」を参照してください)
 
 ### 初回セットアップ
 

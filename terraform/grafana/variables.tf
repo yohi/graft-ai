@@ -9,7 +9,4 @@ variable "grafana_stack_slug" {
   type        = string
 }
 
-variable "grafana_stack_region_slug" {
-  description = "Grafana Cloud stack region slug (e.g. prod-ap-northeast-0)"
-  type        = string
-}
+

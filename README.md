@@ -22,6 +22,19 @@ Paid plan**. An alternative **Free Tier proxy mode** is available and routes tra
 through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
 > **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise plan**; the "Free Tier" refers to Grafana Cloud's free tier, not Cloudflare's.
 
+### 📊 Feature Support & Roadmap Matrix
+
+The current support status and planned roadmap items are summarized below:
+
+| Feature / Provider | What's Possible Now (Current Support) | What's Not Possible / Limitations | Future Plans (Roadmap) |
+| :--- | :--- | :--- | :--- |
+| **Workers AI** | Collect access logs via AI Gateway and forward them to Grafana Loki (both Logpush & Free Proxy modes) | - | - |
+| **OpenAI (via AI Gateway)** | Collect access logs via AI Gateway and forward them to Grafana Loki | Direct usage scraping via OpenAI APIs | Direct usage scraping from OpenAI APIs using API keys |
+| **Anthropic (via AI Gateway)** | Collect access logs via AI Gateway and forward them to Grafana Loki | Direct usage scraping via Anthropic APIs | - |
+| **Ollama Cloud** | Calculate session/weekly rate-limit reset times and push to Grafana Metrics (Prometheus format) | Real-time access logs forwarding | Dynamic auto-detection of rate-limit reset anchors (currently uses static anchors) |
+| **OpenAI (Direct Connect)** | - (only supported via AI Gateway proxy) | Direct cost/token scraping via API keys | Scheduled usage scraping from OpenAI Usage APIs |
+
+
 ## 🏗️ Architecture
 
 - **Cloudflare AI Gateway:** Streams proxy logs and latency directly to Grafana
@@ -305,7 +318,7 @@ should run without missing-file or missing-secret errors.
 - Terraform `>= 1.5.0`
 - A Cloudflare account with AI Gateway and Logpush access
 - A Grafana Cloud Loki tenant URL, username, and access policy token
-- A Cloudflare API token with Logpush/Logs permissions
+- A Cloudflare API token (requires `Account.Workers Scripts: Edit`, `Account.AI Gateway: Read`, and `User.Memberships: Read` permissions if deploying Workers or managing secrets. This same token is also used as `TF_VAR_cloudflare_api_token` by `make deploy`'s Terraform Logpush apply step, which needs additional Logpush/Logs permissions — see the "⚠️ Operational Notes" section below for the full permission set)
 
 ### First-Time Setup
 
@@ -467,6 +480,9 @@ Use this if you want a quick self-check before deploying:
   GB/month limit. After deployment, monitor Workers Analytics for
   exceptions/subrequest errors, watch Logpush `last_delivery` status, and
   compare Grafana Cloud Logs Usage against this estimate weekly.
+- **Adding and Scaling LLM Providers:**
+  - **Via AI Gateway (OpenAI, Anthropic, etc.):** The Proxy Worker automatically relays these requests. You do NOT need to redeploy or rerun `setup.sh`. Simply direct your app's API requests to the Proxy Worker URL and configure the desired models.
+  - **Adding New Workers or Provider-Specific Secrets:** If you introduce new data-collection Workers (outside AI Gateway) or want to register provider-specific API keys, add the corresponding build/deployment and secret configuration blocks to `setup.sh` and then rerun it.
 
 ## 📄 License
 

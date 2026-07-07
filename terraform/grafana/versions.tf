@@ -12,5 +12,5 @@ terraform {
   # or `-backend-config="key=value"` flags at `terraform init` time.
   # Do NOT hardcode bucket/key/region here; each environment must supply
   # its own backend config (see terraform/grafana/README or root SPEC.md).
-  backend "s3" {}
+  # backend "s3" {}
 }

@@ -235,7 +235,7 @@
         "targets": [
           {
             "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
-            "expr": "sum by (status_code) (rate({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\", status_code!=\"\"} [1m]))",
+            "expr": "sum by (status_code) (rate({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\", status_code!=\"\"} [$__interval]))",
             "legendFormat": "status={{status_code}}",
             "refId": "A"
           }
@@ -293,13 +293,13 @@
         "targets": [
           {
             "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
-            "expr": "avg_over_time({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap duration_ms [1m])",
+            "expr": "avg_over_time({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap duration_ms [$__interval])",
             "legendFormat": "avg",
             "refId": "A"
           },
           {
             "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
-            "expr": "quantile_over_time(0.95, {env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap duration_ms [1m])",
+            "expr": "quantile_over_time(0.95, {env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap duration_ms [$__interval])",
             "legendFormat": "p95",
             "refId": "B"
           }
@@ -358,13 +358,13 @@
         "targets": [
           {
             "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
-            "expr": "sum(sum_over_time({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap prompt_tokens [1m]))",
+            "expr": "sum(sum_over_time({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap prompt_tokens [$__interval]))",
             "legendFormat": "prompt tokens",
             "refId": "A"
           },
           {
             "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
-            "expr": "sum(sum_over_time({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap completion_tokens [1m]))",
+            "expr": "sum(sum_over_time({env=\"prod\", gateway=~\"$gateway\", model=~\"$model\"} | json | unwrap completion_tokens [$__interval]))",
             "legendFormat": "completion tokens",
             "refId": "B"
           }
@@ -389,7 +389,7 @@
         "targets": [
           {
             "datasource": { "type": "loki", "uid": "grafanacloud-logs" },
-            "expr": "sum by (cache_status) (count_over_time({env=\"prod\", gateway=~\"$gateway\", cache_status!=\"\"} [$__range]))",
+            "expr": "sum by (cache_status) (count_over_time({env=\"prod\", gateway=~\"$gateway\"} | json | cache_status!=\"\" [$__range]))",
             "legendFormat": "{{cache_status}}",
             "refId": "A"
           }
@@ -449,6 +449,6 @@
     ]
   },
   "folderUid": "",
-  "message": "graft-ai dashboard initial import",
+  "message": "graft-ai dashboard sync (see git log for change details)",
   "overwrite": true
 }

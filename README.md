@@ -542,7 +542,23 @@ Use this if you want a quick self-check before deploying:
   GB/month limit. After deployment, monitor Workers Analytics for
   exceptions/subrequest errors, watch Logpush `last_delivery` status, and
   compare Grafana Cloud Logs Usage against this estimate weekly.
+- **Adding and Scaling LLM Providers:**
   - **Via AI Gateway (OpenAI, Anthropic, etc.):** The Proxy Worker relays these requests when you route traffic through it. You do NOT need to redeploy or rerun `setup-free-tier.sh` when adding models. Simply direct your app's API requests to the Proxy Worker URL.
+  - **Adding New Workers or Provider-Specific Secrets:** If you introduce new data-collection Workers (outside AI Gateway) or want to register provider-specific API keys, update the corresponding Worker's Wrangler configuration and secrets, then run the matching `make deploy-*` target.
+- **AI Gateway rate limiting:** Each AI Gateway has its own configurable
+  rate limit (`rate_limiting_limit` / `rate_limiting_interval` /
+  `rate_limiting_technique`), separate from the Loki 429-retry logic
+  described above. If the gateway is shared with other high-concurrency
+  clients (e.g., multiple parallel AI agents or load tests), the default
+  limit may be too low, and every request over the threshold is rejected
+  with `429` **before** it reaches the model provider. Symptom: the
+  transformed Loki logs show `model="unknown"` and `total_tokens=0`
+  because the upstream `cf-aig-model` / `cf-aig-tokens` response headers
+  are never set. Check the current setting via
+  `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}` (or
+  Cloudflare Dashboard → AI Gateway → your gateway → Settings →
+  Rate-limiting) and raise `rate_limiting_limit` (or switch to
+  `"sliding"`) if you see this pattern.
 
 ## 📄 License
 

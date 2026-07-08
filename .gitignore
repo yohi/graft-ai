@@ -21,3 +21,7 @@ terraform/**/terraform.tfvars
 
 # Sample Source
 oss/
+
+# Local secrets / logs (never commit)
+.env
+*.log

@@ -15,3 +15,7 @@ terraform/**/terraform.tfvars
 
 # Agent planning workspace
 .omo/
+
+# Local secrets / logs (never commit)
+.env
+*.log

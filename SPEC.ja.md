@@ -132,3 +132,13 @@ Loki に push します。
   KB、raw は約 3〜8 KB です。100k requests/day の場合、月間約 1.5〜4.5
   GB となり、Grafana Cloud Free Tier の 50 GB/month logs
   allowance 内に収まります。
+- **エラー率100% / 429 の切り分け:** Loki 上のログが全件 `model="unknown"` かつ
+  `total_tokens=0` になっている場合、プロバイダ側のレート制限ではなく AI
+  Gateway 自体がモデル呼び出し前にリクエストを拒否している可能性が高いです
+  （`cf-aig-model` / `cf-aig-tokens` レスポンスヘッダーはモデル呼び出しが実際に
+  発生したときのみ付与されるため）。gateway 自体の `rate_limiting_limit` /
+  `rate_limiting_interval` は
+  `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}` で確認してくだ
+  さい。デフォルト値はバースト的な、または複数クライアント（例: 複数の AI
+  エージェントが1つの gateway を共有する場合）からのトラフィックには小さすぎる
+  場合があります。

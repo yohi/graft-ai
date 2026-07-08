@@ -168,3 +168,12 @@ Loki.
   (Administration → Cloud access policies), **not** on the grafana.com portal.
   Grafana Cloud API Keys are deprecated; Service Account tokens cannot push to
   Loki. Use a Cloud Access Policy token with `logs:write` scope.
+- **Diagnosing 100% error rate / 429s:** If Loki shows `model="unknown"` and
+  `total_tokens=0` across all requests, the AI Gateway itself is very likely
+  rejecting requests before the provider call — not a provider-side rate
+  limit — because `cf-aig-model` / `cf-aig-tokens` response headers are only
+  set once a model call actually happens. Check the gateway's own
+  `rate_limiting_limit` / `rate_limiting_interval` via
+  `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}`; the default
+  may be too restrictive for bursty or multi-client traffic (e.g., several
+  concurrent AI agents sharing one gateway).

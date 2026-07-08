@@ -430,6 +430,19 @@ Tail Worker が Grafana Cloud Loki にログを push するには、`logs:write`
 - **対応サービス (LLM) プロバイダの追加・拡張:**
   - **AI Gateway 経由での利用 (OpenAI, Anthropic 等):** すでにデプロイ済みの Proxy Worker がリクエストを自動で中継するため、`setup.sh` の再実行や再デプロイは不要です。アプリ側の接続先を Proxy Worker URL に向け、各モデルを設定するだけで収集されます。
   - **新規 Worker や独自の API キーの追加:** 将来的に AI Gateway 以外の収集 Worker や、プロバイダ固有の API キーを増やす場合は、`setup.sh` に新しい Worker のデプロイ処理やシークレット設定を追加した上で、スクリプトを再実行して適用してください。
+- **AI Gateway のレート制限:** 各 AI Gateway には独自の rate limit
+  （`rate_limiting_limit` / `rate_limiting_interval` /
+  `rate_limiting_technique`）が設定されており、上記の Loki 429 retry
+  ロジックとは別物です。同じ gateway を他の高並列クライアント（例: 複数の AI
+  エージェントの並列実行や負荷テスト）と共有していると、デフォルトの limit では
+  不足し、超過したリクエストはモデルプロバイダに到達する**前**に AI Gateway 自体
+  から `429` で拒否されます。この場合、変換後の Loki ログでは `cf-aig-model` /
+  `cf-aig-tokens` レスポンスヘッダーが一切付与されず、`model="unknown"` かつ
+  `total_tokens=0` になります。現在の設定は
+  `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}`（または
+  Cloudflare Dashboard → AI Gateway → 対象 gateway → Settings →
+  Rate-limiting）で確認できます。この症状が出た場合は `rate_limiting_limit` を
+  上げる、または `"sliding"` 方式への変更を検討してください。
 
 ## 📄 ライセンス
 

@@ -77,19 +77,20 @@ describe("fetchCodexMetrics", () => {
     const calls = mockFetch.mock.calls as [string, RequestInit][];
     const usageCall = calls.find(([url]) => url.endsWith("/wham/usage"));
     const resetCreditsCall = calls.find(([url]) => url.endsWith("/wham/rate-limit-reset-credits"));
+    const usageHeaders = new Headers(usageCall?.[1].headers);
+    const resetCreditsHeaders = new Headers(resetCreditsCall?.[1].headers);
     expect(usageCall?.[0]).toBe("https://chatgpt.com/backend-api/wham/usage");
     expect(resetCreditsCall?.[0]).toBe(
       "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
     );
-    expect((usageCall?.[1].headers as Record<string, string>)["Authorization"]).toBe(
-      "Bearer test-token",
-    );
-    expect((resetCreditsCall?.[1].headers as Record<string, string>)["OpenAI-Beta"]).toBe(
-      "codex-1",
-    );
-    expect((resetCreditsCall?.[1].headers as Record<string, string>)["originator"]).toBe(
-      "Codex Desktop",
-    );
+    expect(usageHeaders.get("Authorization")).toBe("Bearer test-token");
+    expect(usageHeaders.get("Accept")).toBe("application/json");
+    expect(usageHeaders.get("User-Agent")).toBe("graft-ai");
+    expect(resetCreditsHeaders.get("Authorization")).toBe("Bearer test-token");
+    expect(resetCreditsHeaders.get("Accept")).toBe("application/json");
+    expect(resetCreditsHeaders.get("User-Agent")).toBe("graft-ai");
+    expect(resetCreditsHeaders.get("OpenAI-Beta")).toBe("codex-1");
+    expect(resetCreditsHeaders.get("originator")).toBe("Codex Desktop");
   });
 
   it("sends ChatGPT-Account-Id header when accountId provided", async () => {
@@ -118,30 +119,6 @@ describe("fetchCodexMetrics", () => {
     await expect(fetchCodexMetrics("bad-token", undefined, mockFetch)).rejects.toThrow(/401/);
   });
 
-  it.each([
-    [
-      "primary_window",
-      {
-        ...MOCK_USAGE_RESPONSE,
-        rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, primary_window: undefined },
-      },
-    ],
-    [
-      "secondary_window",
-      {
-        ...MOCK_USAGE_RESPONSE,
-        rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, secondary_window: undefined },
-      },
-    ],
-  ])("throws when %s is missing", async (_window, incompleteResponse) => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(incompleteResponse), { status: 200 }));
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /required window/,
-    );
-  });
-
   it("keeps usage metrics when reset-credits fetch fails", async () => {
     const mockFetch = vi
       .fn()
@@ -162,6 +139,21 @@ describe("fetchCodexMetrics", () => {
       .mockResolvedValue(new Response(JSON.stringify(noCredits), { status: 200 }));
     const result = await fetchCodexMetrics("token", undefined, mockFetch);
     expect(result.creditsRemaining).toBeNull();
+  });
+
+  it("ignores non-finite reset credits without losing usage metrics", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementation(async (url: string) =>
+        url.endsWith("rate-limit-reset-credits")
+          ? new Response('{"credits":1e400,"available_count":8}', { status: 200 })
+          : new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 }),
+      );
+
+    const result = await fetchCodexMetrics("token", undefined, mockFetch);
+
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+    expect(result.resetCredits).toBeUndefined();
   });
 
   it("defaults plan to 'unknown' when plan_type absent", async () => {

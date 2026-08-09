@@ -12,7 +12,8 @@ Tier limits (14-day retention, 10k active series, 50GB logs).
 
 > **Note:** Ollama Cloud rate-limit reset metrics are specified separately in
 > [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md).
-> OpenAI usage scraping is a future subsystem.
+> OpenAI usage metrics are collected by the current Provider Metrics Worker
+> described below.
 
 ## 2. Subsystems
 
@@ -73,6 +74,30 @@ Loki.
 | Tail Worker | Wrangler (`workers/src/tail-worker.ts`) | Filters telemetry logs, transforms to Loki streams. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
 | Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
+
+### Provider Metrics Worker (`graft-ai-provider-metrics`)
+
+A scheduled Worker (cron `*/5 * * * *`) that fetches usage metrics from Codex,
+OpenAI API, and OpenCodeGo and pushes them to Grafana Cloud Prometheus via
+OTLP/v1 JSON.
+
+**Providers:**
+
+- **OpenAI API:** `GET /v1/organization/costs` +
+  `GET /v1/organization/usage/completions` (Bearer Admin Key, daily window)
+- The history window is controlled by `OPENAI_API_HISTORY_DAYS`; it defaults to
+  `1` day when unset and accepts integer values from `1` through `31` days.
+- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token)
+- **OpenCodeGo:** HTML scraping of `opencode.ai/workspace/{id}/go` (Session Cookie)
+
+**Metrics pushed:**
+
+- `openai_api_cost_usd{line_item}`, `openai_api_{input,output,cached}_tokens{model}`, `openai_api_requests{model}`
+- `codex_usage_ratio{period}`, `codex_reset_timestamp_seconds{period}`, `codex_credits_remaining`, `codex_plan_info{plan}`
+- `opencodego_usage_ratio{period}`, `opencodego_reset_seconds_remaining{period}`, `opencodego_zen_balance_usd`
+
+**Error handling:** Each provider fetch is independent; a single failure does
+not prevent other metrics from being pushed.
 
 #### 2.4 Data Transformation Rules
 

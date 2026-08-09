@@ -43,6 +43,44 @@ The current support status and planned roadmap items are summarized below:
   Management API to Grafana Prometheus.
 - **Ollama Cloud:** Derives session / weekly rate-limit reset times from
   configured anchor and intervals, pushes them to Grafana Cloud Metrics.
+- **Provider Metrics Worker:** Fetches Codex, OpenAI API, and OpenCodeGo usage
+  every five minutes and pushes OTLP/v1 metrics to Grafana Cloud Prometheus.
+
+### Scheduled Workers
+
+| Worker | Trigger | Responsibility |
+| :--- | :--- | :--- |
+| `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Fetches Codex / OpenAI API / OpenCodeGo usage and pushes to Grafana Cloud Prometheus |
+
+#### `graft-ai-provider-metrics` secrets
+
+```sh
+cd workers
+npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.jsonc
+npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
+npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
+npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
+npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+cd ..
+```
+
+The non-secret history window is configured in
+`workers/wrangler.provider-metrics.jsonc`:
+
+```jsonc
+{
+  "vars": {
+    "OPENAI_API_HISTORY_DAYS": "1"
+  }
+}
+```
+
+`OPENAI_API_HISTORY_DAYS` defaults to `1` day and accepts integer values from
+`1` through `31` days. Run `make deploy-provider-metrics` from the repository
+root after registering the secrets.
 
 ## 📁 Directory Layout
 
@@ -61,6 +99,8 @@ graft-ai/
 │   │   └── ollama-cloud/        # reset calculator + OTLP/JSON metrics client
 │   │       ├── calc.ts
 │   │       └── prometheus.ts
+│   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
+│   │   └── provider-metrics/     # provider fetchers + OTLP metrics client
 │   ├── tests/        # unit and integration tests (50 cases via Vitest)
 │   ├── package.json
 │   ├── tsconfig.json
@@ -68,7 +108,8 @@ graft-ai/
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
 │   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
-│   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
 ├── grafana/
 │   └── dashboards/
 │       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)
@@ -83,7 +124,7 @@ graft-ai/
 │   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
-├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, setup-free-tier, setup-grafana
+├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, setup-free-tier, setup-grafana
 └── README.md         # this file
 ```
 

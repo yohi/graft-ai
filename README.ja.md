@@ -43,6 +43,42 @@ Worker と Tail Worker で通信を中継する **Free Tier proxy mode** も利�
   Prometheus に送ります。
 - **Ollama Cloud:** 設定されたアンカー時刻と間隔から session / weekly
   レート制限リセット時刻を派生させ、Grafana Cloud Metrics に push します。
+- **Provider Metrics Worker:** 5分ごとに Codex、OpenAI API、OpenCodeGo の使用量を取得し、
+  OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
+
+### スケジュール実行 Worker
+
+| Worker | Trigger | Responsibility |
+| :--- | :--- | :--- |
+| `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
+
+#### `graft-ai-provider-metrics` の secrets
+
+```sh
+cd workers
+npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.jsonc
+npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
+npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
+npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
+npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+cd ..
+```
+
+Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で設定します。
+
+```jsonc
+{
+  "vars": {
+    "OPENAI_API_HISTORY_DAYS": "1"
+  }
+}
+```
+
+`OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
+Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
 
 ## 📁 ディレクトリ構成
 
@@ -61,6 +97,8 @@ graft-ai/
 │   │   └── ollama-cloud/        # reset 計算機 + OTLP/JSON メトリクス client
 │   │       ├── calc.ts
 │   │       └── prometheus.ts
+│   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
+│   │   └── provider-metrics/     # provider fetcher + OTLP metrics client
 │   ├── tests/        # Vitest による unit / integration tests（50 cases）
 │   ├── package.json
 │   ├── tsconfig.json
@@ -68,7 +106,8 @@ graft-ai/
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
 │   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
-│   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
 ├── grafana/
 │   └── dashboards/
 │       ├── graft-ai-overview.json      # AI Gateway ダッシュボード定義（13 パネル）
@@ -83,7 +122,7 @@ graft-ai/
 │   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token（optional）
 │   └── versions.tf
 ├── tests/fixtures/   # AI Gateway NDJSON サンプル fixture
-├── Makefile          # install, typecheck, test, fmt, validate, deploy, setup-free-tier, setup-grafana 用ターゲット
+├── Makefile          # install, typecheck, test, fmt, validate, deploy, deploy-provider-metrics, setup-free-tier, setup-grafana 用ターゲット
 ├── README.md         # 英語版 README
 └── README.ja.md      # このファイル
 ```

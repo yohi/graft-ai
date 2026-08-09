@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama clean setup-free-tier setup-grafana
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics clean setup-free-tier setup-grafana
 
 install:
 	cd workers && npm install
@@ -48,3 +48,6 @@ clean:
 
 deploy-ollama:
 	cd workers && npx wrangler deploy --config wrangler.ollama.jsonc
+
+deploy-provider-metrics:
+	cd workers && npx wrangler deploy --config wrangler.provider-metrics.jsonc

@@ -64,9 +64,21 @@ npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metri
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+cd ..
 ```
 
-Secret 登録後、`make deploy-provider-metrics` でデプロイします。
+Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で設定します。
+
+```jsonc
+{
+  "vars": {
+    "OPENAI_API_HISTORY_DAYS": "1"
+  }
+}
+```
+
+`OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
+Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
 
 ## 📁 ディレクトリ構成
 
@@ -94,7 +106,8 @@ graft-ai/
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
 │   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
-│   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
 ├── grafana/
 │   └── dashboards/
 │       ├── graft-ai-overview.json      # AI Gateway ダッシュボード定義（13 パネル）

@@ -12,7 +12,8 @@ Tier の制限（14日間保持、10k active series、50GB logs）内に収め�
 
 > **注記:** Ollama Cloud レート制限リセットメトリクスは
 > [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md)
-> で別途に定義されています。OpenAI 利用メトリクス収集は future subsystem です。
+> で別途に定義されています。OpenAI 利用メトリクスは、下記の Provider Metrics
+> Worker が現行機能として収集します。
 
 ## 2. サブシステム
 
@@ -59,6 +60,8 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
 
 - **OpenAI API:** `GET /v1/organization/costs` と
   `GET /v1/organization/usage/completions`（Bearer Admin Key、日次 window）
+- 取得期間は `OPENAI_API_HISTORY_DAYS` で指定し、未設定時のデフォルトは1日、
+  指定可能な範囲は1〜31日の整数です。
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token）
 - **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping（Session Cookie）
 

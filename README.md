@@ -64,9 +64,23 @@ npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metri
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+cd ..
 ```
 
-Deploy it with `make deploy-provider-metrics` after registering the secrets.
+The non-secret history window is configured in
+`workers/wrangler.provider-metrics.jsonc`:
+
+```jsonc
+{
+  "vars": {
+    "OPENAI_API_HISTORY_DAYS": "1"
+  }
+}
+```
+
+`OPENAI_API_HISTORY_DAYS` defaults to `1` day and accepts integer values from
+`1` through `31` days. Run `make deploy-provider-metrics` from the repository
+root after registering the secrets.
 
 ## 📁 Directory Layout
 
@@ -94,7 +108,8 @@ graft-ai/
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
 │   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
-│   └── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
+│   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
 ├── grafana/
 │   └── dashboards/
 │       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)

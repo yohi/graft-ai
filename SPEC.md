@@ -12,7 +12,8 @@ Tier limits (14-day retention, 10k active series, 50GB logs).
 
 > **Note:** Ollama Cloud rate-limit reset metrics are specified separately in
 > [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md).
-> OpenAI usage scraping is a future subsystem.
+> OpenAI usage metrics are collected by the current Provider Metrics Worker
+> described below.
 
 ## 2. Subsystems
 
@@ -84,6 +85,8 @@ OTLP/v1 JSON.
 
 - **OpenAI API:** `GET /v1/organization/costs` +
   `GET /v1/organization/usage/completions` (Bearer Admin Key, daily window)
+- The history window is controlled by `OPENAI_API_HISTORY_DAYS`; it defaults to
+  `1` day when unset and accepts integer values from `1` through `31` days.
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token)
 - **OpenCodeGo:** HTML scraping of `opencode.ai/workspace/{id}/go` (Session Cookie)
 

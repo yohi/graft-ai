@@ -4,7 +4,7 @@ import type {
   CodexFetchResult,
   OpenCodeGoFetchResult,
 } from "./types";
-import { postWithRetry } from "../http-retry";
+import { postWithRetry, validatePrometheusConfig } from "../http-retry";
 
 type PrometheusEnv = Pick<
   ProviderMetricsEnv,
@@ -140,7 +140,11 @@ export async function pushProviderMetrics(
   results: MetricResults,
   fetchFn: typeof fetch = fetch,
 ): Promise<{ ok: boolean; status: number }> {
-  const url = `${env.GRAFANA_CLOUD_PROMETHEUS_URL}/v1/metrics`;
+  const url = validatePrometheusConfig(
+    env.GRAFANA_CLOUD_PROMETHEUS_URL,
+    env.GRAFANA_CLOUD_PROMETHEUS_USERNAME,
+    env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN,
+  );
   const basicAuth = btoa(
     `${env.GRAFANA_CLOUD_PROMETHEUS_USERNAME}:${env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}`,
   );

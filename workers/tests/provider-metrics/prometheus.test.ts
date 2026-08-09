@@ -40,6 +40,20 @@ const sampleOpenCodeGo: OpenCodeGoFetchResult = {
 };
 
 describe("pushProviderMetrics", () => {
+  it.each([
+    ["missing URL", { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "" }],
+    ["HTTP URL", { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "http://metrics.example.com/otlp" }],
+    ["missing username", { ...env, GRAFANA_CLOUD_PROMETHEUS_USERNAME: "" }],
+    ["missing token", { ...env, GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "" }],
+  ])("rejects invalid Prometheus configuration: %s", async (_case, invalidEnv) => {
+    const mockFetch = vi.fn();
+
+    await expect(
+      pushProviderMetrics(invalidEnv, { codex: sampleCodex }, mockFetch),
+    ).rejects.toThrow(/Prometheus configuration/i);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("returns ok on HTTP 200", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     const result = await pushProviderMetrics(
@@ -58,6 +72,22 @@ describe("pushProviderMetrics", () => {
     expect(url).toBe("https://otlp-gateway-prod-us-central1.grafana.net/otlp/v1/metrics");
     const headers = init.headers as Record<string, string>;
     expect(headers["Authorization"]).toBe(`Basic ${btoa("123456:test-token")}`);
+  });
+
+  it("appends the metrics path before query parameters and fragments", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    await pushProviderMetrics(
+      {
+        ...env,
+        GRAFANA_CLOUD_PROMETHEUS_URL: "https://metrics.example.com/otlp?tenant=demo#metrics",
+      },
+      { codex: sampleCodex },
+      mockFetch,
+    );
+
+    expect(mockFetch.mock.calls[0]![0]).toBe(
+      "https://metrics.example.com/otlp/v1/metrics?tenant=demo#metrics",
+    );
   });
 
   it("includes openai_api_cost_usd metric when openai result provided", async () => {

@@ -51,6 +51,7 @@ Worker と Tail Worker で通信を中継する **Free Tier proxy mode** も利�
 | Worker | Trigger | Responsibility |
 | :--- | :--- | :--- |
 | `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
+| `graft-ai-ollama-cloud` | Cron `*/5 * * * *` | session / weekly リセットメトリクスを計算し、Grafana Cloud Prometheus に push |
 
 #### `graft-ai-provider-metrics` の secrets
 
@@ -79,6 +80,28 @@ Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で
 
 `OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
 Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
+
+#### `graft-ai-ollama-cloud`
+
+```sh
+cd workers
+npx wrangler secret put OLLAMA_CLOUD_RESET_ANCHOR_ISO --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
+cd ..
+make deploy-ollama
+```
+
+`GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` には Prometheus 送信に必要な
+`metrics:write` scope が必要です。`logs:write` のみを持つ Loki 専用 token
+ではメトリクス送信に失敗します。Loki token とは別の Prometheus token を
+使用するか、共有 token に `logs:write` と `metrics:write` の両方を付与して
+ください。`scripts/setup.sh` は Prometheus token を別途入力して Ollama
+Worker に登録します。`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
+時刻、Prometheus エンドポイントは HTTPS で指定してください。スクリプトは
+さらに Ollama ダッシュボードの import と
+`grafana/alerts/graft-ai-ollama-cloud-rules.json` の Alert Rule 登録を行います。
 
 ## 📁 ディレクトリ構成
 

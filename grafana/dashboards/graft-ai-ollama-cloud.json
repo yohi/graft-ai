@@ -202,30 +202,7 @@
         ]
       }
     ],
-    "annotations": {
-      "list": [
-        {
-          "name": "Session reset soon",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-          "expr": "ollama_cloud_reset_seconds_remaining{period=\"session\"} < 3600",
-          "tagKeys": "",
-          "textFormat": "Session reset within 1 hour",
-          "iconColor": "red",
-          "enable": true,
-          "hide": false
-        },
-        {
-          "name": "Weekly reset soon",
-          "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
-          "expr": "ollama_cloud_reset_seconds_remaining{period=\"weekly\"} < 86400",
-          "tagKeys": "",
-          "textFormat": "Weekly reset within 24 hours",
-          "iconColor": "red",
-          "enable": true,
-          "hide": false
-        }
-      ]
-    }
+    "annotations": { "list": [] }
   },
   "overwrite": false
 }

@@ -14,6 +14,22 @@ function parseInterval(value: string | undefined, defaultValue: number): number 
   return parsed;
 }
 
+function parseAnchorIso(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(
+    value,
+  );
+  if (match === null) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth) return null;
+
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? milliseconds : null;
+}
+
 export interface OllamaCloudWorker {
   scheduled(event: ScheduledEvent, env: OllamaCloudEnv, ctx: ExecutionContext): Promise<void>;
 }
@@ -26,8 +42,8 @@ const worker: OllamaCloudWorker = {
       return;
     }
 
-    const anchorMs = Date.parse(anchorIso);
-    if (Number.isNaN(anchorMs)) {
+    const anchorMs = parseAnchorIso(anchorIso);
+    if (anchorMs === null) {
       console.error(`Invalid OLLAMA_CLOUD_RESET_ANCHOR_ISO: ${anchorIso}`);
       return;
     }

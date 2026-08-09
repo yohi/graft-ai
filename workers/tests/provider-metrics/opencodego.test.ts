@@ -111,6 +111,23 @@ describe("fetchOpenCodeGoMetrics", () => {
     }
   });
 
+  it("does not follow redirects for Cookie-authenticated requests", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        expect(init.redirect).toBe("manual");
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("/go")) {
+        expect(init.redirect).toBe("manual");
+        return new Response(MOCK_USAGE_HTML, { status: 200 });
+      }
+      expect(init.redirect).toBe("manual");
+      return new Response(MOCK_ZEN_HTML, { status: 200 });
+    });
+
+    await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+  });
+
   it("sends X-Server-Id and X-Server-Instance headers for _server requests", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       if (url.includes("_server") && url.includes("def399")) {

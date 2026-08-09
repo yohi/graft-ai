@@ -4,7 +4,7 @@ This repository is `graft-ai`, a telemetry pipeline that aggregates Cloudflare A
 
 ## Project overview
 
-- **What:** TypeScript Cloudflare Worker + Terraform for AI Gateway log collection and Ollama Cloud rate-limit reset metrics; OpenAI usage scraper is a future subsystem.
+- **What:** TypeScript Cloudflare Workers + Terraform for AI Gateway log collection, Provider Metrics (Codex/OpenAI API/OpenCodeGo), and Ollama Cloud rate-limit reset metrics.
 - **Why:** Provide a unified, Free-Tier-friendly view of AI provider costs, tokens, and access logs.
 - **How:** The Worker receives encrypted Logpush NDJSON, decrypts it, transforms it into Loki JSON streams, and pushes to Grafana Cloud Loki. A separate scheduled Worker derives Ollama Cloud session/weekly reset times from a configured anchor and intervals, and pushes them to Grafana Cloud Metrics. Terraform manages the Cloudflare Logpush job and optional Grafana resources; Workers are deployed via Wrangler.
 

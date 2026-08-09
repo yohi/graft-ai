@@ -81,6 +81,10 @@ Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で
 `OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
 Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
 
+`make setup-free-tier` は Logpush を使わない Proxy、Tail、Ollama Worker を構築します。
+Provider Metrics はプロバイダー資格情報が別管理のため、Secret 登録後に
+`make deploy-provider-metrics` で個別にデプロイしてください。
+
 #### `graft-ai-ollama-cloud`
 
 ```sh

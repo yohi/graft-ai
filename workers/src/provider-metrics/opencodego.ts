@@ -41,6 +41,7 @@ async function get(
     logLabel: "OpenCodeGo fetch",
     isRetryableStatus: (status) => status === 429 || status >= 500,
     perAttemptTimeoutMs: TIMEOUT_MS,
+    redirect: "manual",
   });
 }
 

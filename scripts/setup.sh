@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/setup.sh
 # =============================================================================
-# graft-ai — ワンコマンド完全セットアップスクリプト
+# graft-ai — Free Tier（Proxy/Tail/Ollama）セットアップスクリプト
 #
 # 実行内容:
 #   1. 前提ツール確認 (npx wrangler / curl / jq / gcx)
@@ -11,7 +11,7 @@
 #   5. AI Gateway ID を Cloudflare API から自動検出 → wrangler.proxy.jsonc 更新
 #   6. PROXY_SECRET 自動生成
 #   7. Wrangler シークレット登録
-#   8. .dev.vars 書き出し (ローカル開発用)
+#   8. .dev.vars 書き出し (ローカル開発用。metrics token を使用)
 #   9. Tail Worker / Proxy Worker / Ollama Worker デプロイ
 #  10. Grafana ダッシュボード・Alert Rule 自動インポート
 #
@@ -417,12 +417,14 @@ DEV_VARS="${WORKERS_DIR}/.dev.vars"
 cat > "$DEV_VARS" <<EOF
 GRAFANA_CLOUD_LOKI_URL=${GRAFANA_LOKI_URL}
 GRAFANA_CLOUD_LOKI_USERNAME=${GRAFANA_LOKI_USERNAME}
-GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}
 PROXY_SECRET=${PROXY_SECRET}
 OLLAMA_CLOUD_RESET_ANCHOR_ISO=${OLLAMA_CLOUD_RESET_ANCHOR_ISO}
 GRAFANA_CLOUD_PROMETHEUS_URL=${GRAFANA_CLOUD_PROMETHEUS_URL}
 GRAFANA_CLOUD_PROMETHEUS_USERNAME=${GRAFANA_CLOUD_PROMETHEUS_USERNAME}
-GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN=${GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN}
+# Local Workers share the GRAFANA_CLOUD_ACCESS_POLICY_TOKEN binding. Use the
+# Prometheus token here; it must include both logs:write and metrics:write for
+# local Tail/Proxy and scheduled Worker development.
+GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=${GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN}
 EOF
 chmod 600 "$DEV_VARS"
 success ".dev.vars を書き出しました: ${DEV_VARS}"

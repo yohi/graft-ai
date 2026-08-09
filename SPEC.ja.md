@@ -50,6 +50,26 @@ Loki に push します。
 | Credentials      | Wrangler secrets + `TF_VAR_*` env vars | Grafana token、origin secret、RSA private key を保持します。 |
 | Loki             | Grafana Cloud managed                  | 変換後 logs を14日間保存します。                             |
 
+### Provider Metrics Worker (`graft-ai-provider-metrics`)
+
+Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCodeGo
+から使用量メトリクスを取得し、OTLP/v1 JSON で Grafana Cloud Prometheus に push します。
+
+**Providers:**
+
+- **OpenAI API:** `GET /v1/organization/costs` と
+  `GET /v1/organization/usage/completions`（Bearer Admin Key、日次 window）
+- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token）
+- **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping（Session Cookie）
+
+**Metrics pushed:**
+
+- `openai_api_cost_usd{line_item}`、`openai_api_{input,output,cached}_tokens{model}`、`openai_api_requests{model}`
+- `codex_usage_ratio{period}`、`codex_reset_timestamp_seconds{period}`、`codex_credits_remaining`、`codex_plan_info{plan}`
+- `opencodego_usage_ratio{period}`、`opencodego_reset_seconds_remaining{period}`、`opencodego_zen_balance_usd`
+
+**Error handling:** Provider ごとの fetch は独立しており、1つの失敗が他のメトリクス push を妨げません。
+
 #### 2.4 データ変換ルール
 
 1. **Timestamp and Encryption**

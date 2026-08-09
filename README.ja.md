@@ -43,6 +43,30 @@ Worker と Tail Worker で通信を中継する **Free Tier proxy mode** も利�
   Prometheus に送ります。
 - **Ollama Cloud:** 設定されたアンカー時刻と間隔から session / weekly
   レート制限リセット時刻を派生させ、Grafana Cloud Metrics に push します。
+- **Provider Metrics Worker:** 5分ごとに Codex、OpenAI API、OpenCodeGo の使用量を取得し、
+  OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
+
+### スケジュール実行 Worker
+
+| Worker | Trigger | Responsibility |
+| :--- | :--- | :--- |
+| `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
+
+#### `graft-ai-provider-metrics` の secrets
+
+```sh
+cd workers
+npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.jsonc
+npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
+npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
+npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
+npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+```
+
+Secret 登録後、`make deploy-provider-metrics` でデプロイします。
 
 ## 📁 ディレクトリ構成
 
@@ -61,6 +85,8 @@ graft-ai/
 │   │   └── ollama-cloud/        # reset 計算機 + OTLP/JSON メトリクス client
 │   │       ├── calc.ts
 │   │       └── prometheus.ts
+│   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
+│   │   └── provider-metrics/     # provider fetcher + OTLP metrics client
 │   ├── tests/        # Vitest による unit / integration tests（50 cases）
 │   ├── package.json
 │   ├── tsconfig.json
@@ -83,7 +109,7 @@ graft-ai/
 │   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token（optional）
 │   └── versions.tf
 ├── tests/fixtures/   # AI Gateway NDJSON サンプル fixture
-├── Makefile          # install, typecheck, test, fmt, validate, deploy, setup-free-tier, setup-grafana 用ターゲット
+├── Makefile          # install, typecheck, test, fmt, validate, deploy, deploy-provider-metrics, setup-free-tier, setup-grafana 用ターゲット
 ├── README.md         # 英語版 README
 └── README.ja.md      # このファイル
 ```

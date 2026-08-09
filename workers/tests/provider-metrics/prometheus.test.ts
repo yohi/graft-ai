@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { pushProviderMetrics } from "../../src/provider-metrics/prometheus";
-import type { OpenAIFetchResult, CodexFetchResult, OpenCodeGoFetchResult } from "../../src/provider-metrics/types";
+import type {
+  OpenAIFetchResult,
+  CodexFetchResult,
+  OpenCodeGoFetchResult,
+} from "../../src/provider-metrics/types";
 
 const env = {
   GRAFANA_CLOUD_PROMETHEUS_URL: "https://otlp-gateway-prod-us-central1.grafana.net/otlp",
@@ -10,7 +14,9 @@ const env = {
 
 const sampleOpenAI: OpenAIFetchResult = {
   costs: [{ lineItem: "Chat Completions", costUSD: 0.42 }],
-  tokens: [{ model: "gpt-4o", inputTokens: 1000, outputTokens: 500, cachedTokens: 100, requests: 10 }],
+  tokens: [
+    { model: "gpt-4o", inputTokens: 1000, outputTokens: 500, cachedTokens: 100, requests: 10 },
+  ],
 };
 
 const sampleCodex: CodexFetchResult = {

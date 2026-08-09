@@ -1,4 +1,9 @@
-import type { ProviderMetricsEnv, OpenAIFetchResult, CodexFetchResult, OpenCodeGoFetchResult } from "./types";
+import type {
+  ProviderMetricsEnv,
+  OpenAIFetchResult,
+  CodexFetchResult,
+  OpenCodeGoFetchResult,
+} from "./types";
 import { postWithRetry } from "../http-retry";
 
 type PrometheusEnv = Pick<
@@ -48,9 +53,15 @@ function buildMetrics(results: MetricResults, nowUnixNano: string): Record<strin
     }
     for (const token of results.openai.tokens) {
       const modelAttr = [attr("model", token.model)];
-      metrics.push(gaugeMetric("openai_api_input_tokens", modelAttr, token.inputTokens, nowUnixNano));
-      metrics.push(gaugeMetric("openai_api_output_tokens", modelAttr, token.outputTokens, nowUnixNano));
-      metrics.push(gaugeMetric("openai_api_cached_tokens", modelAttr, token.cachedTokens, nowUnixNano));
+      metrics.push(
+        gaugeMetric("openai_api_input_tokens", modelAttr, token.inputTokens, nowUnixNano),
+      );
+      metrics.push(
+        gaugeMetric("openai_api_output_tokens", modelAttr, token.outputTokens, nowUnixNano),
+      );
+      metrics.push(
+        gaugeMetric("openai_api_cached_tokens", modelAttr, token.cachedTokens, nowUnixNano),
+      );
       metrics.push(gaugeMetric("openai_api_requests", modelAttr, token.requests, nowUnixNano));
     }
   }
@@ -109,7 +120,9 @@ function buildOtlpPayload(results: MetricResults, nowUnixNano: string): Record<s
     resourceMetrics: [
       {
         resource: {
-          attributes: [{ key: "service.name", value: { stringValue: "graft-ai-provider-metrics" } }],
+          attributes: [
+            { key: "service.name", value: { stringValue: "graft-ai-provider-metrics" } },
+          ],
         },
         scopeMetrics: [
           {

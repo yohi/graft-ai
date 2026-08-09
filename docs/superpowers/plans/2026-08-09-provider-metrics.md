@@ -884,18 +884,25 @@ git commit -m "feat: OpenAI API フェッチャーを追加"
 import { describe, it, expect, vi } from "vitest";
 import { fetchCodexMetrics } from "../../src/provider-metrics/codex";
 
-// CodexBar の CodexUsageResponse 形式に準拠したモックレスポンス
+// CodexBar の CodexUsageResponse 形式（参照リビジョン: 5f872ecca9b722f2d906534826baf62e8939f6fd）に準拠したモックレスポンス
 const MOCK_USAGE_RESPONSE = {
   plan_type: "pro",
   rate_limit: {
-    primary_percent_remaining: 55,
-    secondary_percent_remaining: 80,
-    primary_resets_at: "2026-08-09T15:00:00Z",
-    secondary_resets_at: "2026-08-10T00:00:00Z",
+    primary_window: {
+      used_percent: 45,
+      reset_at: 1786161204,
+      limit_window_seconds: 18000,
+    },
+    secondary_window: {
+      used_percent: 20,
+      reset_at: 1786247604,
+      limit_window_seconds: 604800,
+    },
   },
   credits: {
-    total_granted: 10.0,
-    total_used: 6.5,
+    has_credits: true,
+    unlimited: false,
+    balance: 3.5,
   },
 };
 
@@ -910,16 +917,16 @@ describe("fetchCodexMetrics", () => {
 
     const result = await fetchCodexMetrics("test-access-token", undefined, mockFetch);
 
-    // primary_percent_remaining=55 → usage_ratio = (100-55)/100 = 0.45
+    // primary_window.used_percent=45 → usage_ratio = 0.45
     expect(result.sessionUsageRatio).toBeCloseTo(0.45);
-    // secondary_percent_remaining=80 → usage_ratio = (100-80)/100 = 0.2
+    // secondary_window.used_percent=20 → usage_ratio = 0.2
     expect(result.weeklyUsageRatio).toBeCloseTo(0.2);
-    // credits: 10.0 - 6.5 = 3.5
+    // credits.balance: 3.5
     expect(result.creditsRemaining).toBeCloseTo(3.5);
     expect(result.plan).toBe("pro");
 
-    const sessionReset = new Date("2026-08-09T15:00:00Z").getTime() / 1000;
-    expect(result.sessionResetTimestampSeconds).toBeCloseTo(sessionReset, -2);
+    expect(result.sessionResetTimestampSeconds).toBe(1786161204);
+    expect(result.weeklyResetTimestampSeconds).toBe(1786247604);
   });
 
   it("sends Bearer auth header and correct URL", async () => {
@@ -986,28 +993,27 @@ import type { CodexFetchResult } from "./types";
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const TIMEOUT_MS = 30000;
 
-interface RateLimit {
-  primary_percent_remaining?: number;
-  secondary_percent_remaining?: number;
-  primary_resets_at?: string;
-  secondary_resets_at?: string;
+interface WindowSnapshot {
+  used_percent?: number;
+  reset_at?: number;
+  limit_window_seconds?: number;
 }
 
-interface Credits {
-  total_granted?: number;
-  total_used?: number;
+interface RateLimitDetails {
+  primary_window?: WindowSnapshot;
+  secondary_window?: WindowSnapshot;
+}
+
+interface CreditDetails {
+  has_credits?: boolean;
+  unlimited?: boolean;
+  balance?: number | string | null;
 }
 
 interface CodexUsageResponse {
   plan_type?: string;
-  rate_limit?: RateLimit;
-  credits?: Credits;
-}
-
-function parseResetTimestamp(isoString?: string): number {
-  if (!isoString) return 0;
-  const ms = Date.parse(isoString);
-  return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
+  rate_limit?: RateLimitDetails;
+  credits?: CreditDetails;
 }
 
 export async function fetchCodexMetrics(
@@ -1037,19 +1043,23 @@ export async function fetchCodexMetrics(
 
   const data = (await response.json()) as CodexUsageResponse;
 
-  const primaryRemaining = data.rate_limit?.primary_percent_remaining ?? 0;
-  const secondaryRemaining = data.rate_limit?.secondary_percent_remaining ?? 0;
+  const primaryUsedPercent = data.rate_limit?.primary_window?.used_percent ?? 100;
+  const secondaryUsedPercent = data.rate_limit?.secondary_window?.used_percent ?? 100;
 
   let creditsRemaining: number | null = null;
-  if (data.credits?.total_granted !== undefined && data.credits?.total_used !== undefined) {
-    creditsRemaining = data.credits.total_granted - data.credits.total_used;
+  if (data.credits?.balance !== undefined && data.credits?.balance !== null) {
+    const rawBalance = data.credits.balance;
+    const parsed = typeof rawBalance === "number" ? rawBalance : parseFloat(String(rawBalance));
+    if (!Number.isNaN(parsed)) {
+      creditsRemaining = parsed;
+    }
   }
 
   return {
-    sessionUsageRatio: (100 - primaryRemaining) / 100,
-    weeklyUsageRatio: (100 - secondaryRemaining) / 100,
-    sessionResetTimestampSeconds: parseResetTimestamp(data.rate_limit?.primary_resets_at),
-    weeklyResetTimestampSeconds: parseResetTimestamp(data.rate_limit?.secondary_resets_at),
+    sessionUsageRatio: primaryUsedPercent / 100,
+    weeklyUsageRatio: secondaryUsedPercent / 100,
+    sessionResetTimestampSeconds: data.rate_limit?.primary_window?.reset_at ?? 0,
+    weeklyResetTimestampSeconds: data.rate_limit?.secondary_window?.reset_at ?? 0,
     creditsRemaining,
     plan: data.plan_type ?? "unknown",
   };
@@ -1198,6 +1208,23 @@ describe("fetchOpenCodeGoMetrics", () => {
       const headers = init.headers as Record<string, string>;
       expect(headers["Cookie"]).toContain("__Secure-session=xyz");
     }
+  });
+
+  it("sends X-Server-Id header for _server requests", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399"))
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (url.includes("/go")) return new Response(MOCK_USAGE_HTML, { status: 200 });
+      return new Response(MOCK_ZEN_HTML, { status: 200 });
+    });
+
+    await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+
+    const calls = mockFetch.mock.calls as [string, RequestInit][];
+    const serverCall = calls.find(([u]) => u.includes("_server") && u.includes("def399"));
+    expect(serverCall).toBeDefined();
+    const headers = serverCall![1].headers as Record<string, string>;
+    expect(headers["X-Server-Id"]).toBe("def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f");
   });
 
   it("throws on HTTP 401 for workspace fetch", async () => {
@@ -1418,7 +1445,12 @@ function extractZenBalance(html: string): number | null {
   return null;
 }
 
-async function get(url: string, cookie: string, fetchFn: typeof fetch): Promise<Response> {
+async function get(
+  url: string,
+  cookie: string,
+  fetchFn: typeof fetch,
+  extraHeaders?: Record<string, string>,
+): Promise<Response> {
   return fetchFn(url, {
     method: "GET",
     headers: {
@@ -1426,6 +1458,7 @@ async function get(url: string, cookie: string, fetchFn: typeof fetch): Promise<
       "User-Agent": USER_AGENT,
       Referer: BASE_URL,
       Origin: BASE_URL,
+      ...extraHeaders,
     },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
@@ -1433,7 +1466,10 @@ async function get(url: string, cookie: string, fetchFn: typeof fetch): Promise<
 
 async function fetchWorkspaceId(cookie: string, fetchFn: typeof fetch): Promise<string> {
   const url = `${BASE_URL}/_server?id=${WORKSPACES_SERVER_ID}`;
-  const response = await get(url, cookie, fetchFn);
+  const response = await get(url, cookie, fetchFn, {
+    "X-Server-Id": WORKSPACES_SERVER_ID,
+    Accept: "text/javascript, application/json, */*",
+  });
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -1459,7 +1495,10 @@ async function fetchZenBalance(
   const args = JSON.stringify([workspaceId]);
   const url = `${BASE_URL}/_server?id=${BILLING_SERVER_ID}&args=${encodeURIComponent(args)}`;
   try {
-    const response = await get(url, cookie, fetchFn);
+    const response = await get(url, cookie, fetchFn, {
+      "X-Server-Id": BILLING_SERVER_ID,
+      Accept: "text/javascript, application/json, */*",
+    });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       return null;
@@ -1762,9 +1801,10 @@ export interface ProviderMetricsWorker {
 
 const worker: ProviderMetricsWorker = {
   async scheduled(event, env, _ctx) {
-    const rawHistoryDays = Number.parseInt(env.OPENAI_API_HISTORY_DAYS ?? "1", 10);
+    const rawStr = env.OPENAI_API_HISTORY_DAYS ?? "1";
+    const rawHistoryDays = Number(rawStr);
     let historyDays = 1;
-    if (Number.isFinite(rawHistoryDays) && rawHistoryDays >= 1 && rawHistoryDays <= 31) {
+    if (Number.isInteger(rawHistoryDays) && rawHistoryDays >= 1 && rawHistoryDays <= 31) {
       historyDays = rawHistoryDays;
     } else if (env.OPENAI_API_HISTORY_DAYS !== undefined) {
       console.error(

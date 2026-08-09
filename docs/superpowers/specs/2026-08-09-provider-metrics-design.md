@@ -72,24 +72,29 @@ Cloudflare Workers scheduled (*/5 * * * *)
 
 ### Codex
 
-**参照**: `Providers/Codex/CodexOAuth/CodexOAuthUsageFetcher.swift`
+**参照**: `Providers/Codex/CodexOAuth/CodexOAuthUsageFetcher.swift` (CodexBar リビジョン `5f872ecca9b722f2d906534826baf62e8939f6fd`)
 
 | 項目 | 詳細 |
 |---|---|
 | エンドポイント（使用量） | `GET https://chatgpt.com/backend-api/wham/usage` |
 | エンドポイント（リセットクレジット） | `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` |
 | 認証 | `Authorization: Bearer <CODEX_ACCESS_TOKEN>` |
-| 追加ヘッダー | `ChatGPT-Account-Id: <ACCOUNT_ID>`（オプション）|
+| 追加ヘッダー (`/wham/usage`) | `ChatGPT-Account-Id: <ACCOUNT_ID>`（オプション） |
+| 追加ヘッダー (`/wham/rate-limit-reset-credits`) | `OpenAI-Beta: codex-1`, `originator: Codex Desktop`, `ChatGPT-Account-Id: <ACCOUNT_ID>`（オプション） |
 
 > **注意**: CodexStatusProbe（CLI/PTY 経由）は Cloudflare Worker から実行不可能。OAuth アクセストークンを Secrets に設定して HTTP API を直接呼ぶ。
 
-**取得データ** (`CodexUsageResponse`):
-- `plan_type`: プラン名 (guest/free/plus/pro 等)
-- `rate_limit.primary_percent_remaining`: セッション(5h)残%
-- `rate_limit.secondary_percent_remaining`: 週次残%
-- `rate_limit.primary_resets_at`: セッションリセット時刻 (ISO 8601)
-- `rate_limit.secondary_resets_at`: 週次リセット時刻 (ISO 8601)
-- `credits.total_granted` / `credits.total_used`: クレジット残高計算
+**取得データ**:
+- **使用量** (`CodexUsageResponse` - `GET /wham/usage`):
+  - `plan_type`: プラン名 (guest/free/plus/pro 等)
+  - `rate_limit.primary_window.used_percent`: セッション(5h)使用率 (%)
+  - `rate_limit.primary_window.reset_at`: セッションリセット時刻 (Unix Epoch 秒)
+  - `rate_limit.secondary_window.used_percent`: 週次使用率 (%)
+  - `rate_limit.secondary_window.reset_at`: 週次リセット時刻 (Unix Epoch 秒)
+  - `credits.balance`: クレジット残高 (数値/Double)
+- **リセットクレジット** (`CodexResetCreditsResponse` - `GET /wham/rate-limit-reset-credits`):
+  - `credits`: クレジット数/状態
+  - `available_count`: 利用可能カウント
 
 ---
 

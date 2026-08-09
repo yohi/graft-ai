@@ -102,6 +102,21 @@ describe("fetchOpenAIMetrics", () => {
     await expect(fetchOpenAIMetrics("bad-key", 1, mockFetch)).rejects.toThrow(/401/);
   });
 
+  it("retries a transient HTTP 503 before succeeding", async () => {
+    let attempts = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      attempts++;
+      if (attempts === 1) return new Response("Unavailable", { status: 503 });
+      return new Response(JSON.stringify({ data: [], has_more: false, next_page: null }), {
+        status: 200,
+      });
+    });
+
+    await fetchOpenAIMetrics("sk-admin-test", 1, mockFetch);
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
   it("throws when a successful response has an invalid nested shape", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       const body = url.includes("/costs")

@@ -125,6 +125,23 @@ describe("fetchOpenCodeGoMetrics", () => {
     );
   });
 
+  it("retries a transient workspace HTTP 503 before succeeding", async () => {
+    let attempts = 0;
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        attempts++;
+        if (attempts === 1) return new Response("Unavailable", { status: 503 });
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("/go")) return new Response(MOCK_USAGE_HTML, { status: 200 });
+      return new Response(MOCK_ZEN_HTML, { status: 200 });
+    });
+
+    await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+
+    expect(attempts).toBe(2);
+  });
+
   it("returns zenBalanceUSD null when zen fetch fails", async () => {
     let call = 0;
     const mockFetch = vi.fn().mockImplementation(async () => {

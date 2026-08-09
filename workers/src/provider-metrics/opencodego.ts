@@ -1,5 +1,6 @@
 import type { OpenCodeGoFetchResult } from "./types";
 import { extractWorkspaceId, extractZenBalance, parseOpenCodeGoUsage } from "./opencodego-parser";
+import { getWithRetry } from "../http-retry";
 
 const BASE_URL = "https://opencode.ai";
 const WORKSPACES_SERVER_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
@@ -27,8 +28,8 @@ async function get(
   context: FetchContext,
   extraHeaders?: Readonly<Record<string, string>>,
 ): Promise<Response> {
-  return context.fetchFn(url, {
-    method: "GET",
+  return getWithRetry({
+    url,
     headers: {
       Cookie: context.cookie,
       "User-Agent": USER_AGENT,
@@ -36,7 +37,10 @@ async function get(
       Origin: BASE_URL,
       ...extraHeaders,
     },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    fetchFn: context.fetchFn,
+    logLabel: "OpenCodeGo fetch",
+    isRetryableStatus: (status) => status === 429 || status >= 500,
+    perAttemptTimeoutMs: TIMEOUT_MS,
   });
 }
 

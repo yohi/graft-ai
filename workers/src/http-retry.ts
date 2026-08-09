@@ -20,6 +20,57 @@ export interface PostWithRetryOptions {
   perAttemptTimeoutMs?: number;
 }
 
+export interface GetWithRetryOptions {
+  url: string;
+  headers: Record<string, string>;
+  fetchFn?: typeof fetch;
+  logLabel: string;
+  isRetryableStatus: (status: number) => boolean;
+  maxRetries?: number;
+  initialBackoffMs?: number;
+  perAttemptTimeoutMs?: number;
+}
+
+export async function getWithRetry({
+  url,
+  headers,
+  fetchFn = fetch,
+  logLabel,
+  isRetryableStatus,
+  maxRetries = DEFAULT_MAX_RETRIES,
+  initialBackoffMs = DEFAULT_INITIAL_BACKOFF_MS,
+  perAttemptTimeoutMs = DEFAULT_PER_ATTEMPT_TIMEOUT_MS,
+}: GetWithRetryOptions): Promise<Response> {
+  let lastResponse: Response | undefined;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      await sleep(initialBackoffMs * Math.pow(2, attempt - 1));
+    }
+
+    try {
+      const response = await fetchFn(url, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(perAttemptTimeoutMs),
+      });
+      lastResponse = response;
+
+      if (response.ok || !isRetryableStatus(response.status)) {
+        return response;
+      }
+      await response.body?.cancel().catch(() => undefined);
+    } catch (err) {
+      console.error(
+        `${logLabel} attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  if (lastResponse !== undefined) return lastResponse;
+  throw new Error(`${logLabel} failed after ${maxRetries + 1} attempts`);
+}
+
 /**
  * POSTs a pre-serialized body with exponential backoff retry, shared by the
  * Loki and Prometheus (OTLP) push clients.

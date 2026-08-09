@@ -119,6 +119,22 @@ describe("fetchCodexMetrics", () => {
     await expect(fetchCodexMetrics("bad-token", undefined, mockFetch)).rejects.toThrow(/401/);
   });
 
+  it("retries a transient usage HTTP 503 before succeeding", async () => {
+    let attempts = 0;
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("/wham/usage")) {
+        attempts++;
+        if (attempts === 1) return new Response("Unavailable", { status: 503 });
+        return new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 });
+      }
+      return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
+    });
+
+    await fetchCodexMetrics("test-token", undefined, mockFetch);
+
+    expect(attempts).toBe(2);
+  });
+
   it("keeps usage metrics when reset-credits fetch fails", async () => {
     const mockFetch = vi
       .fn()

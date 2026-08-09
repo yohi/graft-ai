@@ -1,4 +1,5 @@
 import type { OpenAIFetchResult, OpenAIMetric, OpenAITokenMetric } from "./types";
+import { getWithRetry } from "../http-retry";
 
 const COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const COMPLETIONS_URL = "https://api.openai.com/v1/organization/usage/completions";
@@ -166,13 +167,16 @@ async function fetchPage<T>(
   client: OpenAIClient,
   endpoint: PageEndpoint<T>,
 ): Promise<PageResponse<T>> {
-  const response = await client.fetchFn(url, {
-    method: "GET",
+  const response = await getWithRetry({
+    url,
     headers: {
       Authorization: `Bearer ${client.apiKey}`,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    fetchFn: client.fetchFn,
+    logLabel: "OpenAI API fetch",
+    isRetryableStatus: (status) => status === 429 || status >= 500,
+    perAttemptTimeoutMs: TIMEOUT_MS,
   });
 
   if (!response.ok) {

@@ -92,6 +92,41 @@ describe("fetchOpenAIMetrics", () => {
     await expect(fetchOpenAIMetrics("bad-key", 1, mockFetch)).rejects.toThrow(/401/);
   });
 
+  it("throws when a successful response has an invalid nested shape", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      const body = url.includes("/costs")
+        ? {
+            data: [
+              {
+                results: [
+                  { amount: { value: "0.42", currency: "usd" }, line_item: "Chat Completions" },
+                ],
+              },
+            ],
+            has_more: false,
+            next_page: null,
+          }
+        : { data: [], has_more: false, next_page: null };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+
+    await expect(fetchOpenAIMetrics("sk-admin-test", 1, mockFetch)).rejects.toThrow(
+      /invalid OpenAI API response/i,
+    );
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid historyDays value %s",
+    async (historyDays) => {
+      const mockFetch = vi.fn();
+
+      await expect(fetchOpenAIMetrics("sk-admin-test", historyDays, mockFetch)).rejects.toThrow(
+        /positive integer/,
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
+
   it("aggregates results from has_more pagination", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       const parsedUrl = new URL(url);
@@ -151,6 +186,31 @@ describe("fetchOpenAIMetrics", () => {
     expect(costsUrls[1]).toContain("page=cursor_abc");
   });
 
+  it("throws after the 100-page pagination cap", async () => {
+    let costsPages = 0;
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (!url.includes("/costs")) {
+        return new Response(JSON.stringify({ data: [], has_more: false, next_page: null }), {
+          status: 200,
+        });
+      }
+      costsPages += 1;
+      return new Response(
+        JSON.stringify({
+          data: [],
+          has_more: true,
+          next_page: `cursor_${costsPages}`,
+        }),
+        { status: 200 },
+      );
+    });
+
+    await expect(fetchOpenAIMetrics("sk-admin-test", 1, mockFetch)).rejects.toThrow(
+      /pagination exceeded 100 pages/,
+    );
+    expect(costsPages).toBe(100);
+  });
+
   it("aggregates the configured historyDays interval", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       const parsedUrl = new URL(url);
@@ -180,14 +240,12 @@ describe("fetchOpenAIMetrics", () => {
       return new Response(JSON.stringify(bucket), { status: 200 });
     });
 
-    await fetchOpenAIMetrics("sk-admin-test", 3, mockFetch, Date.UTC(2026, 0, 4));
+    await fetchOpenAIMetrics("sk-admin-test", 3, mockFetch, Date.UTC(2026, 0, 4, 12, 34, 56));
 
     for (const [url] of mockFetch.mock.calls as [string, RequestInit][]) {
       const parsedUrl = new URL(url);
-      expect(
-        Number(parsedUrl.searchParams.get("end_time")) -
-          Number(parsedUrl.searchParams.get("start_time")),
-      ).toBe(3 * 86400);
+      expect(parsedUrl.searchParams.get("start_time")).toBe("1767225600");
+      expect(parsedUrl.searchParams.get("end_time")).toBe("1767484800");
     }
   });
 

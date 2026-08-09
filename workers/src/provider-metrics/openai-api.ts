@@ -80,7 +80,8 @@ function parseOptionalString(
   path: string,
 ): string | undefined {
   const value = record[key];
-  if (value !== undefined && typeof value !== "string") {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
     invalidResponse(`${path}.${key} must be a string`);
   }
   return value;

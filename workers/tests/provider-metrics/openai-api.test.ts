@@ -16,6 +16,7 @@ const MOCK_COSTS_RESPONSE = {
           line_item: "Chat Completions",
         },
         { object: "usage", amount: { value: 0.1, currency: "usd" }, line_item: "Embeddings" },
+        { object: "usage", amount: { value: 0.05, currency: "usd" }, line_item: null },
       ],
     },
   ],
@@ -42,6 +43,7 @@ const MOCK_COMPLETIONS_RESPONSE = {
           input_audio_tokens: 0,
           output_audio_tokens: 0,
         },
+        { object: "usage", model: null, num_model_requests: 1, input_tokens: 2, output_tokens: 3 },
       ],
     },
   ],
@@ -50,7 +52,7 @@ const MOCK_COMPLETIONS_RESPONSE = {
 };
 
 describe("fetchOpenAIMetrics", () => {
-  it("returns cost and token metrics parsed from API responses", async () => {
+  it("returns metrics and normalizes nullable labels", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       const body = url.includes("/costs")
         ? JSON.stringify(MOCK_COSTS_RESPONSE)
@@ -60,17 +62,25 @@ describe("fetchOpenAIMetrics", () => {
 
     const result = await fetchOpenAIMetrics("sk-admin-test", 1, mockFetch);
 
-    expect(result.costs).toHaveLength(2);
+    expect(result.costs).toHaveLength(3);
     expect(result.costs[0]).toEqual({ lineItem: "Chat Completions", costUSD: 0.42 });
     expect(result.costs[1]).toEqual({ lineItem: "Embeddings", costUSD: 0.1 });
+    expect(result.costs[2]).toEqual({ lineItem: "Unknown", costUSD: 0.05 });
 
-    expect(result.tokens).toHaveLength(1);
+    expect(result.tokens).toHaveLength(2);
     expect(result.tokens[0]).toMatchObject({
       model: "gpt-4o",
       inputTokens: 1000,
       outputTokens: 500,
       cachedTokens: 100,
       requests: 10,
+    });
+    expect(result.tokens[1]).toMatchObject({
+      model: "unknown",
+      inputTokens: 2,
+      outputTokens: 3,
+      cachedTokens: 0,
+      requests: 1,
     });
   });
 

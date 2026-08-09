@@ -145,7 +145,7 @@ export interface OpenCodeGoFetchResult {
 
 `workers/.dev.vars.example` の末尾に追記:
 
-```
+```dotenv
 # Provider metrics (Codex / OpenAI API / OpenCodeGo → Prometheus)
 OPENAI_ADMIN_API_KEY=sk-admin-xxxxxxxxxxxx
 CODEX_ACCESS_TOKEN=
@@ -168,7 +168,7 @@ deploy-provider-metrics:
 - [ ] **Step 5: typecheck を確認する**
 
 ```bash
-cd /home/y_ohi/program/private/graft-ai && make typecheck
+make typecheck
 ```
 
 Expected: エラーなし（新ファイルを参照する entrypoint はまだないので型チェックは通る）
@@ -783,11 +783,13 @@ export async function fetchOpenAIMetrics(
   apiKey: string,
   historyDays = 1,
   fetchFn: typeof fetch = fetch,
+  nowMs: number = Date.now(),
 ): Promise<OpenAIFetchResult> {
-  const now = Date.now();
+  // 前日完全 UTC 日を基準とする（scheduledTime を受け取り UTC 当日 00:00 を算出）
   const dayMs = 86400 * 1000;
-  const endTime = Math.floor(now / 1000);
-  const startTime = Math.floor((now - historyDays * dayMs) / 1000);
+  const todayUtcMs = Math.floor(nowMs / dayMs) * dayMs;
+  const endTime = todayUtcMs / 1000;           // UTC 当日 00:00 Unix 秒
+  const startTime = endTime - historyDays * 86400; // N 日前 UTC 00:00 Unix 秒
 
   const [costBuckets, completionBuckets] = await Promise.all([
     fetchAllPages<CostBucket>(COSTS_URL, "line_item", apiKey, startTime, endTime, fetchFn),
@@ -1127,6 +1129,24 @@ const MOCK_USAGE_HTML = `
 // Zen 残高レスポンス例
 const MOCK_ZEN_HTML = `<script>{"zenBalance":23.45}</script>`;
 
+// トップレベル JSON 形式の使用量レスポンス例
+const MOCK_USAGE_TOP_LEVEL_JSON = JSON.stringify({
+  usagePercent: 42,
+  weeklyUsagePercent: 20,
+  monthlyUsagePercent: 60,
+  resetInSec: 1800,
+  weeklyResetInSec: 43200,
+  monthlyResetInSec: 648000,
+});
+
+// RSC ハイドレーション形式の使用量レスポンス例
+const MOCK_USAGE_RSC_HTML = `<script>
+self.__next_f.push(["rollingUsage", {"usagePercent": 55, "resetInSec": 900}])
+</script>`;
+
+// テキストフォールバック形式の使用量レスポンス例（JSON 構造なし）
+const MOCK_USAGE_TEXT_BODY = `page content "usagePercent": 72, "resetInSec": 600 more content`;
+
 describe("fetchOpenCodeGoMetrics", () => {
   it("parses usage ratios from embedded JSON", async () => {
     let call = 0;
@@ -1198,6 +1218,44 @@ describe("fetchOpenCodeGoMetrics", () => {
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
     expect(result.zenBalanceUSD).toBeNull();
+  });
+
+  it("parses usage from top-level JSON response", async () => {
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      call++;
+      if (call === 1) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (call === 2) return new Response(MOCK_USAGE_TOP_LEVEL_JSON, { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    expect(result.rollingUsageRatio).toBeCloseTo(0.42);
+    expect(result.rollingResetSeconds).toBe(1800);
+  });
+
+  it("parses usage from RSC hydration containing rollingUsage", async () => {
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      call++;
+      if (call === 1) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (call === 2) return new Response(MOCK_USAGE_RSC_HTML, { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    expect(result.rollingUsageRatio).toBeCloseTo(0.55);
+    expect(result.rollingResetSeconds).toBe(900);
+  });
+
+  it("parses usage via regex text fallback when no JSON structure found", async () => {
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      call++;
+      if (call === 1) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (call === 2) return new Response(MOCK_USAGE_TEXT_BODY, { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    expect(result.rollingUsageRatio).toBeCloseTo(0.72);
   });
 });
 ```
@@ -1284,6 +1342,65 @@ function findUsageObject(obj: unknown): Record<string, unknown> | null {
     if (found) return found;
   }
   return null;
+}
+
+function extractFromTopLevelJson(html: string): Record<string, unknown> | null {
+  try {
+    const data = JSON.parse(html.trim()) as Record<string, unknown>;
+    return findUsageObject(data);
+  } catch {
+    return null;
+  }
+}
+
+function extractFromScriptTags(html: string): Record<string, unknown> | null {
+  const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+  let match;
+  while ((match = scriptRegex.exec(html)) !== null) {
+    const content = match[1]?.trim();
+    if (!content) continue;
+    try {
+      const data = JSON.parse(content) as Record<string, unknown>;
+      const found = findUsageObject(data);
+      if (found) return found;
+    } catch {
+      // JSON でない script タグはスキップ
+    }
+  }
+  return null;
+}
+
+function extractFromRscHydration(html: string): Record<string, unknown> | null {
+  // RSC ハイドレーション: "rollingUsage", {...} パターンを検索
+  const roMatch = html.match(/"rollingUsage"\s*,\s*(\{[^{}]+\})/);
+  if (roMatch?.[1]) {
+    try {
+      const obj = JSON.parse(roMatch[1]) as Record<string, unknown>;
+      if (findUsageObject(obj)) return obj;
+    } catch { /* continue */ }
+  }
+  return null;
+}
+
+function extractFromTextFallback(html: string): Record<string, unknown> | null {
+  // usagePercent 等を正規表現で直接抽出（最終フォールバック）
+  const usageMatch = html.match(/"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/);
+  if (!usageMatch?.[1]) return null;
+  const usagePercent = parseFloat(usageMatch[1]);
+  const resetMatch = html.match(/"resetInSec(?:onds)?"\s*:\s*(\d+)/);
+  const resetInSec = resetMatch?.[1] ? parseInt(resetMatch[1], 10) : 0;
+  return { usagePercent, resetInSec };
+}
+
+/** 複数フォーマットを順に試して使用量オブジェクトを返す */
+function extractUsageData(html: string): Record<string, unknown> | null {
+  return (
+    extractFromNextData(html) ??
+    extractFromTopLevelJson(html) ??
+    extractFromScriptTags(html) ??
+    extractFromRscHydration(html) ??
+    extractFromTextFallback(html)
+  );
 }
 
 function extractWorkspaceId(html: string): string | null {
@@ -1376,7 +1493,7 @@ export async function fetchOpenCodeGoMetrics(
   }
 
   const html = await usageResponse.text();
-  const usageObj = extractFromNextData(html);
+  const usageObj = extractUsageData(html);
   if (!usageObj) {
     throw new Error("OpenCodeGo: Could not parse usage data from page HTML");
   }
@@ -1474,7 +1591,48 @@ const ctx = {
 
 describe("provider-metrics scheduled handler", () => {
   it("calls Prometheus push when all providers configured", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      // OpenAI API — JSON が必要
+      if ((url as string).includes("api.openai.com")) {
+        return new Response(
+          JSON.stringify({ data: [], has_more: false, page: null }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      // Codex — JSON が必要
+      if ((url as string).includes("chatgpt.com")) {
+        return new Response(
+          JSON.stringify({
+            plan_type: "pro",
+            rate_limit: {
+              primary_percent_remaining: 50,
+              secondary_percent_remaining: 70,
+              primary_resets_at: "2026-01-01T12:00:00Z",
+              secondary_resets_at: "2026-01-08T00:00:00Z",
+            },
+            credits: { total_granted: 10, total_used: 3 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      // OpenCodeGo — workspace ID 取得
+      if ((url as string).includes("opencode.ai") && (url as string).includes("def399")) {
+        return new Response(`<script>["wrk_test123"]</script>`, { status: 200 });
+      }
+      // OpenCodeGo — 使用量ページ
+      if ((url as string).includes("opencode.ai") && (url as string).includes("/go")) {
+        return new Response(
+          `<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"subscription":{"usagePercent":30,"resetInSec":3600}}}}</script>`,
+          { status: 200 },
+        );
+      }
+      // OpenCodeGo — Zen balance（任意）
+      if ((url as string).includes("opencode.ai")) {
+        return new Response(`{"zenBalance":10.0}`, { status: 200 });
+      }
+      // Prometheus push
+      return new Response("", { status: 200 });
+    });
     vi.stubGlobal("fetch", mockFetch);
 
     await worker.scheduled(scheduledEvent, baseEnv, ctx);
@@ -1511,14 +1669,12 @@ describe("provider-metrics scheduled handler", () => {
   });
 
   it("continues and pushes partial metrics when one provider fails", async () => {
-    let fetchCallCount = 0;
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      fetchCallCount++;
       // OpenAI API を 401 で失敗させる
       if ((url as string).includes("api.openai.com")) {
         return new Response("Unauthorized", { status: 401 });
       }
-      // chatgpt.com (Codex) も失敗させる
+      // Codex を 401 で失敗させる
       if ((url as string).includes("chatgpt.com")) {
         return new Response("Unauthorized", { status: 401 });
       }
@@ -1526,25 +1682,42 @@ describe("provider-metrics scheduled handler", () => {
       if ((url as string).includes("/v1/metrics")) {
         return new Response("", { status: 200 });
       }
-      // opencode.ai は成功
-      return new Response(
-        `<script>{"wrk_test": "wrk_test123"}</script>` +
-        `<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"subscription":{"usagePercent":30,"resetInSec":3600}}}}</script>`,
-        { status: 200 },
-      );
+      // OpenCodeGo — workspace ID 取得
+      if ((url as string).includes("opencode.ai") && (url as string).includes("def399")) {
+        return new Response(`<script>["wrk_ocg123"]</script>`, { status: 200 });
+      }
+      // OpenCodeGo — 使用量ページ
+      if ((url as string).includes("opencode.ai") && (url as string).includes("/go")) {
+        return new Response(
+          `<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"subscription":{"usagePercent":30,"resetInSec":3600}}}}</script>`,
+          { status: 200 },
+        );
+      }
+      // OpenCodeGo — Zen balance
+      return new Response(`{"zenBalance":5.0}`, { status: 200 });
     });
     vi.stubGlobal("fetch", mockFetch);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await worker.scheduled(scheduledEvent, baseEnv, ctx);
 
-    // エラーがログされている
+    // OpenAI / Codex の失敗がログされている
     expect(consoleError).toHaveBeenCalled();
-    // それでも Prometheus push は試みられる（OpenCodeGo 分）
+
+    // Prometheus push が正確に 1 回呼ばれる（OpenCodeGo 分のみ）
     const prometheusCalls = mockFetch.mock.calls.filter(([url]: [string]) =>
       (url as string).includes("/v1/metrics"),
     );
-    expect(prometheusCalls.length).toBeGreaterThanOrEqual(0); // OpenCodeGo も失敗したら 0 も許容
+    expect(prometheusCalls.length).toBe(1);
+
+    // ペイロードに OpenCodeGo メトリクスのみ含まれ、OpenAI / Codex は含まれない
+    const [, init] = prometheusCalls[0]! as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
+    const names = metrics.map((m) => m.name);
+    expect(names.some((n) => n.startsWith("opencodego_"))).toBe(true);
+    expect(names.some((n) => n.startsWith("openai_"))).toBe(false);
+    expect(names.some((n) => n.startsWith("codex_"))).toBe(false);
 
     consoleError.mockRestore();
     vi.unstubAllGlobals();
@@ -1588,13 +1761,21 @@ export interface ProviderMetricsWorker {
 }
 
 const worker: ProviderMetricsWorker = {
-  async scheduled(_event, env, _ctx) {
-    const historyDays = Number.parseInt(env.OPENAI_API_HISTORY_DAYS ?? "1", 10);
+  async scheduled(event, env, _ctx) {
+    const rawHistoryDays = Number.parseInt(env.OPENAI_API_HISTORY_DAYS ?? "1", 10);
+    let historyDays = 1;
+    if (Number.isFinite(rawHistoryDays) && rawHistoryDays >= 1 && rawHistoryDays <= 31) {
+      historyDays = rawHistoryDays;
+    } else if (env.OPENAI_API_HISTORY_DAYS !== undefined) {
+      console.error(
+        `Provider metrics: OPENAI_API_HISTORY_DAYS="${env.OPENAI_API_HISTORY_DAYS}" は無効です。正の整数かつ 31 以下が必要です。デフォルト 1 を使用します。`,
+      );
+    }
 
     // 各プロバイダーを並列で取得、失敗は個別にキャッチして継続
     const [openaiResult, codexResult, openCodeGoResult] = await Promise.all([
       env.OPENAI_ADMIN_API_KEY
-        ? fetchOpenAIMetrics(env.OPENAI_ADMIN_API_KEY, historyDays).catch((err: unknown) => {
+        ? fetchOpenAIMetrics(env.OPENAI_ADMIN_API_KEY, historyDays, fetch, event.scheduledTime).catch((err: unknown) => {
             console.error(
               `Provider metrics: OpenAI API fetch failed: ${err instanceof Error ? err.message : String(err)}`,
             );
@@ -1700,13 +1881,13 @@ git commit -m "feat: provider metrics Worker のエントリポイントと統�
 
 `README.md` の Workers の一覧表（`| Worker | Trigger |` 形式の表）に行を追加:
 
-```
+```markdown
 | `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Fetches Codex / OpenAI API / OpenCodeGo usage and pushes to Grafana Cloud Prometheus |
 ```
 
 `README.md` の Secrets セクションに以下を追記（`graft-ai-provider-metrics` 向け）:
 
-```markdown
+````markdown
 ### graft-ai-provider-metrics secrets
 
 ```sh
@@ -1719,7 +1900,7 @@ npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
 ```
-```
+````
 
 - [ ] **Step 2: README.ja.md に同内容を日本語で追記する**
 

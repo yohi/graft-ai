@@ -34,7 +34,7 @@ Codex・OpenAI API・OpenCodeGo の使用量メトリクスを Grafana Cloud Pro
 
 ## アーキテクチャ
 
-```
+```text
 Cloudflare Workers scheduled (*/5 * * * *)
 └── graft-ai-provider-metrics
     ├── fetchOpenAIMetrics()      → api.openai.com              (Bearer Admin Key)
@@ -153,7 +153,7 @@ Cloudflare Workers scheduled (*/5 * * * *)
 
 ## モジュール構成
 
-```
+```text
 workers/src/
 ├── provider-metrics.ts              # Worker entrypoint + scheduled handler
 └── provider-metrics/

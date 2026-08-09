@@ -104,16 +104,16 @@ export interface CodexFetchResult {
 export interface OpenCodeGoFetchResult {
   /** ローリング(5h)使用率 0.0–1.0 */
   rollingUsageRatio: number;
-  /** 週次使用率 0.0–1.0 */
-  weeklyUsageRatio: number;
-  /** 月次使用率 0.0–1.0 */
-  monthlyUsageRatio: number;
+  /** 週次使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
+  weeklyUsageRatio?: number;
+  /** 月次使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
+  monthlyUsageRatio?: number;
   /** ローリングリセット残秒 */
   rollingResetSeconds: number;
-  /** 週次リセット残秒 */
-  weeklyResetSeconds: number;
-  /** 月次リセット残秒 */
-  monthlyResetSeconds: number;
+  /** 週次リセット残秒（レスポンスにウィンドウがない場合は undefined） */
+  weeklyResetSeconds?: number;
+  /** 月次リセット残秒（レスポンスにウィンドウがない場合は undefined） */
+  monthlyResetSeconds?: number;
   /** Zen クレジット残高 USD（取得できない場合は null） */
   zenBalanceUSD: number | null;
 }
@@ -333,6 +333,29 @@ describe("pushProviderMetrics", () => {
     const names = metrics.map((m) => m.name);
     expect(names).not.toContain("opencodego_zen_balance_usd");
   });
+
+  it("omits metrics for OpenCodeGo windows that are absent", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    const noSecondaryWindows: OpenCodeGoFetchResult = {
+      ...sampleOpenCodeGo,
+      weeklyUsageRatio: undefined,
+      weeklyResetSeconds: undefined,
+      monthlyUsageRatio: undefined,
+      monthlyResetSeconds: undefined,
+    };
+    await pushProviderMetrics(env, { openCodeGo: noSecondaryWindows }, mockFetch);
+    const init = mockFetch.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{
+      name: string;
+      gauge: { dataPoints: Array<{ attributes: Array<{ value: { stringValue: string } }> }> };
+    }>;
+    const periods = metrics
+      .filter((metric) => metric.name === "opencodego_usage_ratio")
+      .flatMap((metric) => metric.gauge.dataPoints[0]?.attributes ?? [])
+      .map((attribute) => attribute.value.stringValue);
+    expect(periods).toEqual(["rolling"]);
+  });
 });
 ```
 
@@ -431,7 +454,8 @@ function buildMetrics(results: MetricResults, nowUnixNano: string): Record<strin
       ["rolling", g.rollingUsageRatio, g.rollingResetSeconds],
       ["weekly", g.weeklyUsageRatio, g.weeklyResetSeconds],
       ["monthly", g.monthlyUsageRatio, g.monthlyResetSeconds],
-    ] as [string, number, number][]) {
+    ] as [string, number | undefined, number | undefined][]) {
+      if (ratio === undefined || remaining === undefined) continue;
       const periodAttr = [attr("period", period)];
       metrics.push(gaugeMetric("opencodego_usage_ratio", periodAttr, ratio, nowUnixNano));
       metrics.push(
@@ -553,7 +577,7 @@ const MOCK_COSTS_RESPONSE = {
     },
   ],
   has_more: false,
-  page: null,
+  next_page: null,
 };
 
 // completions レスポンス例
@@ -579,7 +603,7 @@ const MOCK_COMPLETIONS_RESPONSE = {
     },
   ],
   has_more: false,
-  page: null,
+  next_page: null,
 };
 
 describe("fetchOpenAIMetrics", () => {
@@ -611,7 +635,7 @@ describe("fetchOpenAIMetrics", () => {
 
   it("sends Bearer auth header", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ data: [], has_more: false, page: null }), { status: 200 }),
+      new Response(JSON.stringify({ data: [], has_more: false, next_page: null }), { status: 200 }),
     );
     await fetchOpenAIMetrics("sk-admin-test", 1, mockFetch);
     const [, init] = mockFetch.mock.calls[0]! as [string, RequestInit];
@@ -634,7 +658,7 @@ describe("fetchOpenAIMetrics", () => {
           JSON.stringify({
             data: [{ start_time: 1700000000, end_time: 1700086400, results: [{ amount: { value: 0.10, currency: "usd" }, line_item: "Chat Completions" }] }],
             has_more: true,
-            page: "cursor_abc",
+            next_page: "cursor_abc",
           }),
           { status: 200 },
         );
@@ -645,14 +669,14 @@ describe("fetchOpenAIMetrics", () => {
           JSON.stringify({
             data: [{ start_time: 1700000000, end_time: 1700086400, results: [{ amount: { value: 0.20, currency: "usd" }, line_item: "Chat Completions" }] }],
             has_more: false,
-            page: null,
+            next_page: null,
           }),
           { status: 200 },
         );
       }
       // completions
       return new Response(
-        JSON.stringify({ data: [], has_more: false, page: null }),
+        JSON.stringify({ data: [], has_more: false, next_page: null }),
         { status: 200 },
       );
     });
@@ -664,7 +688,7 @@ describe("fetchOpenAIMetrics", () => {
 
   it("returns empty arrays when API returns no data", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ data: [], has_more: false, page: null }), { status: 200 }),
+      new Response(JSON.stringify({ data: [], has_more: false, next_page: null }), { status: 200 }),
     );
     const result = await fetchOpenAIMetrics("sk-admin-test", 1, mockFetch);
     expect(result.costs).toHaveLength(0);
@@ -719,7 +743,7 @@ interface CompletionBucket {
 interface PageResponse<T> {
   data: T[];
   has_more: boolean;
-  page: string | null;
+  next_page: string | null;
 }
 
 async function fetchPage<T>(
@@ -773,7 +797,7 @@ async function fetchAllPages<T>(
     const url = buildUrl(baseUrl, startTime, endTime, groupBy, cursor);
     const page = await fetchPage<T>(url, apiKey, fetchFn);
     all.push(...page.data);
-    cursor = page.has_more && page.page ? page.page : undefined;
+    cursor = page.has_more && page.next_page ? page.next_page : undefined;
   } while (cursor);
 
   return all;
@@ -1152,6 +1176,8 @@ const MOCK_USAGE_TOP_LEVEL_JSON = JSON.stringify({
 // RSC ハイドレーション形式の使用量レスポンス例
 const MOCK_USAGE_RSC_HTML = `<script>
 self.__next_f.push(["rollingUsage", {"usagePercent": 55, "resetInSec": 900}])
+self.__next_f.push(["weeklyUsage", {"weeklyUsagePercent": 25, "weeklyResetInSec": 1800}])
+self.__next_f.push(["monthlyUsage", {"monthlyUsagePercent": 65, "monthlyResetInSec": 3600}])
 </script>`;
 
 // テキストフォールバック形式の使用量レスポンス例（JSON 構造なし）
@@ -1210,7 +1236,7 @@ describe("fetchOpenCodeGoMetrics", () => {
     }
   });
 
-  it("sends X-Server-Id header for _server requests", async () => {
+  it("sends X-Server-Id and X-Server-Instance headers for _server requests", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       if (url.includes("_server") && url.includes("def399"))
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
@@ -1225,6 +1251,7 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(serverCall).toBeDefined();
     const headers = serverCall![1].headers as Record<string, string>;
     expect(headers["X-Server-Id"]).toBe("def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f");
+    expect(headers["X-Server-Instance"]).toMatch(/^server-fn:[0-9a-f-]{36}$/);
   });
 
   it("throws on HTTP 401 for workspace fetch", async () => {
@@ -1271,6 +1298,10 @@ describe("fetchOpenCodeGoMetrics", () => {
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
     expect(result.rollingUsageRatio).toBeCloseTo(0.55);
     expect(result.rollingResetSeconds).toBe(900);
+    expect(result.weeklyUsageRatio).toBeCloseTo(0.25);
+    expect(result.weeklyResetSeconds).toBe(1800);
+    expect(result.monthlyUsageRatio).toBeCloseTo(0.65);
+    expect(result.monthlyResetSeconds).toBe(3600);
   });
 
   it("parses usage via regex text fallback when no JSON structure found", async () => {
@@ -1360,15 +1391,18 @@ function extractFromNextData(html: string): Record<string, unknown> | null {
 }
 
 function findUsageObject(obj: unknown): Record<string, unknown> | null {
-  if (typeof obj !== "object" || obj === null) return null;
-  const record = obj as Record<string, unknown>;
-  // usagePercent 等のキーがあるオブジェクトを発見
-  if (PERCENT_KEYS.some((k) => k in record)) return record;
-  for (const v of Object.values(record)) {
-    const found = findUsageObject(v);
-    if (found) return found;
+  const matches: Record<string, unknown>[] = [];
+  const usageKeys = [...PERCENT_KEYS, ...WEEKLY_PERCENT_KEYS, ...MONTHLY_PERCENT_KEYS];
+
+  function visit(value: unknown): void {
+    if (typeof value !== "object" || value === null) return;
+    const record = value as Record<string, unknown>;
+    if (usageKeys.some((key) => key in record)) matches.push(record);
+    for (const nested of Object.values(record)) visit(nested);
   }
-  return null;
+
+  visit(obj);
+  return matches.length > 0 ? Object.assign({}, ...matches) : null;
 }
 
 function extractFromTopLevelJson(html: string): Record<string, unknown> | null {
@@ -1398,15 +1432,15 @@ function extractFromScriptTags(html: string): Record<string, unknown> | null {
 }
 
 function extractFromRscHydration(html: string): Record<string, unknown> | null {
-  // RSC ハイドレーション: "rollingUsage", {...} パターンを検索
-  const roMatch = html.match(/"rollingUsage"\s*,\s*(\{[^{}]+\})/);
-  if (roMatch?.[1]) {
+  // RSC ハイドレーション: 各期間のオブジェクトを統合
+  const matches = [...html.matchAll(/"(?:rollingUsage|weeklyUsage|monthlyUsage)"\s*,\s*(\{[^{}]+\})/g)];
+  const objects: Record<string, unknown>[] = [];
+  for (const match of matches) {
     try {
-      const obj = JSON.parse(roMatch[1]) as Record<string, unknown>;
-      if (findUsageObject(obj)) return obj;
+      objects.push(JSON.parse(match[1]) as Record<string, unknown>);
     } catch { /* continue */ }
   }
-  return null;
+  return objects.length > 0 ? Object.assign({}, ...objects) : null;
 }
 
 function extractFromTextFallback(html: string): Record<string, unknown> | null {
@@ -1464,10 +1498,15 @@ async function get(
   });
 }
 
+function serverInstanceHeader(): string {
+  return `server-fn:${crypto.randomUUID()}`;
+}
+
 async function fetchWorkspaceId(cookie: string, fetchFn: typeof fetch): Promise<string> {
   const url = `${BASE_URL}/_server?id=${WORKSPACES_SERVER_ID}`;
   const response = await get(url, cookie, fetchFn, {
     "X-Server-Id": WORKSPACES_SERVER_ID,
+    "X-Server-Instance": serverInstanceHeader(),
     Accept: "text/javascript, application/json, */*",
   });
 
@@ -1497,6 +1536,7 @@ async function fetchZenBalance(
   try {
     const response = await get(url, cookie, fetchFn, {
       "X-Server-Id": BILLING_SERVER_ID,
+      "X-Server-Instance": serverInstanceHeader(),
       Accept: "text/javascript, application/json, */*",
     });
     if (!response.ok) {
@@ -1538,22 +1578,22 @@ export async function fetchOpenCodeGoMetrics(
   }
 
   const rollingPercent = pick(usageObj, PERCENT_KEYS) ?? 0;
-  const weeklyPercent = pick(usageObj, WEEKLY_PERCENT_KEYS) ?? 0;
-  const monthlyPercent = pick(usageObj, MONTHLY_PERCENT_KEYS) ?? 0;
+  const weeklyPercent = pick(usageObj, WEEKLY_PERCENT_KEYS);
+  const monthlyPercent = pick(usageObj, MONTHLY_PERCENT_KEYS);
   const rollingReset = pick(usageObj, RESET_IN_KEYS) ?? 0;
-  const weeklyReset = pick(usageObj, WEEKLY_RESET_KEYS) ?? 0;
-  const monthlyReset = pick(usageObj, MONTHLY_RESET_KEYS) ?? 0;
+  const weeklyReset = pick(usageObj, WEEKLY_RESET_KEYS);
+  const monthlyReset = pick(usageObj, MONTHLY_RESET_KEYS);
 
   // Zen balance はベストエフォート
   const zenBalanceUSD = await fetchZenBalance(workspaceId, cookie, fetchFn);
 
   return {
     rollingUsageRatio: rollingPercent / 100,
-    weeklyUsageRatio: weeklyPercent / 100,
-    monthlyUsageRatio: monthlyPercent / 100,
+    weeklyUsageRatio: weeklyPercent === undefined ? undefined : weeklyPercent / 100,
+    monthlyUsageRatio: monthlyPercent === undefined ? undefined : monthlyPercent / 100,
     rollingResetSeconds: Math.round(rollingReset),
-    weeklyResetSeconds: Math.round(weeklyReset),
-    monthlyResetSeconds: Math.round(monthlyReset),
+    weeklyResetSeconds: weeklyReset === undefined ? undefined : Math.round(weeklyReset),
+    monthlyResetSeconds: monthlyReset === undefined ? undefined : Math.round(monthlyReset),
     zenBalanceUSD,
   };
 }
@@ -1634,7 +1674,7 @@ describe("provider-metrics scheduled handler", () => {
       // OpenAI API — JSON が必要
       if ((url as string).includes("api.openai.com")) {
         return new Response(
-          JSON.stringify({ data: [], has_more: false, page: null }),
+          JSON.stringify({ data: [], has_more: false, next_page: null }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
@@ -1644,12 +1684,18 @@ describe("provider-metrics scheduled handler", () => {
           JSON.stringify({
             plan_type: "pro",
             rate_limit: {
-              primary_percent_remaining: 50,
-              secondary_percent_remaining: 70,
-              primary_resets_at: "2026-01-01T12:00:00Z",
-              secondary_resets_at: "2026-01-08T00:00:00Z",
+              primary_window: {
+                used_percent: 50,
+                reset_at: 1767268800,
+                limit_window_seconds: 18000,
+              },
+              secondary_window: {
+                used_percent: 30,
+                reset_at: 1767830400,
+                limit_window_seconds: 604800,
+              },
             },
-            credits: { total_granted: 10, total_used: 3 },
+            credits: { has_credits: true, unlimited: false, balance: 7 },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -1682,6 +1728,26 @@ describe("provider-metrics scheduled handler", () => {
     );
     expect(prometheusCalls.length).toBeGreaterThan(0);
 
+    vi.unstubAllGlobals();
+  });
+
+  it("skips OpenAI fetch when OPENAI_API_HISTORY_DAYS is invalid", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", mockFetch);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const envInvalidHistory = {
+      ...baseEnv,
+      OPENAI_API_HISTORY_DAYS: "0",
+      CODEX_ACCESS_TOKEN: undefined,
+      OPENCODEGO_SESSION_COOKIE: undefined,
+    };
+
+    await worker.scheduled(scheduledEvent, envInvalidHistory, ctx);
+
+    expect(mockFetch.mock.calls.some(([url]: [string]) => url.includes("api.openai.com"))).toBe(false);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("OpenAI fetch をスキップ"));
+
+    consoleError.mockRestore();
     vi.unstubAllGlobals();
   });
 
@@ -1801,20 +1867,21 @@ export interface ProviderMetricsWorker {
 
 const worker: ProviderMetricsWorker = {
   async scheduled(event, env, _ctx) {
-    const rawStr = env.OPENAI_API_HISTORY_DAYS ?? "1";
-    const rawHistoryDays = Number(rawStr);
-    let historyDays = 1;
-    if (Number.isInteger(rawHistoryDays) && rawHistoryDays >= 1 && rawHistoryDays <= 31) {
-      historyDays = rawHistoryDays;
-    } else if (env.OPENAI_API_HISTORY_DAYS !== undefined) {
+    const rawHistoryDays = env.OPENAI_API_HISTORY_DAYS;
+    let historyDays: number | undefined;
+    if (rawHistoryDays === undefined) {
+      historyDays = 1;
+    } else if (Number.isInteger(Number(rawHistoryDays)) && Number(rawHistoryDays) >= 1 && Number(rawHistoryDays) <= 31) {
+      historyDays = Number(rawHistoryDays);
+    } else {
       console.error(
-        `Provider metrics: OPENAI_API_HISTORY_DAYS="${env.OPENAI_API_HISTORY_DAYS}" は無効です。正の整数かつ 31 以下が必要です。デフォルト 1 を使用します。`,
+        `Provider metrics: OPENAI_API_HISTORY_DAYS="${rawHistoryDays}" は無効です。正の整数かつ 31 以下が必要です。OpenAI fetch をスキップします。`,
       );
     }
 
     // 各プロバイダーを並列で取得、失敗は個別にキャッチして継続
     const [openaiResult, codexResult, openCodeGoResult] = await Promise.all([
-      env.OPENAI_ADMIN_API_KEY
+      env.OPENAI_ADMIN_API_KEY && historyDays !== undefined
         ? fetchOpenAIMetrics(env.OPENAI_ADMIN_API_KEY, historyDays, fetch, event.scheduledTime).catch((err: unknown) => {
             console.error(
               `Provider metrics: OpenAI API fetch failed: ${err instanceof Error ? err.message : String(err)}`,

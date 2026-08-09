@@ -59,7 +59,7 @@ Cloudflare Workers scheduled (*/5 * * * *)
 | エンドポイント 2 | `GET https://api.openai.com/v1/organization/usage/completions` |
 | 認証 | `Authorization: Bearer <OPENAI_ADMIN_API_KEY>` |
 | クエリパラメータ | `start_time`, `end_time`, `bucket_width=1d`, `limit`, `group_by=line_item`(costs) / `group_by=model`(completions) |
-| ページネーション | `has_more` + `page` カーソル（最大 31 日ごとにチャンク分割） |
+| ページネーション | レスポンスの `has_more` + `next_page` カーソル（次リクエストのクエリ名は `page`） |
 
 **取得データ**:
 - 日次コスト (USD)、モデル別 / line_item 別内訳
@@ -108,13 +108,13 @@ Cloudflare Workers scheduled (*/5 * * * *)
 | ステップ 2: 使用量ページ取得 | `GET https://opencode.ai/workspace/{workspaceID}/go` |
 | Zen 残高（任意） | `GET https://opencode.ai/_server?id=c83b78...&args=["{workspaceID}"]` |
 | 認証 | `Cookie: <OPENCODEGO_SESSION_COOKIE>` |
-| 追加ヘッダー | `X-Server-Id`, `Referer`, `Origin`, `User-Agent` (Chrome UA) |
+| 追加ヘッダー | `X-Server-Id`, `X-Server-Instance`, `Referer`, `Origin`, `User-Agent` (Chrome UA) |
 
 **取得データ**:
-- `rollingUsagePercent`: ローリング(5h)使用率 (0–100)
-- `weeklyUsagePercent`: 週次使用率 (0–100)
-- `monthlyUsagePercent`: 月次使用率 (0–100)
-- `rollingResetInSec` / `weeklyResetInSec` / `monthlyResetInSec`: 各リセット残秒数
+- `rollingUsagePercent`: ローリング(5h)使用率 (0–100、必須)
+- `weeklyUsagePercent`: 週次使用率 (0–100、ウィンドウが存在しない場合は欠落)
+- `monthlyUsagePercent`: 月次使用率 (0–100、ウィンドウが存在しない場合は欠落)
+- `rollingResetInSec` / `weeklyResetInSec` / `monthlyResetInSec`: 各リセット残秒数。欠落したウィンドウのメトリクスは生成しない。
 - `zenBalanceUSD`: Zen クレジット残高 (USD)
 
 **データ抽出**: HTML 内に埋め込まれた JSON を複数のキー候補でフォールバック検索（`usagePercent`, `usedPercent`, `usage_percent` 等。CodexBar 参照）。
@@ -150,8 +150,8 @@ Cloudflare Workers scheduled (*/5 * * * *)
 
 | メトリクス名 | ラベル | 説明 |
 |---|---|---|
-| `opencodego_usage_ratio` | `period="rolling"\|"weekly"\|"monthly"` | 使用率 (0.0–1.0) |
-| `opencodego_reset_seconds_remaining` | `period` | リセットまでの残秒数 |
+| `opencodego_usage_ratio` | `period="rolling"\|"weekly"\|"monthly"` | 使用率 (0.0–1.0)。存在するウィンドウのみ送信 |
+| `opencodego_reset_seconds_remaining` | `period` | リセットまでの残秒数。存在するウィンドウのみ送信 |
 | `opencodego_zen_balance_usd` | — | Zen クレジット残高 (USD) |
 
 ---
@@ -210,6 +210,8 @@ workers/wrangler.provider-metrics.jsonc  # Worker 設定（cron, vars）
 | 特定プロバイダーの fetch 失敗 | `console.error()` でログ記録し、他プロバイダーのメトリクスは送信継続 |
 | 401 / 403 | 即時失敗（リトライなし）、認証情報の期限切れとしてログ |
 | 5xx / 429 | 既存 `http-retry.ts` の `postWithRetry` を再利用 |
+| `OPENAI_API_HISTORY_DAYS` が未設定 | `1` を使用 |
+| `OPENAI_API_HISTORY_DAYS` が無効 | エラーをログ記録し、OpenAI fetch をスキップ（他プロバイダーは継続） |
 | 全プロバイダー失敗 | Worker は正常終了（scheduled handler は常に完了） |
 | OpenCodeGo Cookie 切れ | エラーメッセージに「Cookie expired, update OPENCODEGO_SESSION_COOKIE」を付記 |
 

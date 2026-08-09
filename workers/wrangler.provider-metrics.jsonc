@@ -1,0 +1,17 @@
+// workers/wrangler.provider-metrics.jsonc
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "graft-ai-provider-metrics",
+  "main": "src/provider-metrics.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "vars": {
+    "OPENAI_API_HISTORY_DAYS": "1"
+  }
+}

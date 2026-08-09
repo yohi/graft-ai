@@ -58,6 +58,7 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(result.rollingResetSeconds).toBe(3600);
     expect(result.weeklyResetSeconds).toBe(86400);
     expect(result.monthlyResetSeconds).toBe(1296000);
+    expect(result.zenBalanceUSD).toBe(23.45);
   });
 
   it("uses workspaceIdOverride when provided", async () => {
@@ -197,5 +198,26 @@ describe("fetchOpenCodeGoMetrics", () => {
     });
 
     await expect(fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch)).rejects.toThrow();
+  });
+
+  it("uses the workspace ID in the optional billing request", async () => {
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      call++;
+      if (call === 1) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (call === 2) return new Response(MOCK_USAGE_HTML, { status: 200 });
+      throw new TypeError("billing endpoint unavailable");
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    const billingCall = (mockFetch.mock.calls as [string, RequestInit][])[2];
+
+    expect(result.zenBalanceUSD).toBeNull();
+    expect(billingCall?.[0]).toBe(
+      "https://opencode.ai/_server?id=c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d&args=%5B%22wrk_abc123%22%5D",
+    );
+    expect(new Headers(billingCall?.[1].headers).get("X-Server-Id")).toBe(
+      "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d",
+    );
   });
 });

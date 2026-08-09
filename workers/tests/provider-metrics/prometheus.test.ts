@@ -40,6 +40,20 @@ const sampleOpenCodeGo: OpenCodeGoFetchResult = {
 };
 
 describe("pushProviderMetrics", () => {
+  it.each([
+    ["missing URL", { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "" }],
+    ["HTTP URL", { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "http://metrics.example.com/otlp" }],
+    ["missing username", { ...env, GRAFANA_CLOUD_PROMETHEUS_USERNAME: "" }],
+    ["missing token", { ...env, GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "" }],
+  ])("rejects invalid Prometheus configuration: %s", async (_case, invalidEnv) => {
+    const mockFetch = vi.fn();
+
+    await expect(
+      pushProviderMetrics(invalidEnv, { codex: sampleCodex }, mockFetch),
+    ).rejects.toThrow(/Prometheus configuration/i);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("returns ok on HTTP 200", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     const result = await pushProviderMetrics(

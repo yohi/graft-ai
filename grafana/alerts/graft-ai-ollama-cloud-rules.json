@@ -1,0 +1,114 @@
+[
+  {
+    "uid": "graft-ollama-session-reset",
+    "title": "Ollama Cloud session reset soon",
+    "ruleGroup": "graft-ai-ollama-cloud",
+    "folderUID": "general",
+    "orgId": 1,
+    "condition": "B",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "5m",
+    "annotations": {
+      "summary": "Ollama Cloud session reset is within one hour"
+    },
+    "labels": {
+      "service": "graft-ai-ollama-cloud",
+      "period": "session"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "expr": "ollama_cloud_reset_seconds_remaining{period=\"session\"}",
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [3600], "type": "lt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["A"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "-100" },
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "graft-ollama-weekly-reset",
+    "title": "Ollama Cloud weekly reset soon",
+    "ruleGroup": "graft-ai-ollama-cloud",
+    "folderUID": "general",
+    "orgId": 1,
+    "condition": "B",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "5m",
+    "annotations": {
+      "summary": "Ollama Cloud weekly reset is within 24 hours"
+    },
+    "labels": {
+      "service": "graft-ai-ollama-cloud",
+      "period": "weekly"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "expr": "ollama_cloud_reset_seconds_remaining{period=\"weekly\"}",
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [86400], "type": "lt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["A"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "-100" },
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ]
+  }
+]

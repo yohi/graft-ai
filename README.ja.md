@@ -51,6 +51,7 @@ Worker と Tail Worker で通信を中継する **Free Tier proxy mode** も利�
 | Worker | Trigger | Responsibility |
 | :--- | :--- | :--- |
 | `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
+| `graft-ai-ollama-cloud` | Cron `*/5 * * * *` | session / weekly リセットメトリクスを計算し、Grafana Cloud Prometheus に push |
 
 #### `graft-ai-provider-metrics` の secrets
 
@@ -79,6 +80,23 @@ Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で
 
 `OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
 Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
+
+#### `graft-ai-ollama-cloud`
+
+```sh
+cd workers
+npx wrangler secret put OLLAMA_CLOUD_RESET_ANCHOR_ISO --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
+cd ..
+make deploy-ollama
+```
+
+`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601 時刻で指定し、Prometheus
+エンドポイントは HTTPS を使用してください。`scripts/setup.sh` はこれらの
+secret 登録、Worker デプロイ、Ollama ダッシュボードの import、
+`grafana/alerts/graft-ai-ollama-cloud-rules.json` の Alert Rule 登録を行います。
 
 ## 📁 ディレクトリ構成
 

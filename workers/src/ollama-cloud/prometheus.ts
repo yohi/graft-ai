@@ -1,6 +1,6 @@
 import type { OllamaCloudEnv } from "../types";
 import type { ResetCalculation } from "./calc";
-import { postWithRetry } from "../http-retry";
+import { postWithRetry, validatePrometheusConfig } from "../http-retry";
 
 type PrometheusEnv = Pick<
   OllamaCloudEnv,
@@ -112,7 +112,11 @@ export async function pushMetrics(
   plan: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<{ ok: boolean; status: number }> {
-  const url = `${env.GRAFANA_CLOUD_PROMETHEUS_URL}/v1/metrics`;
+  const url = validatePrometheusConfig(
+    env.GRAFANA_CLOUD_PROMETHEUS_URL,
+    env.GRAFANA_CLOUD_PROMETHEUS_USERNAME,
+    env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN,
+  );
   const basicAuth = btoa(
     `${env.GRAFANA_CLOUD_PROMETHEUS_USERNAME}:${env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}`,
   );

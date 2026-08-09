@@ -72,6 +72,8 @@ Loki.
 | Loki | Grafana Cloud managed | Stores transformed logs for 14 days. |
 | Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, emits telemetry. |
 | Tail Worker | Wrangler (`workers/src/tail-worker.ts`) | Filters telemetry logs, transforms to Loki streams. |
+| Ollama Cloud Worker | Wrangler (`workers/src/ollama-cloud.ts`) | Derives reset metrics from a strict ISO 8601 anchor and pushes OTLP metrics. |
+| Ollama Cloud alerts | Grafana Alerting API (`grafana/alerts/`) | Fires session/weekly reset alerts from Prometheus metrics. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
 | Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
 
@@ -142,6 +144,7 @@ not prevent other metrics from being pushed.
 #### 2.6 Security
 
 - HTTPS only for Logpush → Worker and Worker → Loki.
+- HTTPS only for scheduled Workers → Grafana Cloud Prometheus.
 - Loki push uses HTTP Basic Auth: username = Grafana Cloud Loki tenant ID,
   password = Access Policy Token with `logs:write` scope.
 - Secrets are never committed or stored in `*.tfvars`. Use environment variables

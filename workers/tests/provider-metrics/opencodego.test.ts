@@ -76,6 +76,24 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(urls.some((url) => url.includes("/workspace/wrk_override/go"))).toBe(true);
   });
 
+  it("discovers the workspace when workspaceIdOverride is blank", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("/workspace/wrk_abc123/go")) {
+        return new Response(MOCK_USAGE_HTML, { status: 200 });
+      }
+      return new Response(MOCK_ZEN_HTML, { status: 200 });
+    });
+
+    await fetchOpenCodeGoMetrics("session=abc", "", mockFetch);
+
+    const urls = (mockFetch.mock.calls as [string, RequestInit][]).map(([url]) => url);
+    expect(urls.some((url) => url.includes("def399"))).toBe(true);
+    expect(urls.some((url) => url.includes("/workspace/wrk_abc123/go"))).toBe(true);
+  });
+
   it("sends Cookie header", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       if (url.includes("_server") && url.includes("def399")) {

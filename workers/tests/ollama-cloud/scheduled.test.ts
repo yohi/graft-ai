@@ -72,6 +72,30 @@ describe("ollama-cloud scheduled handler", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["2026-02-30T00:00:00Z", "January 1, 2026"])(
+    "logs error and skips when anchor is not a strict ISO date: %s",
+    async (anchor) => {
+      const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", mockFetch);
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await worker.scheduled(
+        { scheduledTime: Date.now(), cron: "*/5 * * * *" } as ScheduledEvent,
+        { ...baseEnv, OLLAMA_CLOUD_RESET_ANCHOR_ISO: anchor } as typeof baseEnv & {
+          OLLAMA_CLOUD_RESET_ANCHOR_ISO: string;
+        },
+        {} as ExecutionContext,
+      );
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("Invalid OLLAMA_CLOUD_RESET_ANCHOR_ISO"),
+      );
+      consoleError.mockRestore();
+      vi.unstubAllGlobals();
+    },
+  );
+
   it("logs error and skips when an interval env var is invalid", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     vi.stubGlobal("fetch", mockFetch);

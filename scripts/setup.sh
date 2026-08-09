@@ -12,8 +12,8 @@
 #   6. PROXY_SECRET 自動生成
 #   7. Wrangler シークレット登録
 #   8. .dev.vars 書き出し (ローカル開発用)
-#   9. Tail Worker / Proxy Worker デプロイ
-#  10. Grafana ダッシュボード自動インポート
+#   9. Tail Worker / Proxy Worker / Ollama Worker デプロイ
+#  10. Grafana ダッシュボード・Alert Rule 自動インポート
 #
 # 使い方:
 #   cd <repo-root>
@@ -60,7 +60,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORKERS_DIR="${REPO_ROOT}/workers"
 PROXY_WRANGLER="${WORKERS_DIR}/wrangler.proxy.jsonc"
 TAIL_WRANGLER="${WORKERS_DIR}/wrangler.tail.jsonc"
+OLLAMA_WRANGLER="${WORKERS_DIR}/wrangler.ollama.jsonc"
 DASHBOARD_JSON="${REPO_ROOT}/grafana/dashboards/graft-ai-overview.json"
+OLLAMA_DASHBOARD_JSON="${REPO_ROOT}/grafana/dashboards/graft-ai-ollama-cloud.json"
+OLLAMA_ALERT_RULES_JSON="${REPO_ROOT}/grafana/alerts/graft-ai-ollama-cloud-rules.json"
 
 echo -e """
 ${BOLD}${CYAN}
@@ -368,6 +371,18 @@ register_secret "GRAFANA_CLOUD_LOKI_USERNAME"       "$GRAFANA_LOKI_USERNAME"    
 register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"      "$TAIL_WRANGLER"
 register_secret "PROXY_SECRET"                      "$PROXY_SECRET"                           "$PROXY_WRANGLER"
 
+# Ollama Cloud scheduled Worker の必須設定。Prometheus 用 token は Loki 用と
+# 権限が異なる場合があるため、明示的に別変数で受け取る（同じ token も可）。
+GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN="${GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN:-${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}}"
+ask OLLAMA_CLOUD_RESET_ANCHOR_ISO "Ollama Cloud の最後に確認した reset 時刻 (ISO 8601、例: 2026-01-01T00:00:00Z)"
+ask GRAFANA_CLOUD_PROMETHEUS_URL "Grafana Cloud Prometheus OTLP URL (例: https://otlp-gateway-prod-us-central1.grafana.net/otlp)"
+ask GRAFANA_CLOUD_PROMETHEUS_USERNAME "Grafana Cloud Prometheus の instance ID"
+ask GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN "Grafana Cloud Prometheus Access Policy token" secret
+register_secret "OLLAMA_CLOUD_RESET_ANCHOR_ISO"           "$OLLAMA_CLOUD_RESET_ANCHOR_ISO"              "$OLLAMA_WRANGLER"
+register_secret "GRAFANA_CLOUD_PROMETHEUS_URL"            "$GRAFANA_CLOUD_PROMETHEUS_URL"               "$OLLAMA_WRANGLER"
+register_secret "GRAFANA_CLOUD_PROMETHEUS_USERNAME"      "$GRAFANA_CLOUD_PROMETHEUS_USERNAME"         "$OLLAMA_WRANGLER"
+register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"      "$GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN" "$OLLAMA_WRANGLER"
+
 # =============================================================================
 # STEP 8: .dev.vars 書き出し
 # =============================================================================
@@ -379,6 +394,9 @@ GRAFANA_CLOUD_LOKI_URL=${GRAFANA_LOKI_URL}
 GRAFANA_CLOUD_LOKI_USERNAME=${GRAFANA_LOKI_USERNAME}
 GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}
 PROXY_SECRET=${PROXY_SECRET}
+OLLAMA_CLOUD_RESET_ANCHOR_ISO=${OLLAMA_CLOUD_RESET_ANCHOR_ISO}
+GRAFANA_CLOUD_PROMETHEUS_URL=${GRAFANA_CLOUD_PROMETHEUS_URL}
+GRAFANA_CLOUD_PROMETHEUS_USERNAME=${GRAFANA_CLOUD_PROMETHEUS_USERNAME}
 EOF
 chmod 600 "$DEV_VARS"
 success ".dev.vars を書き出しました: ${DEV_VARS}"
@@ -404,6 +422,13 @@ if ! npx wrangler deploy --config "$PROXY_WRANGLER" ; then
 fi
 success "Proxy Worker デプロイ完了"
 
+info "Ollama Cloud Worker をデプロイ中..."
+if ! npx wrangler deploy --config "$OLLAMA_WRANGLER" ; then
+  echo -e "${RED}[ERROR]${NC} Ollama Cloud Worker のデプロイに失敗しました。" >&2
+  exit 1
+fi
+success "Ollama Cloud Worker デプロイ完了"
+
 cd "$REPO_ROOT"
 
 # =============================================================================
@@ -428,6 +453,27 @@ else
     warn "手動で以下を実行してください:"
     warn "  gcx api /api/dashboards/db -d @${DASHBOARD_JSON}"
   fi
+fi
+
+if [[ -f "$OLLAMA_DASHBOARD_JSON" ]]; then
+  OLLAMA_IMPORT_RESULT=$(gcx api /api/dashboards/db -d @"$OLLAMA_DASHBOARD_JSON" -o json 2>/dev/null || echo "")
+  if [[ "$(echo "$OLLAMA_IMPORT_RESULT" | jq -r '.status // "unknown"')" == "success" ]]; then
+    success "Ollama Cloud ダッシュボードをインポートしました。"
+  else
+    warn "Ollama Cloud ダッシュボードのインポートに失敗しました。"
+  fi
+fi
+
+if [[ -f "$OLLAMA_ALERT_RULES_JSON" ]]; then
+  GCX_ORG_ID=$(gcx api /api/user -o json 2>/dev/null | jq -r '.orgId // 1' || echo "1")
+  while IFS= read -r rule; do
+    rule=$(jq --argjson orgId "$GCX_ORG_ID" '.orgId = $orgId' <<< "$rule")
+    if gcx api /api/v1/provisioning/alert-rules -d "$rule" -o json >/dev/null 2>&1; then
+      success "Ollama Cloud Alert Rule を登録しました。"
+    else
+      warn "Ollama Cloud Alert Rule の登録に失敗しました。Grafana Alerting API を確認してください。"
+    fi
+  done < <(jq -c '.[]' "$OLLAMA_ALERT_RULES_JSON")
 fi
 
 # =============================================================================

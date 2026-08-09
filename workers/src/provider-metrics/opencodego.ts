@@ -104,7 +104,7 @@ export async function fetchOpenCodeGoMetrics(
   fetchFn: typeof fetch = fetch,
 ): Promise<OpenCodeGoFetchResult> {
   const context: FetchContext = { cookie, fetchFn };
-  const workspaceId = workspaceIdOverride ?? (await fetchWorkspaceId(context));
+  const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
   const usageResponse = await get(`${BASE_URL}/workspace/${workspaceId}/go`, context);
   if (!usageResponse.ok) {
     await discardResponse(usageResponse);

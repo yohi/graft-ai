@@ -2,6 +2,29 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_INITIAL_BACKOFF_MS = 500;
 const DEFAULT_PER_ATTEMPT_TIMEOUT_MS = 15000;
 
+export function validatePrometheusConfig(
+  endpoint: string,
+  username: string,
+  accessPolicyToken: string,
+): string {
+  const normalizedEndpoint = endpoint.trim();
+  if (normalizedEndpoint === "" || username.trim() === "" || accessPolicyToken.trim() === "") {
+    throw new Error("Prometheus configuration is incomplete");
+  }
+
+  let parsedEndpoint: URL;
+  try {
+    parsedEndpoint = new URL(normalizedEndpoint);
+  } catch {
+    throw new Error("Prometheus configuration has an invalid URL");
+  }
+  if (parsedEndpoint.protocol !== "https:") {
+    throw new Error("Prometheus configuration requires an HTTPS URL");
+  }
+
+  return `${normalizedEndpoint.replace(/\/+$/, "")}/v1/metrics`;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

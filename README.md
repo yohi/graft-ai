@@ -51,6 +51,7 @@ The current support status and planned roadmap items are summarized below:
 | Worker | Trigger | Responsibility |
 | :--- | :--- | :--- |
 | `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Fetches Codex / OpenAI API / OpenCodeGo usage and pushes to Grafana Cloud Prometheus |
+| `graft-ai-ollama-cloud` | Cron `*/5 * * * *` | Derives session / weekly reset metrics and pushes them to Grafana Cloud Prometheus |
 
 #### `graft-ai-provider-metrics` secrets
 
@@ -81,6 +82,23 @@ The non-secret history window is configured in
 `OPENAI_API_HISTORY_DAYS` defaults to `1` day and accepts integer values from
 `1` through `31` days. Run `make deploy-provider-metrics` from the repository
 root after registering the secrets.
+
+#### `graft-ai-ollama-cloud`
+
+```sh
+cd workers
+npx wrangler secret put OLLAMA_CLOUD_RESET_ANCHOR_ISO --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.ollama.jsonc
+npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
+cd ..
+make deploy-ollama
+```
+
+`OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp. The
+Prometheus endpoint must use HTTPS. `scripts/setup.sh` registers these
+secrets, deploys the Worker, imports the Ollama dashboard, and provisions the
+two Grafana alert rules in `grafana/alerts/graft-ai-ollama-cloud-rules.json`.
 
 ## 📁 Directory Layout
 

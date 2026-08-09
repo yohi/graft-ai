@@ -66,7 +66,7 @@ export interface ProviderMetricsEnv {
 export interface OpenAIMetric {
   /** line_item ラベル値（costs エンドポイント由来） */
   lineItem: string;
-  /** 前日コスト USD */
+  /** OPENAI_API_HISTORY_DAYS で指定した UTC 日数分のコスト USD */
   costUSD: number;
 }
 
@@ -96,6 +96,11 @@ export interface CodexFetchResult {
   weeklyResetTimestampSeconds: number;
   /** クレジット残高（取得できない場合は null） */
   creditsRemaining: number | null;
+  /** リセットクレジット（補助エンドポイントが利用できない場合は undefined） */
+  resetCredits?: {
+    credits: number;
+    availableCount: number;
+  };
   /** プラン名 */
   plan: string;
 }
@@ -227,6 +232,7 @@ const sampleCodex: CodexFetchResult = {
   sessionResetTimestampSeconds: 1700010000,
   weeklyResetTimestampSeconds: 1700100000,
   creditsRemaining: 3.5,
+  resetCredits: { credits: 12, availableCount: 8 },
   plan: "pro",
 };
 
@@ -283,6 +289,8 @@ describe("pushProviderMetrics", () => {
     expect(names).toContain("codex_usage_ratio");
     expect(names).toContain("codex_reset_timestamp_seconds");
     expect(names).toContain("codex_credits_remaining");
+    expect(names).toContain("codex_reset_credits");
+    expect(names).toContain("codex_reset_credits_available_count");
     expect(names).toContain("codex_plan_info");
   });
 
@@ -444,6 +452,17 @@ function buildMetrics(results: MetricResults, nowUnixNano: string): Record<strin
     if (c.creditsRemaining !== null) {
       metrics.push(gaugeMetric("codex_credits_remaining", [], c.creditsRemaining, nowUnixNano));
     }
+    if (c.resetCredits) {
+      metrics.push(gaugeMetric("codex_reset_credits", [], c.resetCredits.credits, nowUnixNano));
+      metrics.push(
+        gaugeMetric(
+          "codex_reset_credits_available_count",
+          [],
+          c.resetCredits.availableCount,
+          nowUnixNano,
+        ),
+      );
+    }
     metrics.push(gaugeMetric("codex_plan_info", [attr("plan", c.plan)], 1, nowUnixNano));
   }
 
@@ -562,7 +581,7 @@ git commit -m "feat: provider metrics の Prometheus push モジュールを追�
 import { describe, it, expect, vi } from "vitest";
 import { fetchOpenAIMetrics } from "../../src/provider-metrics/openai-api";
 
-// 前日の costs レスポンス例
+// OPENAI_API_HISTORY_DAYS で指定した UTC 日数分の costs レスポンス例
 const MOCK_COSTS_RESPONSE = {
   object: "page",
   data: [
@@ -608,10 +627,8 @@ const MOCK_COMPLETIONS_RESPONSE = {
 
 describe("fetchOpenAIMetrics", () => {
   it("returns cost and token metrics parsed from API responses", async () => {
-    let callCount = 0;
-    const mockFetch = vi.fn().mockImplementation(async () => {
-      callCount++;
-      const body = callCount === 1
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      const body = url.includes("/costs")
         ? JSON.stringify(MOCK_COSTS_RESPONSE)
         : JSON.stringify(MOCK_COMPLETIONS_RESPONSE);
       return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
@@ -649,10 +666,9 @@ describe("fetchOpenAIMetrics", () => {
   });
 
   it("aggregates results from has_more pagination", async () => {
-    let call = 0;
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      call++;
-      if (call === 1) {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.pathname.endsWith("/costs") && !parsedUrl.searchParams.has("page")) {
         // costs page 1
         return new Response(
           JSON.stringify({
@@ -663,7 +679,7 @@ describe("fetchOpenAIMetrics", () => {
           { status: 200 },
         );
       }
-      if (call === 2) {
+      if (parsedUrl.pathname.endsWith("/costs") && parsedUrl.searchParams.get("page") === "cursor_abc") {
         // costs page 2
         return new Response(
           JSON.stringify({
@@ -674,9 +690,9 @@ describe("fetchOpenAIMetrics", () => {
           { status: 200 },
         );
       }
-      // completions
+      // completions は costs のページング状態に影響されない
       return new Response(
-        JSON.stringify({ data: [], has_more: false, next_page: null }),
+        JSON.stringify(MOCK_COMPLETIONS_RESPONSE),
         { status: 200 },
       );
     });
@@ -684,6 +700,28 @@ describe("fetchOpenAIMetrics", () => {
     const result = await fetchOpenAIMetrics("sk-admin-test", 1, mockFetch);
     const chatCost = result.costs.find((c) => c.lineItem === "Chat Completions");
     expect(chatCost?.costUSD).toBeCloseTo(0.30);
+    const costsUrls = mockFetch.mock.calls
+      .map(([url]: [string]) => url)
+      .filter((url) => url.includes("/costs"));
+    expect(costsUrls).toHaveLength(2);
+    expect(costsUrls[1]).toContain("page=cursor_abc");
+  });
+
+  it("aggregates the configured historyDays interval", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      const parsedUrl = new URL(url);
+      const bucket = parsedUrl.pathname.endsWith("/costs")
+        ? { data: [{ results: [{ amount: { value: 0.25 }, line_item: "Chat Completions" }] }], has_more: false, next_page: null }
+        : { data: [{ results: [{ model: "gpt-4o", input_tokens: 10, output_tokens: 5, input_cached_tokens: 1, num_model_requests: 1 }] }], has_more: false, next_page: null };
+      return new Response(JSON.stringify(bucket), { status: 200 });
+    });
+
+    await fetchOpenAIMetrics("sk-admin-test", 3, mockFetch, Date.UTC(2026, 0, 4));
+
+    for (const [url] of mockFetch.mock.calls as [string, RequestInit][]) {
+      const parsedUrl = new URL(url);
+      expect(Number(parsedUrl.searchParams.get("end_time")) - Number(parsedUrl.searchParams.get("start_time"))).toBe(3 * 86400);
+    }
   });
 
   it("returns empty arrays when API returns no data", async () => {
@@ -809,7 +847,7 @@ export async function fetchOpenAIMetrics(
   fetchFn: typeof fetch = fetch,
   nowMs: number = Date.now(),
 ): Promise<OpenAIFetchResult> {
-  // 前日完全 UTC 日を基準とする（scheduledTime を受け取り UTC 当日 00:00 を算出）
+  // scheduledTime を受け取り、指定した historyDays 分の完全 UTC 日を集計する
   const dayMs = 86400 * 1000;
   const todayUtcMs = Math.floor(nowMs / dayMs) * dayMs;
   const endTime = todayUtcMs / 1000;           // UTC 当日 00:00 Unix 秒
@@ -930,13 +968,18 @@ const MOCK_USAGE_RESPONSE = {
   },
 };
 
+const MOCK_RESET_CREDITS_RESPONSE = {
+  credits: 12,
+  available_count: 8,
+};
+
 describe("fetchCodexMetrics", () => {
   it("parses usage ratio and reset timestamps", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(MOCK_USAGE_RESPONSE), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+    const mockFetch = vi.fn().mockImplementation(async (url: string) =>
+      new Response(
+        JSON.stringify(url.endsWith("rate-limit-reset-credits") ? MOCK_RESET_CREDITS_RESPONSE : MOCK_USAGE_RESPONSE),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
     );
 
     const result = await fetchCodexMetrics("test-access-token", undefined, mockFetch);
@@ -951,32 +994,59 @@ describe("fetchCodexMetrics", () => {
 
     expect(result.sessionResetTimestampSeconds).toBe(1786161204);
     expect(result.weeklyResetTimestampSeconds).toBe(1786247604);
+    expect(result.resetCredits).toEqual({ credits: 12, availableCount: 8 });
   });
 
   it("sends Bearer auth header and correct URL", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 }),
+    const mockFetch = vi.fn().mockImplementation(async (url: string) =>
+      new Response(JSON.stringify(url.endsWith("rate-limit-reset-credits") ? MOCK_RESET_CREDITS_RESPONSE : MOCK_USAGE_RESPONSE), { status: 200 }),
     );
     await fetchCodexMetrics("test-token", undefined, mockFetch);
-    const [url, init] = mockFetch.mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer test-token");
+    const calls = mockFetch.mock.calls as [string, RequestInit][];
+    const usageCall = calls.find(([url]) => url.endsWith("/wham/usage"));
+    const resetCreditsCall = calls.find(([url]) => url.endsWith("/wham/rate-limit-reset-credits"));
+    expect(usageCall?.[0]).toBe("https://chatgpt.com/backend-api/wham/usage");
+    expect(resetCreditsCall?.[0]).toBe("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits");
+    expect((usageCall?.[1].headers as Record<string, string>)["Authorization"]).toBe("Bearer test-token");
+    expect((resetCreditsCall?.[1].headers as Record<string, string>)["OpenAI-Beta"]).toBe("codex-1");
+    expect((resetCreditsCall?.[1].headers as Record<string, string>)["originator"]).toBe("Codex Desktop");
   });
 
   it("sends ChatGPT-Account-Id header when accountId provided", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 }),
+    const mockFetch = vi.fn().mockImplementation(async (url: string) =>
+      new Response(JSON.stringify(url.endsWith("rate-limit-reset-credits") ? MOCK_RESET_CREDITS_RESPONSE : MOCK_USAGE_RESPONSE), { status: 200 }),
     );
     await fetchCodexMetrics("token", "acct-123", mockFetch);
-    const [, init] = mockFetch.mock.calls[0]! as [string, RequestInit];
-    const headers = init.headers as Record<string, string>;
-    expect(headers["ChatGPT-Account-Id"]).toBe("acct-123");
+    for (const [, init] of mockFetch.mock.calls as [string, RequestInit][]) {
+      const headers = init.headers as Record<string, string>;
+      expect(headers["ChatGPT-Account-Id"]).toBe("acct-123");
+    }
   });
 
   it("throws on HTTP 401", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("Unauthorized", { status: 401 }));
     await expect(fetchCodexMetrics("bad-token", undefined, mockFetch)).rejects.toThrow(/401/);
+  });
+
+  it.each([
+    ["primary_window", { ...MOCK_USAGE_RESPONSE, rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, primary_window: undefined } }],
+    ["secondary_window", { ...MOCK_USAGE_RESPONSE, rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, secondary_window: undefined } }],
+  ])("throws when %s is missing", async (_window, incompleteResponse) => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(incompleteResponse), { status: 200 }),
+    );
+    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(/required window/);
+  });
+
+  it("keeps usage metrics when reset-credits fetch fails", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) =>
+      url.endsWith("rate-limit-reset-credits")
+        ? new Response("Unavailable", { status: 503 })
+        : new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 }),
+    );
+    const result = await fetchCodexMetrics("token", undefined, mockFetch);
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+    expect(result.resetCredits).toBeUndefined();
   });
 
   it("sets creditsRemaining to null when credits field absent", async () => {
@@ -1015,6 +1085,7 @@ Expected: `Cannot find module` エラー
 import type { CodexFetchResult } from "./types";
 
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const TIMEOUT_MS = 30000;
 
 interface WindowSnapshot {
@@ -1038,6 +1109,11 @@ interface CodexUsageResponse {
   plan_type?: string;
   rate_limit?: RateLimitDetails;
   credits?: CreditDetails;
+}
+
+interface CodexResetCreditsResponse {
+  credits: number;
+  available_count: number;
 }
 
 export async function fetchCodexMetrics(
@@ -1067,8 +1143,36 @@ export async function fetchCodexMetrics(
 
   const data = (await response.json()) as CodexUsageResponse;
 
-  const primaryUsedPercent = data.rate_limit?.primary_window?.used_percent ?? 100;
-  const secondaryUsedPercent = data.rate_limit?.secondary_window?.used_percent ?? 100;
+  const primaryWindow = data.rate_limit?.primary_window;
+  const secondaryWindow = data.rate_limit?.secondary_window;
+  if (
+    primaryWindow?.used_percent === undefined ||
+    primaryWindow.reset_at === undefined ||
+    secondaryWindow?.used_percent === undefined ||
+    secondaryWindow.reset_at === undefined
+  ) {
+    throw new Error("Codex API response is missing a required window");
+  }
+
+  let resetCredits: CodexFetchResult["resetCredits"];
+  try {
+    const resetCreditsHeaders = { ...headers, "OpenAI-Beta": "codex-1", originator: "Codex Desktop" };
+    const resetCreditsResponse = await fetchFn(RESET_CREDITS_URL, {
+      method: "GET",
+      headers: resetCreditsHeaders,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (resetCreditsResponse.ok) {
+      const resetData = (await resetCreditsResponse.json()) as CodexResetCreditsResponse;
+      if (typeof resetData.credits === "number" && typeof resetData.available_count === "number") {
+        resetCredits = { credits: resetData.credits, availableCount: resetData.available_count };
+      }
+    } else {
+      await resetCreditsResponse.body?.cancel().catch(() => undefined);
+    }
+  } catch {
+    // reset-credits is supplementary; usage metrics remain usable when it fails
+  }
 
   let creditsRemaining: number | null = null;
   if (data.credits?.balance !== undefined && data.credits?.balance !== null) {
@@ -1080,11 +1184,12 @@ export async function fetchCodexMetrics(
   }
 
   return {
-    sessionUsageRatio: primaryUsedPercent / 100,
-    weeklyUsageRatio: secondaryUsedPercent / 100,
-    sessionResetTimestampSeconds: data.rate_limit?.primary_window?.reset_at ?? 0,
-    weeklyResetTimestampSeconds: data.rate_limit?.secondary_window?.reset_at ?? 0,
+    sessionUsageRatio: primaryWindow.used_percent / 100,
+    weeklyUsageRatio: secondaryWindow.used_percent / 100,
+    sessionResetTimestampSeconds: primaryWindow.reset_at,
+    weeklyResetTimestampSeconds: secondaryWindow.reset_at,
     creditsRemaining,
+    resetCredits,
     plan: data.plan_type ?? "unknown",
   };
 }
@@ -1315,6 +1420,19 @@ describe("fetchOpenCodeGoMetrics", () => {
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
     expect(result.rollingUsageRatio).toBeCloseTo(0.72);
   });
+
+  it.each([
+    ["rolling usage", `page content "resetInSec": 600 more content`],
+    ["rolling reset", `page content "usagePercent": 72 more content`],
+  ])("throws when required %s is absent", async (_field, body) => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server")) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (url.includes("/go")) return new Response(body, { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+
+    await expect(fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch)).rejects.toThrow();
+  });
 });
 ```
 
@@ -1449,8 +1567,9 @@ function extractFromTextFallback(html: string): Record<string, unknown> | null {
   if (!usageMatch?.[1]) return null;
   const usagePercent = parseFloat(usageMatch[1]);
   const resetMatch = html.match(/"resetInSec(?:onds)?"\s*:\s*(\d+)/);
-  const resetInSec = resetMatch?.[1] ? parseInt(resetMatch[1], 10) : 0;
-  return { usagePercent, resetInSec };
+  return resetMatch?.[1]
+    ? { usagePercent, resetInSec: parseInt(resetMatch[1], 10) }
+    : { usagePercent };
 }
 
 /** 複数フォーマットを順に試して使用量オブジェクトを返す */
@@ -1577,12 +1696,16 @@ export async function fetchOpenCodeGoMetrics(
     throw new Error("OpenCodeGo: Could not parse usage data from page HTML");
   }
 
-  const rollingPercent = pick(usageObj, PERCENT_KEYS) ?? 0;
+  const rollingPercent = pick(usageObj, PERCENT_KEYS);
   const weeklyPercent = pick(usageObj, WEEKLY_PERCENT_KEYS);
   const monthlyPercent = pick(usageObj, MONTHLY_PERCENT_KEYS);
-  const rollingReset = pick(usageObj, RESET_IN_KEYS) ?? 0;
+  const rollingReset = pick(usageObj, RESET_IN_KEYS);
   const weeklyReset = pick(usageObj, WEEKLY_RESET_KEYS);
   const monthlyReset = pick(usageObj, MONTHLY_RESET_KEYS);
+
+  if (rollingPercent === undefined || rollingReset === undefined) {
+    throw new Error("OpenCodeGo response is missing required rolling usage or reset data");
+  }
 
   // Zen balance はベストエフォート
   const zenBalanceUSD = await fetchZenBalance(workspaceId, cookie, fetchFn);
@@ -1829,11 +1952,59 @@ describe("provider-metrics scheduled handler", () => {
   });
 
   it("completes without throwing even when Prometheus push fails", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("Server Error", { status: 500 }));
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("api.openai.com")) {
+        return new Response(
+          JSON.stringify({ data: [], has_more: false, next_page: null }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("chatgpt.com")) {
+        if (url.includes("rate-limit-reset-credits")) {
+          return new Response(
+            JSON.stringify({ credits: 12, available_count: 8 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            plan_type: "pro",
+            rate_limit: {
+              primary_window: { used_percent: 50, reset_at: 1767268800 },
+              secondary_window: { used_percent: 30, reset_at: 1767830400 },
+            },
+            credits: { balance: 7 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("opencode.ai") && url.includes("def399")) {
+        return new Response(`<script>["wrk_test123"]</script>`, { status: 200 });
+      }
+      if (url.includes("opencode.ai") && url.includes("/go")) {
+        return new Response(
+          `<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"subscription":{"usagePercent":30,"resetInSec":3600}}}}</script>`,
+          { status: 200 },
+        );
+      }
+      if (url.includes("opencode.ai")) {
+        return new Response(`{"zenBalance":10.0}`, { status: 200 });
+      }
+      if (url.includes("/v1/metrics")) {
+        return new Response("Server Error", { status: 500 });
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
     vi.stubGlobal("fetch", mockFetch);
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(worker.scheduled(scheduledEvent, baseEnv, ctx)).resolves.not.toThrow();
+
+    const prometheusCalls = mockFetch.mock.calls.filter(([url]: [string]) =>
+      url.includes("/v1/metrics"),
+    );
+    expect(prometheusCalls).toHaveLength(1);
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("Prometheus push failed"));
 
     consoleError.mockRestore();
     vi.unstubAllGlobals();

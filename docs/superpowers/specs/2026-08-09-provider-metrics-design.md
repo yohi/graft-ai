@@ -62,11 +62,11 @@ Cloudflare Workers scheduled (*/5 * * * *)
 | ページネーション | レスポンスの `has_more` + `next_page` カーソル（次リクエストのクエリ名は `page`） |
 
 **取得データ**:
-- 日次コスト (USD)、モデル別 / line_item 別内訳
+- `OPENAI_API_HISTORY_DAYS` で指定した UTC 日数分のコスト (USD)、モデル別 / line_item 別内訳
 - 入力・出力・キャッシュ入力トークン数
 - リクエスト数
 
-**スコープ**: 直近 1 日分（前日 UTC 00:00〜当日 UTC 00:00）のみ取得。ゲージとして扱うため過去履歴の保存は Worker 内では行わない。
+**スコープ**: `OPENAI_API_HISTORY_DAYS`（1〜31、未設定時は 1）で指定した直近の UTC 日数分を取得する。範囲は前日 UTC 00:00 から `historyDays` 日前の UTC 00:00 までとし、取得した範囲を集計した Gauge を送信する。Worker 内では過去履歴を保存しない。
 
 ---
 
@@ -96,6 +96,11 @@ Cloudflare Workers scheduled (*/5 * * * *)
   - `credits`: クレジット数/状態
   - `available_count`: 利用可能カウント
 
+**取得結果への反映と失敗時の扱い**:
+- `CodexFetchResult.resetCredits` に `{ credits, availableCount }` として反映する。
+- `/wham/usage` と必須の primary/secondary window が欠落した場合は Codex fetch 全体を失敗させる。
+- `/wham/rate-limit-reset-credits` の HTTP エラー、通信エラー、または不完全なレスポンスは補助データの欠落として扱い、usage 由来のメトリクスを維持したまま `resetCredits` を省略する。
+
 ---
 
 ### OpenCodeGo
@@ -111,10 +116,11 @@ Cloudflare Workers scheduled (*/5 * * * *)
 | 追加ヘッダー | `X-Server-Id`, `X-Server-Instance`, `Referer`, `Origin`, `User-Agent` (Chrome UA) |
 
 **取得データ**:
-- `rollingUsagePercent`: ローリング(5h)使用率 (0–100、必須)
+- `rollingUsagePercent`: ローリング(5h)使用率 (0–100、必須。欠落時は fetch 失敗)
 - `weeklyUsagePercent`: 週次使用率 (0–100、ウィンドウが存在しない場合は欠落)
 - `monthlyUsagePercent`: 月次使用率 (0–100、ウィンドウが存在しない場合は欠落)
-- `rollingResetInSec` / `weeklyResetInSec` / `monthlyResetInSec`: 各リセット残秒数。欠落したウィンドウのメトリクスは生成しない。
+- `rollingResetInSec`: ローリングリセット残秒数 (必須。欠落時は fetch 失敗)
+- `weeklyResetInSec` / `monthlyResetInSec`: 週次/月次リセット残秒数。欠落した任意ウィンドウのメトリクスは生成しない。
 - `zenBalanceUSD`: Zen クレジット残高 (USD)
 
 **データ抽出**: HTML 内に埋め込まれた JSON を複数のキー候補でフォールバック検索（`usagePercent`, `usedPercent`, `usage_percent` 等。CodexBar 参照）。
@@ -131,11 +137,11 @@ Cloudflare Workers scheduled (*/5 * * * *)
 
 | メトリクス名 | ラベル | 説明 |
 |---|---|---|
-| `openai_api_cost_usd` | `line_item` | 前日コスト (USD) — `costs` エンドポイント由来、line_item 別 |
-| `openai_api_input_tokens` | `model` | 前日入力トークン数 — `completions` エンドポイント由来 |
-| `openai_api_output_tokens` | `model` | 前日出力トークン数 |
-| `openai_api_cached_tokens` | `model` | 前日キャッシュ入力トークン数 |
-| `openai_api_requests` | `model` | 前日リクエスト数 |
+| `openai_api_cost_usd` | `line_item` | `OPENAI_API_HISTORY_DAYS` で指定した UTC 日数分のコスト (USD) — `costs` エンドポイント由来、line_item 別 |
+| `openai_api_input_tokens` | `model` | 指定期間の入力トークン数 — `completions` エンドポイント由来 |
+| `openai_api_output_tokens` | `model` | 指定期間の出力トークン数 |
+| `openai_api_cached_tokens` | `model` | 指定期間のキャッシュ入力トークン数 |
+| `openai_api_requests` | `model` | 指定期間のリクエスト数 |
 
 ### Codex
 
@@ -143,7 +149,9 @@ Cloudflare Workers scheduled (*/5 * * * *)
 |---|---|---|
 | `codex_usage_ratio` | `period="session"\|"weekly"` | 使用率 (0.0–1.0) |
 | `codex_reset_timestamp_seconds` | `period` | 次リセット Unix 時刻 |
-| `codex_credits_remaining` | — | クレジット残高 |
+| `codex_credits_remaining` | — | 使用量レスポンスのクレジット残高 |
+| `codex_reset_credits` | — | reset-credits エンドポイントのクレジット数（取得時のみ） |
+| `codex_reset_credits_available_count` | — | reset-credits エンドポイントの利用可能カウント（取得時のみ） |
 | `codex_plan_info` | `plan` | プラン情報ゲージ (常に 1) |
 
 ### OpenCodeGo
@@ -210,6 +218,9 @@ workers/wrangler.provider-metrics.jsonc  # Worker 設定（cron, vars）
 | 特定プロバイダーの fetch 失敗 | `console.error()` でログ記録し、他プロバイダーのメトリクスは送信継続 |
 | 401 / 403 | 即時失敗（リトライなし）、認証情報の期限切れとしてログ |
 | 5xx / 429 | 既存 `http-retry.ts` の `postWithRetry` を再利用 |
+| Codex usage の primary/secondary window 欠落 | Codex fetch を失敗させ、100% や Unix 秒 0 の代替値は生成しない |
+| Codex reset-credits の取得失敗 | 補助メトリクスのみ省略し、usage 由来の Codex メトリクスは送信継続 |
+| OpenCodeGo rolling usage/reset 欠落 | OpenCodeGo fetch を失敗させ、0 の代替値は生成しない |
 | `OPENAI_API_HISTORY_DAYS` が未設定 | `1` を使用 |
 | `OPENAI_API_HISTORY_DAYS` が無効 | エラーをログ記録し、OpenAI fetch をスキップ（他プロバイダーは継続） |
 | 全プロバイダー失敗 | Worker は正常終了（scheduled handler は常に完了） |
@@ -224,9 +235,9 @@ workers/wrangler.provider-metrics.jsonc  # Worker 設定（cron, vars）
 | ファイル | 内容 |
 |---|---|
 | `openai-api.test.ts` | モックレスポンスに対するパース・集計ロジック |
-| `codex.test.ts` | `CodexUsageResponse` デコードと Prometheus payload 生成 |
-| `opencodego.test.ts` | HTML スクレイピング（フィクスチャ HTML を使用） |
-| `provider-metrics.test.ts` | 統合テスト（各 fetcher をモック化した scheduled handler） |
+| `codex.test.ts` | `CodexUsageResponse` と `CodexResetCreditsResponse` のデコード、必須 window 欠落、補助 endpoint の失敗、必要ヘッダー、Prometheus payload 生成 |
+| `opencodego.test.ts` | HTML スクレイピング（フィクスチャ HTML を使用）、rolling 必須フィールド欠落時の失敗、weekly/monthly 欠落時の省略 |
+| `scheduled.test.ts` | 統合テスト（各 fetcher をモック化した scheduled handler、Prometheus push 失敗時の継続） |
 
 ---
 

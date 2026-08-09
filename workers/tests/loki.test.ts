@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { pushToLoki } from "../src/loki";
 import type { LokiPushPayload } from "../src/types";
+import { getWithRetry } from "../src/http-retry";
 
 const testPayload: LokiPushPayload = {
   streams: [
@@ -113,5 +114,24 @@ describe("pushToLoki", () => {
     await pushToLoki(testEnv, testPayload, mockFetch);
     const init = mockFetch.mock.calls[0]![1] as RequestInit;
     expect(init.signal).toBeDefined();
+  });
+});
+
+describe("getWithRetry", () => {
+  it("preserves the final retryable response body for the caller", async () => {
+    const response = new Response("final error", { status: 429 });
+    const fetchFn = vi.fn().mockResolvedValue(response);
+
+    const result = await getWithRetry({
+      url: "https://example.com/usage",
+      headers: {},
+      fetchFn,
+      logLabel: "usage fetch",
+      isRetryableStatus: (status) => status === 429,
+      maxRetries: 0,
+      initialBackoffMs: 0,
+    });
+
+    expect(await result.text()).toBe("final error");
   });
 });

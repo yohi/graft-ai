@@ -59,7 +59,9 @@ export async function getWithRetry({
       if (response.ok || !isRetryableStatus(response.status)) {
         return response;
       }
-      await response.body?.cancel().catch(() => undefined);
+      if (attempt < maxRetries) {
+        await response.body?.cancel().catch(() => undefined);
+      }
     } catch (err) {
       console.error(
         `${logLabel} attempt ${attempt + 1} failed: ${err instanceof Error ? err.message : String(err)}`,

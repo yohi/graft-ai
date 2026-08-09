@@ -109,7 +109,7 @@ describe("ollama-cloud scheduled handler", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["18000junk", "1.5"])(
+  it.each(["", "18000junk", "1.5"])(
     "logs error and skips when interval is not a strict positive integer: %s",
     async (interval) => {
       const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));

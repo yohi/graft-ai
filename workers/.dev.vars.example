@@ -14,7 +14,7 @@ PROXY_SECRET=your-random-proxy-secret-here
 ORIGIN_SECRET=your-random-origin-secret-here
 RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
 
-# Ollama Cloud reset metrics. Local development uses the shared token below;
+# Ollama Cloud reset metrics. Local development uses the shared token above;
 # it must include both logs:write and metrics:write.
 OLLAMA_CLOUD_PLAN=
 OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS=18000

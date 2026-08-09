@@ -52,7 +52,6 @@ const MONTHLY_RESET_KEYS = [
 ] as const;
 const USAGE_KEYS = [...PERCENT_KEYS, ...WEEKLY_PERCENT_KEYS, ...MONTHLY_PERCENT_KEYS] as const;
 const UNSAFE_TRAVERSAL_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-const MISSING = Symbol("missing OpenCodeGo field");
 
 type UsageRecords = readonly Record<string, unknown>[];
 
@@ -154,14 +153,15 @@ function extractUsageRecords(html: string): UsageRecords | null {
   );
 }
 
-function findOwnValue(records: UsageRecords, keys: readonly string[]): unknown | typeof MISSING {
+function findOwnValues(records: UsageRecords, keys: readonly string[]): readonly unknown[] {
+  const values: unknown[] = [];
   for (const key of keys) {
     for (let index = records.length - 1; index >= 0; index--) {
       const record = records[index];
-      if (record !== undefined && Object.hasOwn(record, key)) return record[key];
+      if (record !== undefined && Object.hasOwn(record, key)) values.push(record[key]);
     }
   }
-  return MISSING;
+  return values;
 }
 
 function parsePercentage(records: UsageRecords, keys: readonly string[], required: true): number;
@@ -175,20 +175,26 @@ function parsePercentage(
   keys: readonly string[],
   required: boolean,
 ): number | undefined {
-  const value = findOwnValue(records, keys);
-  if (value === MISSING) {
+  const values = findOwnValues(records, keys);
+  if (values.length === 0) {
     if (required)
       throw new OpenCodeGoResponseError(
         "OpenCodeGo response is missing required rolling usage or reset data",
       );
     return undefined;
   }
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
-    throw new OpenCodeGoResponseError(
-      "OpenCodeGo usage percentage must be finite and between 0 and 100",
-    );
+  let selected: number | null = null;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+      throw new OpenCodeGoResponseError(
+        "OpenCodeGo usage percentage must be finite and between 0 and 100",
+      );
+    }
+    if (selected === null) selected = value;
   }
-  return value / 100;
+  if (selected === null)
+    throw new OpenCodeGoResponseError("OpenCodeGo response is missing usage data");
+  return selected / 100;
 }
 
 function parseResetSeconds(records: UsageRecords, keys: readonly string[], required: true): number;
@@ -202,25 +208,31 @@ function parseResetSeconds(
   keys: readonly string[],
   required: boolean,
 ): number | undefined {
-  const value = findOwnValue(records, keys);
-  if (value === MISSING) {
+  const values = findOwnValues(records, keys);
+  if (values.length === 0) {
     if (required)
       throw new OpenCodeGoResponseError(
         "OpenCodeGo response is missing required rolling usage or reset data",
       );
     return undefined;
   }
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    !Number.isSafeInteger(value) ||
-    value < 0
-  ) {
-    throw new OpenCodeGoResponseError(
-      "OpenCodeGo reset seconds must be a finite non-negative safe integer",
-    );
+  let selected: number | null = null;
+  for (const value of values) {
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      !Number.isSafeInteger(value) ||
+      value < 0
+    ) {
+      throw new OpenCodeGoResponseError(
+        "OpenCodeGo reset seconds must be a finite non-negative safe integer",
+      );
+    }
+    if (selected === null) selected = value;
   }
-  return value;
+  if (selected === null)
+    throw new OpenCodeGoResponseError("OpenCodeGo response is missing reset data");
+  return selected;
 }
 
 export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
@@ -246,5 +258,5 @@ export function extractZenBalance(html: string): number | null {
   const value = html.match(/"zenBalance"\s*:\s*([^,\s}<]+)/)?.[1];
   if (value === undefined) return null;
   const balance = Number(value);
-  return Number.isFinite(balance) ? balance : null;
+  return Number.isFinite(balance) && balance >= 0 ? balance : null;
 }

@@ -84,4 +84,31 @@ describe("fetchOpenCodeGoMetrics usage response validation", () => {
 
     expect(result.zenBalanceUSD).toBeNull();
   });
+
+  it("treats a negative Zen balance as unavailable", async () => {
+    const result = await fetchOpenCodeGoMetrics(
+      "session=abc",
+      undefined,
+      mockFetchForUsage(VALID_USAGE, `<script>{"zenBalance":-1}</script>`),
+    );
+
+    expect(result.zenBalanceUSD).toBeNull();
+  });
+
+  it.each([
+    [
+      "usage percentage",
+      `{"usagePercent":50,"usedPercent":-1,"resetInSec":600}`,
+      /usage percentage must be finite and between 0 and 100/i,
+    ],
+    [
+      "reset seconds",
+      `{"usagePercent":50,"resetInSec":600,"resetSeconds":-1}`,
+      /reset seconds must be a finite non-negative safe integer/i,
+    ],
+  ])("rejects an invalid later %s alias", async (_field, body, expectedError) => {
+    await expect(
+      fetchOpenCodeGoMetrics("session=abc", undefined, mockFetchForUsage(body)),
+    ).rejects.toThrow(expectedError);
+  });
 });

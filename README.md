@@ -83,6 +83,11 @@ The non-secret history window is configured in
 `1` through `31` days. Run `make deploy-provider-metrics` from the repository
 root after registering the secrets.
 
+`make setup-free-tier` provisions the Logpush-free proxy, Tail, and Ollama
+Workers. Provider Metrics is deployed separately with
+`make deploy-provider-metrics` because its provider credentials are independent
+of the proxy setup.
+
 #### `graft-ai-ollama-cloud`
 
 ```sh

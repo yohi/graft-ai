@@ -170,6 +170,24 @@ describe("provider-metrics scheduled handler", () => {
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("No metrics to push"));
   });
 
+  it("skips provider fetches when optional credentials are blank", async () => {
+    const mockFetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> =>
+      providerResponse(input),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    const blankCredentialsEnv = {
+      ...baseEnv,
+      OPENAI_ADMIN_API_KEY: "",
+      CODEX_ACCESS_TOKEN: "   ",
+      OPENCODEGO_SESSION_COOKIE: "",
+    } satisfies ProviderMetricsEnv;
+
+    await worker.scheduled(scheduledEvent, blankCredentialsEnv, ctx);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("pushes OpenCodeGo metrics when OpenAI and Codex fetches fail", async () => {
     const mockFetch = vi.fn(
       async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {

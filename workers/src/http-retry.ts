@@ -53,6 +53,7 @@ export interface GetWithRetryOptions {
   maxRetries?: number;
   initialBackoffMs?: number;
   perAttemptTimeoutMs?: number;
+  redirect?: "error" | "follow" | "manual";
 }
 
 export async function getWithRetry({
@@ -64,6 +65,7 @@ export async function getWithRetry({
   maxRetries = DEFAULT_MAX_RETRIES,
   initialBackoffMs = DEFAULT_INITIAL_BACKOFF_MS,
   perAttemptTimeoutMs = DEFAULT_PER_ATTEMPT_TIMEOUT_MS,
+  redirect,
 }: GetWithRetryOptions): Promise<Response> {
   let lastResponse: Response | undefined;
 
@@ -77,6 +79,7 @@ export async function getWithRetry({
         method: "GET",
         headers,
         signal: AbortSignal.timeout(perAttemptTimeoutMs),
+        ...(redirect === undefined ? {} : { redirect }),
       });
       lastResponse = response;
 

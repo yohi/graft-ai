@@ -43,15 +43,19 @@ const worker: ProviderMetricsWorker = {
       );
     }
 
+    const openAiApiKey = env.OPENAI_ADMIN_API_KEY?.trim();
+    const codexAccessToken = env.CODEX_ACCESS_TOKEN?.trim();
+    const openCodeGoSessionCookie = env.OPENCODEGO_SESSION_COOKIE?.trim();
+
     const [openai, codex, openCodeGo] = await Promise.allSettled([
-      env.OPENAI_ADMIN_API_KEY !== undefined && historyDays !== undefined
-        ? fetchOpenAIMetrics(env.OPENAI_ADMIN_API_KEY, historyDays, fetch, event.scheduledTime)
+      openAiApiKey !== undefined && openAiApiKey !== "" && historyDays !== undefined
+        ? fetchOpenAIMetrics(openAiApiKey, historyDays, fetch, event.scheduledTime)
         : Promise.resolve(null),
-      env.CODEX_ACCESS_TOKEN !== undefined
-        ? fetchCodexMetrics(env.CODEX_ACCESS_TOKEN, env.CODEX_ACCOUNT_ID)
+      codexAccessToken !== undefined && codexAccessToken !== ""
+        ? fetchCodexMetrics(codexAccessToken, env.CODEX_ACCOUNT_ID)
         : Promise.resolve(null),
-      env.OPENCODEGO_SESSION_COOKIE !== undefined
-        ? fetchOpenCodeGoMetrics(env.OPENCODEGO_SESSION_COOKIE, env.OPENCODEGO_WORKSPACE_ID)
+      openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""
+        ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID)
         : Promise.resolve(null),
     ] as const);
 

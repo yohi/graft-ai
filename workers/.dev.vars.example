@@ -14,14 +14,14 @@ PROXY_SECRET=your-random-proxy-secret-here
 ORIGIN_SECRET=your-random-origin-secret-here
 RSA_PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----
 
-# Ollama Cloud reset metrics
+# Ollama Cloud reset metrics. Local development uses the shared token below;
+# it must include both logs:write and metrics:write.
 OLLAMA_CLOUD_PLAN=
 OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS=18000
 OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS=604800
 OLLAMA_CLOUD_RESET_ANCHOR_ISO=2026-01-01T00:00:00Z
 GRAFANA_CLOUD_PROMETHEUS_URL=https://otlp-gateway-prod-us-central1.grafana.net/otlp
 GRAFANA_CLOUD_PROMETHEUS_USERNAME=123456
-GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=glc_xxxxxxxxxxxx
 
 # Provider metrics (Codex / OpenAI API / OpenCodeGo → Prometheus)
 OPENAI_ADMIN_API_KEY=sk-admin-xxxxxxxxxxxx

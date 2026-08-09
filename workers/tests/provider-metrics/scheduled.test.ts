@@ -11,6 +11,13 @@ const baseEnv = {
   OPENCODEGO_SESSION_COOKIE: "session=abc",
 } satisfies ProviderMetricsEnv;
 
+const openAiOnlyEnv = {
+  GRAFANA_CLOUD_PROMETHEUS_URL: baseEnv.GRAFANA_CLOUD_PROMETHEUS_URL,
+  GRAFANA_CLOUD_PROMETHEUS_USERNAME: baseEnv.GRAFANA_CLOUD_PROMETHEUS_USERNAME,
+  GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: baseEnv.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN,
+  OPENAI_ADMIN_API_KEY: baseEnv.OPENAI_ADMIN_API_KEY,
+} satisfies ProviderMetricsEnv;
+
 const scheduledEvent = {
   scheduledTime: new Date("2026-01-01T00:00:00Z").getTime(),
   cron: "*/5 * * * *",
@@ -90,6 +97,37 @@ describe("provider-metrics scheduled handler", () => {
       urlOf(input).includes("/v1/metrics"),
     );
     expect(prometheusCalls).toHaveLength(1);
+  });
+
+  it("does not push when configured providers produce no actual metrics", async () => {
+    const mockFetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> =>
+      providerResponse(input),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    await worker.scheduled(scheduledEvent, openAiOnlyEnv, ctx);
+
+    const prometheusCalls = mockFetch.mock.calls.filter(([input]) =>
+      urlOf(input).includes("/v1/metrics"),
+    );
+    expect(prometheusCalls).toHaveLength(0);
+  });
+
+  it("uses the scheduled time for the OpenAI history window", async () => {
+    const mockFetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> =>
+      providerResponse(input),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+    await worker.scheduled(scheduledEvent, openAiOnlyEnv, ctx);
+
+    const openAiCalls = mockFetch.mock.calls.filter(([input]) =>
+      urlOf(input).includes("api.openai.com"),
+    );
+    expect(openAiCalls).toHaveLength(2);
+    for (const [input] of openAiCalls) {
+      const requestUrl = new URL(urlOf(input));
+      expect(requestUrl.searchParams.get("start_time")).toBe("1767139200");
+      expect(requestUrl.searchParams.get("end_time")).toBe("1767225600");
+    }
   });
 
   it("skips OpenAI fetching when history days is invalid", async () => {

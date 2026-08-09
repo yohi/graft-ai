@@ -58,14 +58,19 @@ const worker: ProviderMetricsWorker = {
     const openaiResult = settledValue("OpenAI API", openai);
     const codexResult = settledValue("Codex", codex);
     const openCodeGoResult = settledValue("OpenCodeGo", openCodeGo);
+    const hasOpenAIMetrics =
+      openaiResult !== null && (openaiResult.costs.length > 0 || openaiResult.tokens.length > 0);
+    const hasMetrics = hasOpenAIMetrics || codexResult !== null || openCodeGoResult !== null;
 
-    if (openaiResult === null && codexResult === null && openCodeGoResult === null) {
-      console.error("Provider metrics: No metrics to push (all providers skipped or failed)");
+    if (!hasMetrics) {
+      console.error(
+        "Provider metrics: No metrics to push (all providers skipped, failed, or empty)",
+      );
       return;
     }
 
     const pushResult = await pushProviderMetrics(env, {
-      ...(openaiResult === null ? {} : { openai: openaiResult }),
+      ...(hasOpenAIMetrics ? { openai: openaiResult } : {}),
       ...(codexResult === null ? {} : { codex: codexResult }),
       ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
     });

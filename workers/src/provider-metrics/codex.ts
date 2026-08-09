@@ -1,4 +1,5 @@
 import type { CodexFetchResult } from "./types";
+import { getWithRetry } from "../http-retry";
 
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
@@ -110,10 +111,13 @@ async function fetchResetCredits(
   fetchFn: typeof fetch,
 ): Promise<CodexFetchResult["resetCredits"]> {
   try {
-    const response = await fetchFn(RESET_CREDITS_URL, {
-      method: "GET",
+    const response = await getWithRetry({
+      url: RESET_CREDITS_URL,
       headers: { ...headers, "OpenAI-Beta": "codex-1", originator: "Codex Desktop" },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      fetchFn,
+      logLabel: "Codex reset credits fetch",
+      isRetryableStatus: (status) => status === 429 || status >= 500,
+      perAttemptTimeoutMs: TIMEOUT_MS,
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
@@ -142,10 +146,13 @@ export async function fetchCodexMetrics(
     headers["ChatGPT-Account-Id"] = accountId;
   }
 
-  const response = await fetchFn(USAGE_URL, {
-    method: "GET",
+  const response = await getWithRetry({
+    url: USAGE_URL,
     headers,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    fetchFn,
+    logLabel: "Codex usage fetch",
+    isRetryableStatus: (status) => status === 429 || status >= 500,
+    perAttemptTimeoutMs: TIMEOUT_MS,
   });
 
   if (!response.ok) {

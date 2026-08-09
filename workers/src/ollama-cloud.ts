@@ -6,9 +6,9 @@ const DEFAULT_SESSION_INTERVAL_SECONDS = 18000;
 const DEFAULT_WEEKLY_INTERVAL_SECONDS = 604800;
 
 function parseInterval(value: string | undefined, defaultValue: number): number {
-  if (!value) return defaultValue;
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
+  if (value === undefined) return defaultValue;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid interval: ${value}`);
   }
   return parsed;

@@ -371,13 +371,38 @@ register_secret "GRAFANA_CLOUD_LOKI_USERNAME"       "$GRAFANA_LOKI_USERNAME"    
 register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"      "$TAIL_WRANGLER"
 register_secret "PROXY_SECRET"                      "$PROXY_SECRET"                           "$PROXY_WRANGLER"
 
-# Ollama Cloud scheduled Worker の必須設定。Prometheus 用 token は Loki 用と
-# 権限が異なる場合があるため、明示的に別変数で受け取る（同じ token も可）。
-GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN="${GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN:-${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}}"
 ask OLLAMA_CLOUD_RESET_ANCHOR_ISO "Ollama Cloud の最後に確認した reset 時刻 (ISO 8601、例: 2026-01-01T00:00:00Z)"
 ask GRAFANA_CLOUD_PROMETHEUS_URL "Grafana Cloud Prometheus OTLP URL (例: https://otlp-gateway-prod-us-central1.grafana.net/otlp)"
 ask GRAFANA_CLOUD_PROMETHEUS_USERNAME "Grafana Cloud Prometheus の instance ID"
 ask GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN "Grafana Cloud Prometheus Access Policy token" secret
+
+if ! node - "$OLLAMA_CLOUD_RESET_ANCHOR_ISO" <<'NODE'
+const value = process.argv[2];
+const match = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+if (match === null) process.exit(1);
+const year = Number(match[1]);
+const month = Number(match[2]);
+const day = Number(match[3]);
+const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+if (month < 1 || month > 12 || day < 1 || day > daysInMonth || !Number.isFinite(Date.parse(value))) {
+  process.exit(1);
+}
+NODE
+then
+  die "OLLAMA_CLOUD_RESET_ANCHOR_ISO は有効な ISO 8601 timestamp である必要があります。"
+fi
+
+if ! node - "$GRAFANA_CLOUD_PROMETHEUS_URL" <<'NODE'
+try {
+  if (new URL(process.argv[2]).protocol !== "https:") process.exit(1);
+} catch {
+  process.exit(1);
+}
+NODE
+then
+  die "GRAFANA_CLOUD_PROMETHEUS_URL は HTTPS URL である必要があります。"
+fi
+
 register_secret "OLLAMA_CLOUD_RESET_ANCHOR_ISO"           "$OLLAMA_CLOUD_RESET_ANCHOR_ISO"              "$OLLAMA_WRANGLER"
 register_secret "GRAFANA_CLOUD_PROMETHEUS_URL"            "$GRAFANA_CLOUD_PROMETHEUS_URL"               "$OLLAMA_WRANGLER"
 register_secret "GRAFANA_CLOUD_PROMETHEUS_USERNAME"      "$GRAFANA_CLOUD_PROMETHEUS_USERNAME"         "$OLLAMA_WRANGLER"
@@ -397,6 +422,7 @@ PROXY_SECRET=${PROXY_SECRET}
 OLLAMA_CLOUD_RESET_ANCHOR_ISO=${OLLAMA_CLOUD_RESET_ANCHOR_ISO}
 GRAFANA_CLOUD_PROMETHEUS_URL=${GRAFANA_CLOUD_PROMETHEUS_URL}
 GRAFANA_CLOUD_PROMETHEUS_USERNAME=${GRAFANA_CLOUD_PROMETHEUS_USERNAME}
+GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN=${GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN}
 EOF
 chmod 600 "$DEV_VARS"
 success ".dev.vars を書き出しました: ${DEV_VARS}"
@@ -465,10 +491,30 @@ if [[ -f "$OLLAMA_DASHBOARD_JSON" ]]; then
 fi
 
 if [[ -f "$OLLAMA_ALERT_RULES_JSON" ]]; then
-  GCX_ORG_ID=$(gcx api /api/user -o json 2>/dev/null | jq -r '.orgId // 1' || echo "1")
+  if ! jq -e 'type == "array" and length > 0' "$OLLAMA_ALERT_RULES_JSON" >/dev/null 2>&1; then
+    die "Ollama Cloud Alert Rule JSON は1件以上を含む配列である必要があります: ${OLLAMA_ALERT_RULES_JSON}"
+  fi
+
+  if ! GCX_ORG_ID=$(gcx api /api/org/ -o json 2>/dev/null | jq -er '.id'); then
+    die "Grafana organization ID を /api/org/ から取得できませんでした。Alert Rule の登録を中止します。"
+  fi
+
+  EXISTING_ALERT_RULES=$(gcx api /api/v1/provisioning/alert-rules -o json 2>/dev/null || echo "[]")
   while IFS= read -r rule; do
     rule=$(jq --argjson orgId "$GCX_ORG_ID" '.orgId = $orgId' <<< "$rule")
-    if gcx api /api/v1/provisioning/alert-rules -d "$rule" -o json >/dev/null 2>&1; then
+    rule_uid=$(jq -r '.uid // empty' <<< "$rule")
+    if [[ -z "$rule_uid" ]]; then
+      warn "Ollama Cloud Alert Rule に uid がないため登録をスキップします。"
+      continue
+    fi
+
+    if jq -e --arg uid "$rule_uid" 'any(.[]?; .uid == $uid)' <<< "$EXISTING_ALERT_RULES" >/dev/null 2>&1; then
+      api_args=("/api/v1/provisioning/alert-rules/${rule_uid}" -X PUT)
+    else
+      api_args=(/api/v1/provisioning/alert-rules -X POST)
+    fi
+
+    if gcx api "${api_args[@]}" -d "$rule" -o json >/dev/null 2>&1; then
       success "Ollama Cloud Alert Rule を登録しました。"
     else
       warn "Ollama Cloud Alert Rule の登録に失敗しました。Grafana Alerting API を確認してください。"

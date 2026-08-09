@@ -22,7 +22,8 @@ export function validatePrometheusConfig(
     throw new Error("Prometheus configuration requires an HTTPS URL");
   }
 
-  return `${normalizedEndpoint.replace(/\/+$/, "")}/v1/metrics`;
+  parsedEndpoint.pathname = `${parsedEndpoint.pathname.replace(/\/+$/, "")}/v1/metrics`;
+  return parsedEndpoint.toString();
 }
 
 function sleep(ms: number): Promise<void> {

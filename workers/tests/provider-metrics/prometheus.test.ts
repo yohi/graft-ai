@@ -74,6 +74,22 @@ describe("pushProviderMetrics", () => {
     expect(headers["Authorization"]).toBe(`Basic ${btoa("123456:test-token")}`);
   });
 
+  it("appends the metrics path before query parameters and fragments", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    await pushProviderMetrics(
+      {
+        ...env,
+        GRAFANA_CLOUD_PROMETHEUS_URL: "https://metrics.example.com/otlp?tenant=demo#metrics",
+      },
+      { codex: sampleCodex },
+      mockFetch,
+    );
+
+    expect(mockFetch.mock.calls[0]![0]).toBe(
+      "https://metrics.example.com/otlp/v1/metrics?tenant=demo#metrics",
+    );
+  });
+
   it("includes openai_api_cost_usd metric when openai result provided", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
     await pushProviderMetrics(env, { openai: sampleOpenAI }, mockFetch);

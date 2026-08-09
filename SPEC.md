@@ -75,6 +75,7 @@ Loki.
 | Ollama Cloud Worker | Wrangler (`workers/src/ollama-cloud.ts`) | Derives reset metrics from a strict ISO 8601 anchor and pushes OTLP metrics. |
 | Ollama Cloud alerts | Grafana Alerting API (`grafana/alerts/`) | Fires session/weekly reset alerts from Prometheus metrics. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
+| Ollama dashboard | `grafana/dashboards/graft-ai-ollama-cloud.json` | Ollama Cloud reset metrics dashboard imported via gcx API. |
 | Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)

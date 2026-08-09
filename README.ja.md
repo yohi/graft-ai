@@ -93,9 +93,14 @@ cd ..
 make deploy-ollama
 ```
 
-`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601 時刻で指定し、Prometheus
-エンドポイントは HTTPS を使用してください。`scripts/setup.sh` はこれらの
-secret 登録、Worker デプロイ、Ollama ダッシュボードの import、
+`GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` には Prometheus 送信に必要な
+`metrics:write` scope が必要です。`logs:write` のみを持つ Loki 専用 token
+ではメトリクス送信に失敗します。Loki token とは別の Prometheus token を
+使用するか、共有 token に `logs:write` と `metrics:write` の両方を付与して
+ください。`scripts/setup.sh` は Prometheus token を別途入力して Ollama
+Worker に登録します。`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
+時刻、Prometheus エンドポイントは HTTPS で指定してください。スクリプトは
+さらに Ollama ダッシュボードの import と
 `grafana/alerts/graft-ai-ollama-cloud-rules.json` の Alert Rule 登録を行います。
 
 ## 📁 ディレクトリ構成

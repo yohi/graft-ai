@@ -95,10 +95,15 @@ cd ..
 make deploy-ollama
 ```
 
-`OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp. The
-Prometheus endpoint must use HTTPS. `scripts/setup.sh` registers these
-secrets, deploys the Worker, imports the Ollama dashboard, and provisions the
-two Grafana alert rules in `grafana/alerts/graft-ai-ollama-cloud-rules.json`.
+`GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` must include the `metrics:write` scope for
+Prometheus delivery. A Loki-only token with `logs:write` will fail to deliver
+metrics. Use a separate Prometheus token from the Loki token, or use one shared
+token containing both `logs:write` and `metrics:write` scopes. `scripts/setup.sh`
+asks for the Prometheus token separately, registers it for the Ollama Worker,
+deploys the Worker, imports the Ollama dashboard, and provisions the two
+Grafana alert rules in `grafana/alerts/graft-ai-ollama-cloud-rules.json`.
+`OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp and the
+Prometheus endpoint must use HTTPS.
 
 ## 📁 Directory Layout
 

@@ -87,7 +87,7 @@ describe("fetchOpenCodeGoMetrics", () => {
       return new Response(MOCK_ZEN_HTML, { status: 200 });
     });
 
-    await fetchOpenCodeGoMetrics("session=abc", "", mockFetch);
+    await fetchOpenCodeGoMetrics("session=abc", "   ", mockFetch);
 
     const urls = (mockFetch.mock.calls as [string, RequestInit][]).map(([url]) => url);
     expect(urls.some((url) => url.includes("def399"))).toBe(true);

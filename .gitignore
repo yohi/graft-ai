@@ -15,3 +15,6 @@ terraform/**/terraform.tfvars
 
 # Agent planning workspace
 .omo/
+
+# Justice MCP runtime state
+.justice/

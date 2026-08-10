@@ -68,16 +68,22 @@ graft-ai/
 | `TF_API_TOKEN` | GitHub Secrets | Terraform Cloud API 認証 |
 | `CLOUDFLARE_API_TOKEN` | GitHub Secrets | Wrangler および Terraform Cloudflare provider 認証 |
 | `CLOUDFLARE_ACCOUNT_ID` | GitHub Secrets | Wrangler および Terraform Cloudflare provider |
+| `GRAFANA_CLOUD_LOKI_URL` | GitHub Secrets | Cloudflare Logpush Terraform の Loki destination |
+| `GRAFANA_CLOUD_LOKI_USERNAME` | GitHub Secrets | Cloudflare Logpush Terraform の Loki tenant ID |
+| `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | GitHub Secrets | Cloudflare Logpush Terraform の Loki `logs:write` token |
 
 `CLOUDFLARE_API_TOKEN` は account-scope の `Logs: Write`、`Workers Scripts: Edit`、
 `AI Gateway: Read`、`Memberships: Read` を含む最小権限 token とする。
 `TF_API_TOKEN` は HCP Terraform の workspace 操作用であり、Cloudflare API token
-とは別の secret とする。
+とは別の secret とする。`TF_API_TOKEN` だけでは local Terraform CLI の入力変数や
+provider 認証情報を満たせないため、各 job へ必要な値を明示的に注入する。
 
 Terraform の sensitive 変数は、後述する local execution mode では GitHub Secrets
 から `TF_VAR_*` として各 job に注入する。HCP Terraform Variables は state と
 workspace の管理情報として保持するが、GitHub Actions の local run に自動注入
-される前提にはしない。
+される前提にはしない。特に Cloudflare 側の `terraform/` には
+`TF_VAR_grafana_cloud_loki_url`、`TF_VAR_grafana_cloud_loki_username`、
+`TF_VAR_grafana_cloud_access_policy_token` も必要である。
 
 fork および Dependabot の Pull Request では通常の repository Secrets が利用できない
 場合がある。Secrets 不要の test / typecheck / fmt / Terraform validate workflow と、
@@ -107,9 +113,27 @@ Cloudflare Workers 5 種と Terraform 2 ディレクトリを対象とする。
 |---------|-------------|----------|
 | Pull Request 作成・更新 | `ci.yml` | テスト / 型検査 / fmt 検査 / Terraform plan（2 workspace） |
 | `master` ブランチ push | `deploy.yml` | Worker 並列デプロイ / Terraform apply / Wrangler secrets 更新 / 検証 |
-| 手動 | `deploy.yml` | `workflow_dispatch` でも本番デプロイ可能（将来の選択肢） |
+| 手動 | `deploy.yml` | `workflow_dispatch` で `master` ref を選択した場合のみ本番デプロイ可能 |
 
-### 4.3 環境戦略
+### 4.3 本番デプロイ保護
+
+本番デプロイは GitHub Actions の `production` environment を経由させる。
+`deploy.yml` の全デプロイ関連ジョブには `environment: production` と
+`if: github.ref == 'refs/heads/master'` を設定し、`workflow_dispatch` で
+`master` 以外の ref が選択された場合はジョブを実行しない。
+
+リポジトリ管理者は、ワークフローを有効化する前に GitHub repository settings の
+**Environments → production** で次を設定する。
+
+- **Required reviewers** に、本番デプロイを承認できる maintainer を 1 名以上登録する。
+- **Deployment branches and tags** を `Selected branches and tags` にし、`master` のみを許可する。
+- 必要に応じて、承認待ち時間を制御する wait timer と、環境へアクセス可能な repository roles を設定する。
+
+`environment: production` の記述だけでは承認やブランチ制限は発生しないため、上記の
+GitHub 側設定を本番デプロイの必須前提とする。設定後は、environment の存在、Required
+reviewers、`master` の deployment branch policy を GitHub UI または API で確認する。
+
+### 4.4 環境戦略
 
 現状は単一環境（production）とし、Wrangler / Terraform の設定に環境名を埋め込まず、将来の分離に備える。
 
@@ -117,7 +141,7 @@ Cloudflare Workers 5 種と Terraform 2 ディレクトリを対象とする。
 - Terraform workspace 名に環境接頭辞を持たせる（例：`graft-ai-cloudflare`、`graft-ai-grafana`）
 - 将来 staging を追加する場合は、GitHub Actions ジョブをマトリックス化し、workspace 名を切り替える
 
-### 4.4 Terraform State 管理
+### 4.5 Terraform State 管理
 
 **Terraform Cloud（HCP Terraform）を採用する。**
 
@@ -132,17 +156,22 @@ workspace は **local execution mode** とし、GitHub Actions ランナー上�
 各 Terraform job は同じ変数契約を使用する。Cloudflare 側の job には GitHub
 Secrets から `TF_VAR_cloudflare_account_id`、`TF_VAR_cloudflare_api_token`、
 `TF_VAR_workers_subdomain`、`TF_VAR_origin_secret`、`TF_VAR_rsa_private_key_pem` を
-注入し、Cloudflare provider 用の `CLOUDFLARE_API_TOKEN` も同じ token に設定する。
+注入する。さらに `GRAFANA_CLOUD_LOKI_URL`、`GRAFANA_CLOUD_LOKI_USERNAME`、
+`GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` から、それぞれ
+`TF_VAR_grafana_cloud_loki_url`、`TF_VAR_grafana_cloud_loki_username`、
+`TF_VAR_grafana_cloud_access_policy_token` を設定する。Cloudflare provider 用の
+`CLOUDFLARE_API_TOKEN` も同じ token に設定する。
 `logpush_dataset`、`worker_script_name`、`logpush_job_name`、upload 制限値は非 secret
 の repository variable または workspace 固有の `TF_VAR_*` として明示的に設定する。
 Grafana 側の job には GitHub Secrets から `TF_VAR_grafana_cloud_api_key` と
 `TF_VAR_grafana_stack_slug` を注入する。HCP Terraform の Variables は state / workspace
 管理用に保持するが、local execution の Terraform CLI へ自動注入される前提にはしない。
 Grafana の Loki output は `update-wrangler-secrets` が取得して Tail Worker に渡す。
-`terraform-apply-cloudflare` は Grafana の output を参照せず、
-`terraform-apply-grafana` に依存しない。
+`terraform-apply-cloudflare` は Grafana Terraform の output を参照せず、
+`terraform-apply-grafana` に依存しない。Cloudflare 側の Terraform に必要な Loki URL、
+username、Access Policy token は GitHub Secrets から直接注入する。
 
-### 4.5 Wrangler Secrets 管理
+### 4.6 Wrangler Secrets 管理
 
 Wrangler secrets の登録値は以下の 2 系統に分類する。
 
@@ -233,6 +262,7 @@ jobs:
     concurrency:
       group: graft-ai-terraform-apply
       cancel-in-progress: false
+    # GitHub Secrets → TF_VAR_* と CLOUDFLARE_API_TOKEN を env に設定し、
     # terraform init -input=false / terraform apply -auto-approve for terraform/
 
   terraform-apply-grafana:
@@ -242,13 +272,14 @@ jobs:
     concurrency:
       group: graft-ai-terraform-apply
       cancel-in-progress: false
+    # GitHub Secrets → TF_VAR_grafana_cloud_api_key / TF_VAR_grafana_stack_slug を env に設定し、
     # terraform init -input=false / terraform apply -auto-approve for terraform/grafana/
 
   update-wrangler-secrets:
     needs: [terraform-apply-grafana]
     if: github.ref == 'refs/heads/master'
     environment: production
-    # checkout, setup Terraform CLI, set TF_API_TOKEN, then
+    # checkout, setup Terraform CLI, set TF_API_TOKEN and required TF_VAR_* values, then
     # terraform -chdir=terraform/grafana init -input=false before terraform output -raw
     # and wrangler secret put with each worker's explicit --config
 
@@ -284,8 +315,12 @@ Wrangler deploy は並列実行可能であるが、同一 Worker 名に対す�
 
 | Workspace | パス | Execution mode | Variables |
 |-----------|------|----------------|-----------|
-| `graft-ai-cloudflare` | `terraform/` | local | `cloudflare_account_id`, `cloudflare_api_token`, `workers_subdomain`, `origin_secret`, `rsa_private_key_pem` |
+| `graft-ai-cloudflare` | `terraform/` | local | `cloudflare_account_id`, `cloudflare_api_token`, `grafana_cloud_loki_url`, `grafana_cloud_loki_username`, `grafana_cloud_access_policy_token`, `workers_subdomain`, `origin_secret`, `rsa_private_key_pem` |
 | `graft-ai-grafana` | `terraform/grafana/` | local | `grafana_cloud_api_key`, `grafana_stack_slug` |
+
+Workspace Variables は workspace の管理情報としても同じ変数名で登録するが、local
+execution の GitHub Actions runner には自動注入されない。したがって、ワークフローでは
+GitHub Secrets を `TF_VAR_*` と provider 環境変数へ明示的にマッピングする。
 
 ### 6.2 Backend 設定（versions.tf）
 

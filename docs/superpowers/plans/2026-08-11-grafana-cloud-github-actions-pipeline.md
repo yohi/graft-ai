@@ -4,7 +4,7 @@
 
 **Goal:** Pull Request 時にはテスト・型検査・fmt・Terraform plan を自動実行し、`master` push 時には 5 種の Cloudflare Workers と Terraform リソースを GitHub Actions 経由で自動デプロイするパイプラインを構築する。
 
-**Architecture:** Terraform state は HCP Terraform（Terraform Cloud）の local execution mode で一元管理し、GitHub Actions ランナー上で `terraform init` / `plan` / `apply` / `output` を実行する。Wrangler deploy は並列実行し、Terraform apply は workflow / job レベルの concurrency で直列化する。Terraform 出力・GitHub Secrets から取得した sensitive 値を `::add-mask::` した上で Wrangler secrets を更新する。
+**Architecture:** Terraform state は HCP Terraform（Terraform Cloud）の local execution mode で一元管理し、GitHub Actions ランナー上で `terraform init` / `plan` / `apply` / `output` を実行する。Wrangler deploy は並列実行し、Terraform apply は workflow / job レベルの concurrency で直列化する。Terraform 出力・GitHub Secrets から取得した sensitive 値を `::add-mask::` した上で Wrangler secrets を更新する。Grafana outputs は job outputs で secret を渡さず、Terraform apply job が短期 artifact に保存し、secret 更新 job が取得する。
 
 **Tech Stack:** GitHub Actions, HCP Terraform, Terraform Cloud backend, Cloudflare Wrangler, Node.js/npm, Bash.
 
@@ -201,6 +201,8 @@ git commit -m "chore(makefile): add grafana terraform targets for local parity"
 - [ ] HCP Terraform organization 名 `graft-ai` を実際の organization 名に置き換えたことを確認
 - [ ] HCP Terraform 上に `graft-ai-cloudflare` と `graft-ai-grafana` workspace を作成済み（local execution mode）
 - [ ] `TF_API_TOKEN` が workspace 操作用に発行済み
+- [ ] Grafana token の有効期限 `8760h` を確認し、期限前 rotation 手順を運用に登録済み
+- [ ] Grafana token rotation は「新 token を Terraform で発行 → Terraform output から取得 → Wrangler と Worker secrets を更新・検証 → 旧 token を revoke」の順で実施し、初回発行だけでなく期限前にも繰り返す
 - [ ] PR 1 を作成（base: `master`, head: `feat/tf-cloud-backend`）
 
 ---
@@ -282,18 +284,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [checks]
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
-    environment: production
     env:
-      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      TF_VAR_grafana_cloud_loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
-      TF_VAR_grafana_cloud_loki_username: ${{ secrets.GRAFANA_CLOUD_LOKI_USERNAME }}
-      TF_VAR_grafana_cloud_access_policy_token: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN }}
-      TF_VAR_origin_secret: ${{ secrets.ORIGIN_SECRET }}
-      TF_VAR_rsa_private_key_pem: ${{ secrets.RSA_PRIVATE_KEY_PEM }}
+      TF_API_TOKEN: ${{ secrets.TF_READONLY_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_READONLY_API_TOKEN }}
       TF_VAR_workers_subdomain: ${{ vars.WORKERS_SUBDOMAIN }}
       TF_VAR_logpush_dataset: ${{ vars.LOGPUSH_DATASET || 'ai_gateway_events' }}
       TF_VAR_worker_script_name: ${{ vars.WORKER_SCRIPT_NAME || 'graft-ai-aig-logpush' }}
@@ -321,10 +316,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [checks]
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
-    environment: production
     env:
-      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
-      TF_VAR_grafana_cloud_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+      TF_API_TOKEN: ${{ secrets.TF_READONLY_API_TOKEN }}
+      TF_VAR_grafana_cloud_api_key: ${{ secrets.GRAFANA_READONLY_API_KEY }}
       TF_VAR_grafana_stack_slug: ${{ vars.GRAFANA_STACK_SLUG }}
     steps:
       - name: Checkout
@@ -350,17 +344,20 @@ jobs:
 以下の Secrets / Variables をリポジトリに登録済みであることを確認。
 
 Secrets:
-- `TF_API_TOKEN`
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
+- `TF_API_TOKEN`（production apply 用）
+- `TF_READONLY_API_TOKEN`（PR plan 用）
+- `CLOUDFLARE_API_TOKEN`（production deploy/apply 用）
+- `CLOUDFLARE_READONLY_API_TOKEN`（PR plan 用）
 - `GRAFANA_CLOUD_LOKI_URL`
 - `GRAFANA_CLOUD_LOKI_USERNAME`
 - `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN`
 - `ORIGIN_SECRET`
 - `RSA_PRIVATE_KEY_PEM`
-- `GRAFANA_CLOUD_API_KEY`
+- `GRAFANA_READONLY_API_KEY`（PR plan 用）
+- `GRAFANA_CLOUD_API_KEY`（production apply 用）
 
 Repository Variables:
+- `CLOUDFLARE_ACCOUNT_ID`
 - `WORKERS_SUBDOMAIN`
 - `GRAFANA_STACK_SLUG`
 - `LOGPUSH_DATASET`（省略時デフォルト）
@@ -388,7 +385,7 @@ git commit -m "ci: add pull-request checks and terraform plan workflow"
 - Create: `scripts/ci-update-wrangler-secrets.sh`
 
 **Interfaces:**
-- Consumes: env vars `GRAFANA_LOKI_URL`, `GRAFANA_LOKI_USERNAME`, `GRAFANA_LOKI_TOKEN`, `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`, `PROXY_SECRET`, plus `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` for Wrangler auth
+- Consumes: env vars `GRAFANA_LOKI_URL`, `GRAFANA_LOKI_USERNAME`, `GRAFANA_LOKI_TOKEN`, `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`, `PROXY_SECRET`, plus `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` for Wrangler auth; Grafana outputs are loaded from the short-lived `grafana-outputs.env` artifact
 - Produces: updated Wrangler secrets on `graft-ai-aig-logpush`, `graft-ai-aig-tail`, `graft-ai-aig-proxy`
 
 - [ ] **Step 1: スクリプトを作成**
@@ -410,33 +407,42 @@ printf '::add-mask::%s\n' "${RSA_PRIVATE_KEY_PEM:-}"
 printf '::add-mask::%s\n' "${PROXY_SECRET:-}"
 
 register_secret() {
-  local name="$1"
-  local value="$2"
-  local config="$3"
+  local config="$1"
+  local secrets_file="$2"
 
-  if [[ -z "$value" ]]; then
-    echo "[ERROR] secret value for $name is empty" >&2
+  [[ -s "$secrets_file" ]] || {
+    echo "[ERROR] secrets file for $config is empty or missing" >&2
     exit 1
-  fi
+  }
 
-  printf '%s' "$value" | npx wrangler secret put "$name" --config "$config"
+  npx wrangler secret bulk "$secrets_file" --config "$config"
 }
 
-# Loki secrets: Tail Worker + Logpush Worker
-register_secret "GRAFANA_CLOUD_LOKI_URL" "$GRAFANA_LOKI_URL" "wrangler.tail.jsonc"
-register_secret "GRAFANA_CLOUD_LOKI_USERNAME" "$GRAFANA_LOKI_USERNAME" "wrangler.tail.jsonc"
-register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_LOKI_TOKEN" "wrangler.tail.jsonc"
+umask 077
+TAIL_SECRETS_FILE=$(mktemp)
+LOGPUSH_SECRETS_FILE=$(mktemp)
+PROXY_SECRETS_FILE=$(mktemp)
+trap 'rm -f "$TAIL_SECRETS_FILE" "$LOGPUSH_SECRETS_FILE" "$PROXY_SECRETS_FILE"' EXIT
 
-register_secret "GRAFANA_CLOUD_LOKI_URL" "$GRAFANA_LOKI_URL" "wrangler.jsonc"
-register_secret "GRAFANA_CLOUD_LOKI_USERNAME" "$GRAFANA_LOKI_USERNAME" "wrangler.jsonc"
-register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_LOKI_TOKEN" "wrangler.jsonc"
+cat > "$TAIL_SECRETS_FILE" <<EOF
+GRAFANA_CLOUD_LOKI_URL=${GRAFANA_LOKI_URL}
+GRAFANA_CLOUD_LOKI_USERNAME=${GRAFANA_LOKI_USERNAME}
+GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=${GRAFANA_LOKI_TOKEN}
+EOF
+cat > "$LOGPUSH_SECRETS_FILE" <<EOF
+GRAFANA_CLOUD_LOKI_URL=${GRAFANA_LOKI_URL}
+GRAFANA_CLOUD_LOKI_USERNAME=${GRAFANA_LOKI_USERNAME}
+GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=${GRAFANA_LOKI_TOKEN}
+ORIGIN_SECRET=${ORIGIN_SECRET}
+RSA_PRIVATE_KEY_PEM=${RSA_PRIVATE_KEY_PEM}
+EOF
+cat > "$PROXY_SECRETS_FILE" <<EOF
+PROXY_SECRET=${PROXY_SECRET}
+EOF
 
-# Logpush-only secrets
-register_secret "ORIGIN_SECRET" "$ORIGIN_SECRET" "wrangler.jsonc"
-register_secret "RSA_PRIVATE_KEY_PEM" "$RSA_PRIVATE_KEY_PEM" "wrangler.jsonc"
-
-# Proxy secret
-register_secret "PROXY_SECRET" "$PROXY_SECRET" "wrangler.proxy.jsonc"
+register_secret "wrangler.tail.jsonc" "$TAIL_SECRETS_FILE"
+register_secret "wrangler.jsonc" "$LOGPUSH_SECRETS_FILE"
+register_secret "wrangler.proxy.jsonc" "$PROXY_SECRETS_FILE"
 
 echo "Wrangler secrets updated."
 ```
@@ -468,7 +474,7 @@ git commit -m "feat(scripts): add ci helper to update wrangler secrets from terr
 - Create: `scripts/ci-verify-deployment.sh`
 
 **Interfaces:**
-- Consumes: env vars `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `WORKERS_SUBDOMAIN`, `PROXY_SECRET`, `GRAFANA_LOKI_URL`, `GRAFANA_LOKI_USERNAME`, `GRAFANA_LOKI_TOKEN`, optional `LOGPUSH_JOB_ID`
+- Consumes: env vars `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `WORKERS_SUBDOMAIN`, `PROXY_SECRET`, `GRAFANA_LOKI_URL`, `GRAFANA_LOKI_USERNAME`, `GRAFANA_LOKI_TOKEN`, optional `LOGPUSH_JOB_ID`; uses `X-Request-ID` as the telemetry correlation ID and queries Loki `query_range`
 - Produces: exit 0 if all verifications pass
 
 - [ ] **Step 1: スクリプトを作成**
@@ -485,47 +491,58 @@ fail() {
 }
 
 echo "Checking Tail Worker script exists..."
-curl -s "${API_BASE}/workers/scripts/graft-ai-aig-tail" \
+curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "${API_BASE}/workers/scripts/graft-ai-aig-tail" \
   -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
   -H "Content-Type: application/json" \
-  | jq -e '.success' >/dev/null || fail "Tail Worker not found"
+  | grep -Eq '^200$' || fail "Tail Worker not found"
 
 echo "Checking proxy tail consumer configuration..."
-curl -s "${API_BASE}/workers/scripts/graft-ai-aig-proxy/subdomain" \
+curl -sS --connect-timeout 5 --max-time 15 --retry 3 --retry-delay 2 --retry-max-time 20 "${API_BASE}/workers/scripts/graft-ai-aig-proxy/script-settings" \
   -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
   -H "Content-Type: application/json" \
-  > /tmp/proxy_subdomain.json
-jq -e '.success' /tmp/proxy_subdomain.json >/dev/null || fail "proxy subdomain lookup failed"
+  > /tmp/proxy_script_settings.json
+jq -e '.success and any(.result.tail_consumers[]?; .service == "graft-ai-aig-tail")' /tmp/proxy_script_settings.json >/dev/null \
+  || fail "proxy tail consumer configuration missing"
 
 PROXY_URL="https://graft-ai-aig-proxy.${WORKERS_SUBDOMAIN}.workers.dev"
 echo "Sending test request to proxy: ${PROXY_URL}"
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+CORRELATION_ID="graft-ai-ci-$(date +%s)-${RANDOM}"
+HTTP_STATUS=$(curl -sS --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" \
   -X POST "${PROXY_URL}/workers-ai/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
   -H "X-Proxy-Secret: ${PROXY_SECRET}" \
-  -d '{"model":"@cf/meta/llama-3.2-1b-instruct","messages":[{"role":"user","content":"graft-ai ci ping"}]}' \
+  -H "X-Request-ID: ${CORRELATION_ID}" \
+  -d "{\"model\":\"@cf/meta/llama-3.2-1b-instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"graft-ai ci ping\"}]}" \
   || echo "000")
 
-# A 401/403 from the upstream AI Gateway is acceptable for connectivity check;
-# 5xx or network failure is not.
-if [[ "$HTTP_STATUS" =~ ^5[0-9][0-9]$ || "$HTTP_STATUS" == "000" ]]; then
+# Only documented successful or authentication responses are acceptable.
+if [[ ! "$HTTP_STATUS" =~ ^2[0-9][0-9]$ && "$HTTP_STATUS" != "401" && "$HTTP_STATUS" != "403" ]]; then
   fail "Proxy request failed with HTTP ${HTTP_STATUS}"
 fi
 
-echo "Proxy returned HTTP ${HTTP_STATUS}; waiting 10s for Loki ingestion..."
-sleep 10
-
-echo "Querying Loki labels..."
-LOKI_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-  -u "${GRAFANA_LOKI_USERNAME}:${GRAFANA_LOKI_TOKEN}" \
-  "${GRAFANA_LOKI_URL}/loki/api/v1/label/env/values" \
-  || echo "000")
-[[ "$LOKI_STATUS" == "200" ]] || fail "Loki label query returned HTTP ${LOKI_STATUS}"
+echo "Proxy returned HTTP ${HTTP_STATUS}; polling Loki for ${CORRELATION_ID}..."
+deadline=$((SECONDS + 60))
+found=false
+while (( SECONDS < deadline )); do
+  LOKI_RESPONSE=$(curl -sS --connect-timeout 5 --max-time 15 --retry 2 --retry-delay 1 --retry-max-time 10 \
+    -w '\n%{http_code}' -u "${GRAFANA_LOKI_USERNAME}:${GRAFANA_LOKI_TOKEN}" \
+    --get --data-urlencode "query={request_id=\"${CORRELATION_ID}\"}" \
+    --data-urlencode "limit=10" \
+    "${GRAFANA_LOKI_URL}/loki/api/v1/query_range" || printf '\n000')
+  LOKI_STATUS="${LOKI_RESPONSE##*$'\n'}"
+  LOKI_BODY="${LOKI_RESPONSE%$'\n'*}"
+  [[ "$LOKI_STATUS" == "200" ]] || fail "Loki query returned HTTP ${LOKI_STATUS}"
+  if jq -e --arg id "$CORRELATION_ID" 'any(.data.result[]?.values[]?; (.[1] | fromjson? | .request_id) == $id)' <<<"$LOKI_BODY" >/dev/null; then
+    found=true
+    break
+  fi
+  sleep 5
+done
+[[ "$found" == true ]] || fail "Loki did not contain matching request ${CORRELATION_ID} before timeout"
 
 if [[ -n "${LOGPUSH_JOB_ID:-}" ]]; then
   echo "Checking Logpush job ${LOGPUSH_JOB_ID}..."
-  curl -s "${API_BASE}/logpush/jobs/${LOGPUSH_JOB_ID}" \
+  curl -sS --connect-timeout 5 --max-time 15 --retry 3 --retry-delay 2 --retry-max-time 20 "${API_BASE}/logpush/jobs/${LOGPUSH_JOB_ID}" \
     -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
     -H "Content-Type: application/json" \
     | jq -e '.success and .result.enabled == true' >/dev/null \
@@ -784,10 +801,6 @@ jobs:
       TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
       TF_VAR_grafana_cloud_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
       TF_VAR_grafana_stack_slug: ${{ vars.GRAFANA_STACK_SLUG }}
-    outputs:
-      loki_url: ${{ steps.grafana_outputs.outputs.loki_url }}
-      loki_username: ${{ steps.grafana_outputs.outputs.loki_username }}
-      loki_token: ${{ steps.grafana_outputs.outputs.loki_token }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -816,22 +829,28 @@ jobs:
           echo "::add-mask::${LOKI_URL}"
           echo "::add-mask::${LOKI_USER}"
           echo "::add-mask::${LOKI_TOKEN}"
-          echo "loki_url=${LOKI_URL}" >> "$GITHUB_OUTPUT"
-          echo "loki_username=${LOKI_USER}" >> "$GITHUB_OUTPUT"
-          echo "loki_token=${LOKI_TOKEN}" >> "$GITHUB_OUTPUT"
+          {
+            printf 'GRAFANA_LOKI_URL=%q\n' "$LOKI_URL"
+            printf 'GRAFANA_LOKI_USERNAME=%q\n' "$LOKI_USER"
+            printf 'GRAFANA_LOKI_TOKEN=%q\n' "$LOKI_TOKEN"
+          } > "$RUNNER_TEMP/grafana-outputs.env"
+
+      - name: Upload Grafana outputs for secret update
+        uses: actions/upload-artifact@v4
+        with:
+          name: grafana-outputs
+          path: ${{ runner.temp }}/grafana-outputs.env
+          retention-days: 1
 
   update-wrangler-secrets:
     name: Update Wrangler Secrets
     runs-on: ubuntu-latest
-    needs: [terraform-apply-grafana]
+    needs: [terraform-apply-cloudflare, terraform-apply-grafana]
     if: github.ref == 'refs/heads/master'
     environment: production
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      GRAFANA_LOKI_URL: ${{ needs.terraform-apply-grafana.outputs.loki_url }}
-      GRAFANA_LOKI_USERNAME: ${{ needs.terraform-apply-grafana.outputs.loki_username }}
-      GRAFANA_LOKI_TOKEN: ${{ needs.terraform-apply-grafana.outputs.loki_token }}
       ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET }}
       RSA_PRIVATE_KEY_PEM: ${{ secrets.RSA_PRIVATE_KEY_PEM }}
       PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
@@ -850,6 +869,15 @@ jobs:
         working-directory: workers
         run: npm ci
 
+      - name: Download Grafana outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: grafana-outputs
+          path: ${{ runner.temp }}
+
+      - name: Load Grafana outputs
+        run: cat "$RUNNER_TEMP/grafana-outputs.env" >> "$GITHUB_ENV"
+
       - name: Update secrets
         run: bash scripts/ci-update-wrangler-secrets.sh
 
@@ -867,9 +895,9 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WORKERS_SUBDOMAIN: ${{ vars.WORKERS_SUBDOMAIN }}
       PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
-      GRAFANA_LOKI_URL: ${{ needs.terraform-apply-grafana.outputs.loki_url }}
-      GRAFANA_LOKI_USERNAME: ${{ needs.terraform-apply-grafana.outputs.loki_username }}
-      GRAFANA_LOKI_TOKEN: ${{ needs.terraform-apply-grafana.outputs.loki_token }}
+      GRAFANA_LOKI_URL: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+      GRAFANA_LOKI_USERNAME: ${{ secrets.GRAFANA_CLOUD_LOKI_USERNAME }}
+      GRAFANA_LOKI_TOKEN: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN }}
       LOGPUSH_JOB_ID: ${{ needs.terraform-apply-cloudflare.outputs.logpush_job_id }}
     steps:
       - name: Checkout
@@ -944,6 +972,7 @@ git commit -m "docs: add ci/cd section to readme"
 ### Task 3.5: PR 3 作成前チェック
 
 - [ ] `deploy.yml` の YAML 構文を検証済み
+- [ ] `ci.yml` の PR plan jobs が production environment を参照せず、plan 専用 read-only credentials のみを使用することを確認
 - [ ] GitHub `production` environment が Required reviewers + `master` branch policy で設定済み
 - [ ] `scripts/ci-update-wrangler-secrets.sh` と `scripts/ci-verify-deployment.sh` に実行権限がある
 - [ ] PR 3 を作成（base: `feat/ci-workflow`, head: `feat/deploy-workflow`）
@@ -961,12 +990,12 @@ git commit -m "docs: add ci/cd section to readme"
 | §2.1 Terraform state をリモートバックエンド管理 | PR 1 `versions.tf` x2 |
 | §2.1 Wrangler secrets を Terraform 出力から自動反映 | PR 3 `update-wrangler-secrets` job + `scripts/ci-update-wrangler-secrets.sh` |
 | §4.3 `production` environment + `master` 制限 | PR 3 各 deploy/apply ジョブに `environment: production` と `if: github.ref == 'refs/heads/master'` |
-| §4.5 Terraform Cloud local execution mode + TF_VAR_* 注入 | PR 2/3 の env ブロック |
-| §4.6 Wrangler secrets 更新順序 | `scripts/ci-update-wrangler-secrets.sh` の登録順 |
+| §4.5 Terraform Cloud local execution mode + TF_VAR_* 注入 | PR 2/3 の env ブロック（PR plan は read-only credentials、production apply は production credentials） |
+| §4.6 Wrangler secrets 更新順序 | `scripts/ci-update-wrangler-secrets.sh` の Worker 単位 bulk 登録順 |
 | §5.3 concurrency 制御 | PR 3 workflow-level + job-level `graft-ai-terraform-apply` |
 | §6.2 backend 設定 | PR 1 `cloud {}` ブロック |
 | §8 マスク・最小権限 | PR 3 `::add-mask::`、PR 2/3 env 注入 |
-| §10 デプロイ後検証 | PR 3 `verify-deployment` job + `scripts/ci-verify-deployment.sh` |
+| §10 デプロイ後検証 | PR 3 `verify-deployment` job + `scripts/ci-verify-deployment.sh`（status allowlist、timeout/retry、correlation ID の Loki query_range 検証を含む） |
 
 ### 2. Placeholder scan
 

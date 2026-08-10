@@ -69,7 +69,21 @@ graft-ai/
 | `CLOUDFLARE_API_TOKEN` | GitHub Secrets | Wrangler および Terraform Cloudflare provider 認証 |
 | `CLOUDFLARE_ACCOUNT_ID` | GitHub Secrets | Wrangler および Terraform Cloudflare provider |
 
-Terraform 変数（sensitive）は Terraform Cloud 各 workspace の Variables に保存する。
+`CLOUDFLARE_API_TOKEN` は account-scope の `Logs: Write`、`Workers Scripts: Edit`、
+`AI Gateway: Read`、`Memberships: Read` を含む最小権限 token とする。
+`TF_API_TOKEN` は HCP Terraform の workspace 操作用であり、Cloudflare API token
+とは別の secret とする。
+
+Terraform の sensitive 変数は、後述する local execution mode では GitHub Secrets
+から `TF_VAR_*` として各 job に注入する。HCP Terraform Variables は state と
+workspace の管理情報として保持するが、GitHub Actions の local run に自動注入
+される前提にはしない。
+
+fork および Dependabot の Pull Request では通常の repository Secrets が利用できない
+場合がある。Secrets 不要の test / typecheck / fmt / Terraform validate workflow と、
+信頼済みコードでのみ実行する Terraform plan workflow を分離する。fork・Dependabot
+の PR は secret を必要とする plan の対象外とし、`pull_request_target` で PR のコードを
+checkout または実行しない。
 
 ## 4. 設計判断
 
@@ -110,9 +124,19 @@ Cloudflare Workers 5 種と Terraform 2 ディレクトリを対象とする。
 - Workers Paid plan（$5/月）が既に必要なため、Terraform Cloud の追加コストは実質無視できる（管理リソース 3 個で約 $0.30/月）
 - state ロックが組み込まれている
 - Terraform Cloud Variables で sensitive 値を管理できる
-- GitHub Actions 側の Secrets は最小限（`TF_API_TOKEN` のみ）で済む
+- GitHub Actions 側では `TF_API_TOKEN` に加えて、local execution に必要な
+  `TF_VAR_*` と provider 環境変数を各 job へ明示的に注入する
 
 workspace は **local execution mode** とし、GitHub Actions ランナー上で `terraform init` / `plan` / `apply` / `output` を実行する。これにより、Terraform 出力から Wrangler secrets を取得して登録する step を同一 workflow 内で完結できる。
+
+各 Terraform job は同じ変数契約を使用する。Cloudflare 側の job には
+`TF_VAR_cloudflare_account_id`、`TF_VAR_cloudflare_api_token`、
+`TF_VAR_workers_subdomain`、`TF_VAR_origin_secret`、`TF_VAR_rsa_private_key_pem`
+を注入し、provider の認証環境変数も設定する。Grafana 側の job には
+`TF_VAR_grafana_cloud_api_key` と `TF_VAR_grafana_stack_slug` を注入する。
+Grafana の Loki output は `update-wrangler-secrets` が取得して Tail Worker に渡す。
+`terraform-apply-cloudflare` は Grafana の output を参照せず、
+`terraform-apply-grafana` に依存しない。
 
 ### 4.5 Wrangler Secrets 管理
 
@@ -120,18 +144,23 @@ Wrangler secrets の登録値は以下の 2 系統に分類する。
 
 | 値 | 取得元 | 更新方法 |
 |----|--------|----------|
-| `RSA_PRIVATE_KEY_PEM` | 手動生成 | GitHub Secrets または Terraform Cloud variable 経由で CI に渡す |
-| `ORIGIN_SECRET` | 手動生成 | GitHub Secrets または Terraform Cloud variable 経由で CI に渡す |
-| `GRAFANA_CLOUD_LOKI_URL` | Terraform Cloud output | `terraform output -raw` で取得し `wrangler secret put` |
-| `GRAFANA_CLOUD_LOKI_USERNAME` | Terraform Cloud output | `terraform output -raw` で取得し `wrangler secret put` |
-| `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Terraform Cloud output | `terraform output -raw` で取得し `wrangler secret put` |
+| `RSA_PRIVATE_KEY_PEM` | GitHub Secret | `graft-ai-aig-logpush` / `workers/wrangler.jsonc` に登録 |
+| `ORIGIN_SECRET` | GitHub Secret | `graft-ai-aig-logpush` / `workers/wrangler.jsonc` に登録 |
+| `GRAFANA_CLOUD_LOKI_URL` | Grafana Terraform output | `graft-ai-aig-tail` / `workers/wrangler.tail.jsonc` に登録 |
+| `GRAFANA_CLOUD_LOKI_USERNAME` | Grafana Terraform output | `graft-ai-aig-tail` / `workers/wrangler.tail.jsonc` に登録 |
+| `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Grafana Terraform output | `graft-ai-aig-tail` / `workers/wrangler.tail.jsonc` に登録 |
+| `PROXY_SECRET` | GitHub Secret | `graft-ai-aig-proxy` / `workers/wrangler.proxy.jsonc` に登録 |
+
+`update-wrangler-secrets` は上記すべての Secret を、表に記載した対応する
+`--config` を指定して更新する。Ollama、provider-metrics Worker の provider 固有
+Secret は本 workflow の管理対象外であり、独立した運用手順で登録する。
 
 ## 5. ワークフロー設計
 
 ### 5.1 `ci.yml` — 継続的検証
 
 ```yaml
-triggers:
+on:
   pull_request:
     branches: ['main']
   push:
@@ -151,7 +180,7 @@ jobs:
 ### 5.2 `deploy.yml` — 本番自動デプロイ
 
 ```yaml
-triggers:
+on:
   push:
     branches: ['main']
   workflow_dispatch:
@@ -165,6 +194,7 @@ jobs:
     # wrangler deploy --config wrangler.jsonc
 
   deploy-proxy-worker:
+    needs: [deploy-tail-worker]
     # wrangler deploy --config wrangler.proxy.jsonc
 
   deploy-tail-worker:
@@ -177,20 +207,37 @@ jobs:
     # wrangler deploy --config wrangler.provider-metrics.jsonc
 
   terraform-apply-cloudflare:
-    needs: [deploy-logpush-worker, deploy-proxy-worker, ...]
-    # terraform init / apply for terraform/
+    needs: [deploy-logpush-worker, deploy-proxy-worker, deploy-ollama-worker, deploy-provider-metrics-worker]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    concurrency:
+      group: graft-ai-terraform-apply
+      cancel-in-progress: false
+    # terraform init -input=false / terraform apply -auto-approve for terraform/
 
   terraform-apply-grafana:
-    needs: [deploy-logpush-worker, deploy-proxy-worker, ...]
-    # terraform init / apply for terraform/grafana/
+    needs: [deploy-logpush-worker, deploy-proxy-worker, deploy-ollama-worker, deploy-provider-metrics-worker]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    concurrency:
+      group: graft-ai-terraform-apply
+      cancel-in-progress: false
+    # terraform init -input=false / terraform apply -auto-approve for terraform/grafana/
 
   update-wrangler-secrets:
     needs: [terraform-apply-grafana]
-    # terraform output -raw + wrangler secret put
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    # checkout, setup Terraform CLI, set TF_API_TOKEN, then
+    # terraform -chdir=terraform/grafana init -input=false before terraform output -raw
+    # and wrangler secret put with each worker's explicit --config
 
   verify-deployment:
     needs: [terraform-apply-cloudflare, terraform-apply-grafana, update-wrangler-secrets]
-    # 疎通確認 / verify-deployment-env.sh 相当
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    # Tail Worker existence, proxy tail-consumer configuration, and Loki ingestion
+    # after a real proxy request; Logpush mode additionally runs the Logpush smoke test.
 ```
 
 ### 5.3 Concurrency 制御
@@ -203,6 +250,12 @@ concurrency:
   cancel-in-progress: false
 ```
 
+上記の workflow-level concurrency は維持し、同一 workflow run 内の
+`terraform-apply-cloudflare` と `terraform-apply-grafana` にも同じ job-level group
+`graft-ai-terraform-apply` を設定する。これにより実行中の apply は 1 件、保留中の
+apply は 1 件だけとなり、後続 run が到着した場合は古い保留 run を置き換える。
+`cancel-in-progress: false` により実行中の apply はキャンセルしない。
+
 Wrangler deploy は並列実行可能であるが、同一 Worker 名に対する同時更新は Wrangler 側で直列化されるため、同一 workflow 内での並列は許容する。
 
 ## 6. Terraform Cloud 設定
@@ -211,7 +264,7 @@ Wrangler deploy は並列実行可能であるが、同一 Worker 名に対す�
 
 | Workspace | パス | Execution mode | Variables |
 |-----------|------|----------------|-----------|
-| `graft-ai-cloudflare` | `terraform/` | local | `cloudflare_account_id`, `cloudflare_api_token`, `workers_subdomain`, `origin_secret`, `grafana_cloud_loki_url`, `grafana_cloud_loki_username`, `grafana_cloud_access_policy_token`, `rsa_private_key_pem` |
+| `graft-ai-cloudflare` | `terraform/` | local | `cloudflare_account_id`, `cloudflare_api_token`, `workers_subdomain`, `origin_secret`, `rsa_private_key_pem` |
 | `graft-ai-grafana` | `terraform/grafana/` | local | `grafana_cloud_api_key`, `grafana_stack_slug` |
 
 ### 6.2 Backend 設定（versions.tf）
@@ -230,6 +283,21 @@ terraform {
 }
 ```
 
+既存の local state を HCP Terraform backend へ移行する場合は、通常 CI と分離した
+一回限りの migration workflow を実行する。
+
+1. `terraform.tfstate` と `terraform.tfstate.backup` を暗号化された保管場所へ退避し、
+   backup の hash と resource count を記録する。秘密値をログや artifact に出力しない。
+2. 対象ディレクトリで Terraform CLI と `TF_API_TOKEN` を準備し、backend 設定を追加する。
+3. `terraform init -input=false -migrate-state -force-copy` を実行して state を HCP
+   Terraform workspace へ移行する。移行確認は migration workflow 内でのみ行う。
+4. HCP Terraform の state version が更新され、resource count が移行前と一致することを
+   Terraform API または workspace UI で確認する。
+5. `terraform plan` を実行し、意図しない create / destroy がないことを確認する。
+
+移行後の通常 CI は migration flag を使わず、`terraform init -input=false` の後に
+`terraform plan` または保存済み plan file に対する `terraform apply` を実行する。
+
 ## 7. 実装後の既存スクリプトの扱い
 
 | スクリプト | 扱い |
@@ -244,8 +312,14 @@ terraform {
 ## 8. セキュリティ考慮
 
 - すべての API token、private key、access policy token は GitHub Secrets または Terraform Cloud Variables（sensitive）に保存する
-- `terraform output` で取得した sensitive 値は GitHub Actions の step 間で `::add-mask::` を自動適用されるようにする
-- `CLOUDFLARE_API_TOKEN` は最小権限（Workers、Logpush、Account 読み取り）に設定する
+- `terraform output -raw` で取得した各 sensitive 値は、変数に格納した直後、
+  `wrangler secret put` に渡す前に `echo "::add-mask::${VALUE}"` で明示的に mask する。
+  masking は自動適用されるとみなさない。
+- secret を `set -x` の command expansion、通常ログ、artifact、job output、
+  `GITHUB_ENV`、`GITHUB_OUTPUT` に書き出さない。Terraform の plan / output も
+  `-no-color` と secret の非表示を徹底する。
+- `CLOUDFLARE_API_TOKEN` は account-scope の Workers Scripts: Edit、Logs: Write、
+  AI Gateway: Read、Memberships: Read を含む最小権限に設定する。
 - Terraform Cloud の `TF_API_TOKEN` は Team token または Organization token を使用し、必要最小限の workspace 権限を付与する
 
 ## 9. エラー処理・通知
@@ -260,7 +334,8 @@ terraform {
 |------|------|
 | TypeScript コード | `npm test`, `npm run typecheck`, `npm run fmt:check` |
 | Terraform | `terraform fmt -check`, `terraform validate`, `terraform plan` |
-| デプロイ後検証 | `verify-deployment-env.sh` 相当のチェック、Loki エンドポイント疎通確認 |
+| デプロイ後検証 | `verify-deployment-env.sh` 相当のチェック、Tail Worker 存在確認、実リクエスト後の Loki ingestion 確認 |
+| Logpush smoke test | `terraform output -raw logpush_job_id` を取得し、Cloudflare API の `GET /accounts/{account_id}/logpush/jobs/{job_id}` で job の存在、dataset、destination、enabled 状態を確認 |
 
 ## 11. 将来の拡張
 

@@ -256,6 +256,27 @@ make setup-free-tier  # run scripts/setup.sh (Free Tier proxy mode, one-command)
 make setup-grafana    # run scripts/tf-apply-grafana.sh to create/rotate Access Policy token and re-register Wrangler secrets
 ```
 
+## CI/CD
+
+GitHub Actions workflows drive continuous integration and deployment:
+
+- `.github/workflows/ci.yml` runs on every Pull Request and non-`master` push:
+  - `npm run typecheck:ci`, `npm test`, `npm run fmt:check`
+  - `terraform fmt -check -recursive` and `terraform validate` for both workspaces
+  - `terraform plan` for both workspaces on trusted internal PRs only
+- `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
+  - Deploys all five Workers via Wrangler
+  - Applies both Terraform workspaces in the `production` GitHub environment
+  - Updates Wrangler secrets from Terraform outputs and GitHub Secrets
+  - Verifies Tail Worker, proxy tail consumer, and Loki ingestion
+
+Required repository secrets: `TF_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USERNAME`, `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN`, `GRAFANA_CLOUD_API_KEY`, `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`, `PROXY_SECRET`.
+
+Required repository variables: `WORKERS_SUBDOMAIN`, `GRAFANA_STACK_SLUG`.
+Optional repository variables: `LOGPUSH_DATASET`, `WORKER_SCRIPT_NAME`, `LOGPUSH_JOB_NAME`.
+
+Configure the GitHub `production` environment with **Required reviewers** and restrict deployment branches to `master` before enabling `deploy.yml`.
+
 ### Free Tier Setup (No Logpush)
 
 Use this mode when your Cloudflare account cannot use Workers Logpush because

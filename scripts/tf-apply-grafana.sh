@@ -93,13 +93,15 @@ LOKI_URL=$(terraform output -raw grafana_loki_url       2>/dev/null || echo "")
 LOKI_USER=$(terraform output -raw grafana_loki_username  2>/dev/null || echo "")
 LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
 
+printf '::add-mask::%s\n' "$LOKI_URL"
+printf '::add-mask::%s\n' "$LOKI_USER"
+printf '::add-mask::%s\n' "$LOKI_TOKEN"
+
 [[ -z "$LOKI_URL"   ]] && die "Could not read grafana_loki_url from Terraform output."
 [[ -z "$LOKI_USER"  ]] && die "Could not read grafana_loki_username from Terraform output."
 [[ -z "$LOKI_TOKEN" ]] && die "Could not read grafana_loki_write_token from Terraform output."
 
-success "Loki URL:      $LOKI_URL"
-success "Loki username: $LOKI_USER"
-success "Loki token:    (hidden)"
+success "Loki output retrieved."
 
 ###############################################################################
 # 4. Re-register Wrangler secrets with the newly created token
@@ -110,8 +112,11 @@ info "Updating Wrangler secrets on Tail Worker..."
 echo "$LOKI_URL"   | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_URL             --config wrangler.tail.jsonc
 echo "$LOKI_USER"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME        --config wrangler.tail.jsonc
 echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN  --config wrangler.tail.jsonc
+echo "$LOKI_URL"   | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_URL             --config wrangler.jsonc
+echo "$LOKI_USER"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME        --config wrangler.jsonc
+echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN  --config wrangler.jsonc
 
-success "All secrets updated on graft-ai-aig-tail."
+success "Loki secrets updated on graft-ai-aig-tail and graft-ai-aig-logpush."
 
 ###############################################################################
 # 5. Redeploy Tail Worker to pick up new secrets
@@ -127,7 +132,7 @@ ${GREEN}  Grafana Access Policy setup complete ${NC}
 ${GREEN}========================================${NC}
 
 Verify Loki connectivity:
-  curl -u ${LOKI_USER}:<token> "${LOKI_URL}/loki/api/v1/labels"
+  curl -u <tenant-id>:<token> "<loki-url>/loki/api/v1/labels"
 
 Then send a test request through the Proxy Worker and check Grafana Explore:
   {gateway="main"}

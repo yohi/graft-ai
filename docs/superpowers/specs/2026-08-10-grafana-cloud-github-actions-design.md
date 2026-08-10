@@ -129,11 +129,15 @@ Cloudflare Workers 5 種と Terraform 2 ディレクトリを対象とする。
 
 workspace は **local execution mode** とし、GitHub Actions ランナー上で `terraform init` / `plan` / `apply` / `output` を実行する。これにより、Terraform 出力から Wrangler secrets を取得して登録する step を同一 workflow 内で完結できる。
 
-各 Terraform job は同じ変数契約を使用する。Cloudflare 側の job には
-`TF_VAR_cloudflare_account_id`、`TF_VAR_cloudflare_api_token`、
-`TF_VAR_workers_subdomain`、`TF_VAR_origin_secret`、`TF_VAR_rsa_private_key_pem`
-を注入し、provider の認証環境変数も設定する。Grafana 側の job には
-`TF_VAR_grafana_cloud_api_key` と `TF_VAR_grafana_stack_slug` を注入する。
+各 Terraform job は同じ変数契約を使用する。Cloudflare 側の job には GitHub
+Secrets から `TF_VAR_cloudflare_account_id`、`TF_VAR_cloudflare_api_token`、
+`TF_VAR_workers_subdomain`、`TF_VAR_origin_secret`、`TF_VAR_rsa_private_key_pem` を
+注入し、Cloudflare provider 用の `CLOUDFLARE_API_TOKEN` も同じ token に設定する。
+`logpush_dataset`、`worker_script_name`、`logpush_job_name`、upload 制限値は非 secret
+の repository variable または workspace 固有の `TF_VAR_*` として明示的に設定する。
+Grafana 側の job には GitHub Secrets から `TF_VAR_grafana_cloud_api_key` と
+`TF_VAR_grafana_stack_slug` を注入する。HCP Terraform の Variables は state / workspace
+管理用に保持するが、local execution の Terraform CLI へ自動注入される前提にはしない。
 Grafana の Loki output は `update-wrangler-secrets` が取得して Tail Worker に渡す。
 `terraform-apply-cloudflare` は Grafana の output を参照せず、
 `terraform-apply-grafana` に依存しない。
@@ -142,18 +146,24 @@ Grafana の Loki output は `update-wrangler-secrets` が取得して Tail Worke
 
 Wrangler secrets の登録値は以下の 2 系統に分類する。
 
-| 値 | 取得元 | 更新方法 |
-|----|--------|----------|
-| `RSA_PRIVATE_KEY_PEM` | GitHub Secret | `graft-ai-aig-logpush` / `workers/wrangler.jsonc` に登録 |
-| `ORIGIN_SECRET` | GitHub Secret | `graft-ai-aig-logpush` / `workers/wrangler.jsonc` に登録 |
-| `GRAFANA_CLOUD_LOKI_URL` | Grafana Terraform output | `graft-ai-aig-tail` / `workers/wrangler.tail.jsonc` に登録 |
-| `GRAFANA_CLOUD_LOKI_USERNAME` | Grafana Terraform output | `graft-ai-aig-tail` / `workers/wrangler.tail.jsonc` に登録 |
-| `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Grafana Terraform output | `graft-ai-aig-tail` / `workers/wrangler.tail.jsonc` に登録 |
-| `PROXY_SECRET` | GitHub Secret | `graft-ai-aig-proxy` / `workers/wrangler.proxy.jsonc` に登録 |
+| Worker | Config | Secret |
+|--------|--------|--------|
+| `graft-ai-aig-logpush` | `workers/wrangler.jsonc` | `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`, `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USERNAME`, `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` |
+| `graft-ai-aig-tail` | `workers/wrangler.tail.jsonc` | `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USERNAME`, `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` |
+| `graft-ai-aig-proxy` | `workers/wrangler.proxy.jsonc` | `PROXY_SECRET` |
 
-`update-wrangler-secrets` は上記すべての Secret を、表に記載した対応する
-`--config` を指定して更新する。Ollama、provider-metrics Worker の provider 固有
-Secret は本 workflow の管理対象外であり、独立した運用手順で登録する。
+`update-wrangler-secrets` は次の順序で、表に記載した対応する `--config` を
+指定して、上記すべての Secret を更新する。
+
+1. Grafana Terraform output から Loki URL、username、Access Policy token を取得し、
+   Logpush Worker と Tail Worker の両方へ登録する。
+2. GitHub Secret から `ORIGIN_SECRET` と `RSA_PRIVATE_KEY_PEM` を読み取り、Logpush
+   Worker へ登録する。
+3. GitHub Secret の `PROXY_SECRET` を Proxy Worker へ登録する。
+4. Tail Worker の存在、Proxy Worker の Tail consumer、Loki ingestion を検証する。
+
+Ollama、provider-metrics Worker の provider 固有 Secret は本 workflow の管理対象外で
+あり、独立した運用手順で登録する。
 
 ## 5. ワークフロー設計
 
@@ -191,19 +201,29 @@ concurrency:
 
 jobs:
   deploy-logpush-worker:
+    if: github.ref == 'refs/heads/master'
+    environment: production
     # wrangler deploy --config wrangler.jsonc
 
   deploy-proxy-worker:
     needs: [deploy-tail-worker]
+    if: github.ref == 'refs/heads/master'
+    environment: production
     # wrangler deploy --config wrangler.proxy.jsonc
 
   deploy-tail-worker:
+    if: github.ref == 'refs/heads/master'
+    environment: production
     # wrangler deploy --config wrangler.tail.jsonc
 
   deploy-ollama-worker:
+    if: github.ref == 'refs/heads/master'
+    environment: production
     # wrangler deploy --config wrangler.ollama.jsonc
 
   deploy-provider-metrics-worker:
+    if: github.ref == 'refs/heads/master'
+    environment: production
     # wrangler deploy --config wrangler.provider-metrics.jsonc
 
   terraform-apply-cloudflare:

@@ -369,6 +369,9 @@ register_secret() {
 register_secret "GRAFANA_CLOUD_LOKI_URL"            "$GRAFANA_LOKI_URL"                       "$TAIL_WRANGLER"
 register_secret "GRAFANA_CLOUD_LOKI_USERNAME"       "$GRAFANA_LOKI_USERNAME"                  "$TAIL_WRANGLER"
 register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"      "$TAIL_WRANGLER"
+register_secret "GRAFANA_CLOUD_LOKI_URL"            "$GRAFANA_LOKI_URL"                       "${WORKERS_DIR}/wrangler.jsonc"
+register_secret "GRAFANA_CLOUD_LOKI_USERNAME"       "$GRAFANA_LOKI_USERNAME"                  "${WORKERS_DIR}/wrangler.jsonc"
+register_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"      "${WORKERS_DIR}/wrangler.jsonc"
 register_secret "PROXY_SECRET"                      "$PROXY_SECRET"                           "$PROXY_WRANGLER"
 
 ask OLLAMA_CLOUD_RESET_ANCHOR_ISO "Ollama Cloud の最後に確認した reset 時刻 (ISO 8601、例: 2026-01-01T00:00:00Z)"

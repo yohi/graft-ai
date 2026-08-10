@@ -491,7 +491,7 @@ fail() {
 }
 
 echo "Checking Tail Worker script exists..."
-curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w "%{http_code}" "${API_BASE}/workers/scripts/graft-ai-aig-tail" \
+curl -sS --connect-timeout 5 --max-time 15 --retry 3 --retry-delay 2 --retry-max-time 20 -o /dev/null -w "%{http_code}" "${API_BASE}/workers/scripts/graft-ai-aig-tail" \
   -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
   -H "Content-Type: application/json" \
   | grep -Eq '^200$' || fail "Tail Worker not found"
@@ -819,29 +819,6 @@ jobs:
         working-directory: terraform/grafana
         run: terraform apply -auto-approve -input=false
 
-      - name: Capture outputs
-        id: grafana_outputs
-        working-directory: terraform/grafana
-        run: |
-          LOKI_URL=$(terraform output -raw grafana_loki_url)
-          LOKI_USER=$(terraform output -raw grafana_loki_username)
-          LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token)
-          echo "::add-mask::${LOKI_URL}"
-          echo "::add-mask::${LOKI_USER}"
-          echo "::add-mask::${LOKI_TOKEN}"
-          {
-            printf 'GRAFANA_LOKI_URL=%q\n' "$LOKI_URL"
-            printf 'GRAFANA_LOKI_USERNAME=%q\n' "$LOKI_USER"
-            printf 'GRAFANA_LOKI_TOKEN=%q\n' "$LOKI_TOKEN"
-          } > "$RUNNER_TEMP/grafana-outputs.env"
-
-      - name: Upload Grafana outputs for secret update
-        uses: actions/upload-artifact@v4
-        with:
-          name: grafana-outputs
-          path: ${{ runner.temp }}/grafana-outputs.env
-          retention-days: 1
-
   update-wrangler-secrets:
     name: Update Wrangler Secrets
     runs-on: ubuntu-latest
@@ -849,6 +826,9 @@ jobs:
     if: github.ref == 'refs/heads/master'
     environment: production
     env:
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+      TF_VAR_grafana_cloud_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+      TF_VAR_grafana_stack_slug: ${{ vars.GRAFANA_STACK_SLUG }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET }}
@@ -869,14 +849,30 @@ jobs:
         working-directory: workers
         run: npm ci
 
-      - name: Download Grafana outputs
-        uses: actions/download-artifact@v4
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          name: grafana-outputs
-          path: ${{ runner.temp }}
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
 
-      - name: Load Grafana outputs
-        run: cat "$RUNNER_TEMP/grafana-outputs.env" >> "$GITHUB_ENV"
+      - name: Terraform init (Grafana)
+        working-directory: terraform/grafana
+        run: terraform init -input=false
+
+      - name: Load Grafana outputs from Terraform state
+        working-directory: terraform/grafana
+        run: |
+          LOKI_URL=$(terraform output -raw grafana_loki_url)
+          LOKI_USER=$(terraform output -raw grafana_loki_username)
+          LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token)
+          echo "::add-mask::${LOKI_URL}"
+          echo "::add-mask::${LOKI_USER}"
+          echo "::add-mask::${LOKI_TOKEN}"
+          {
+            printf 'GRAFANA_LOKI_URL=%q\n' "$LOKI_URL"
+            printf 'GRAFANA_LOKI_USERNAME=%q\n' "$LOKI_USER"
+            printf 'GRAFANA_LOKI_TOKEN=%q\n' "$LOKI_TOKEN"
+          } >> "$GITHUB_ENV"
 
       - name: Update secrets
         run: bash scripts/ci-update-wrangler-secrets.sh
@@ -954,7 +950,7 @@ GitHub Actions workflows drive continuous integration and deployment:
   - Updates Wrangler secrets from Terraform outputs and GitHub Secrets
   - Verifies Tail Worker, proxy tail consumer, and Loki ingestion
 
-Required repository secrets: `TF_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `GRAFANA_CLOUD_LOKI_URL`, `GRAFANA_CLOUD_LOKI_USERNAME`, `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN`, `GRAFANA_CLOUD_API_KEY`, `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`, `PROXY_SECRET`.
+Required repository secrets: `TF_API_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `GRAFANA_CLOUD_API_KEY`, `ORIGIN_SECRET`, `RSA_PRIVATE_KEY_PEM`, `PROXY_SECRET`.
 
 Required repository variables: `WORKERS_SUBDOMAIN`, `GRAFANA_STACK_SLUG`.
 Optional repository variables: `LOGPUSH_DATASET`, `WORKER_SCRIPT_NAME`, `LOGPUSH_JOB_NAME`.

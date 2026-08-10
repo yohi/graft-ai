@@ -16,7 +16,7 @@
 ### 2.1 ゴール
 
 - Pull Request 作成時にテスト、型検査、フォーマット検査、Terraform plan を実行する
-- `main` ブランチへの push 時に、Cloudflare Workers（5 種）と Terraform リソースを自動デプロイする
+- `master` ブランチへの push 時に、Cloudflare Workers（5 種）と Terraform リソースを自動デプロイする
 - Terraform state をリモートバックエンド（Terraform Cloud）で管理する
 - Wrangler secrets を Terraform 出力から自動反映する仕組みを CI に組み込む
 - 将来的な staging / production 分離や追加 Worker に対応できる拡張性を持たせる
@@ -106,7 +106,7 @@ Cloudflare Workers 5 種と Terraform 2 ディレクトリを対象とする。
 | イベント | ワークフロー | 実行内容 |
 |---------|-------------|----------|
 | Pull Request 作成・更新 | `ci.yml` | テスト / 型検査 / fmt 検査 / Terraform plan（2 workspace） |
-| `main` ブランチ push | `deploy.yml` | Worker 並列デプロイ / Terraform apply / Wrangler secrets 更新 / 検証 |
+| `master` ブランチ push | `deploy.yml` | Worker 並列デプロイ / Terraform apply / Wrangler secrets 更新 / 検証 |
 | 手動 | `deploy.yml` | `workflow_dispatch` でも本番デプロイ可能（将来の選択肢） |
 
 ### 4.3 環境戦略
@@ -162,9 +162,9 @@ Secret は本 workflow の管理対象外であり、独立した運用手順で
 ```yaml
 on:
   pull_request:
-    branches: ['main']
+    branches: ['master']
   push:
-    branches-ignore: ['main']
+    branches-ignore: ['master']
 
 jobs:
   test-workers:
@@ -182,7 +182,7 @@ jobs:
 ```yaml
 on:
   push:
-    branches: ['main']
+    branches: ['master']
   workflow_dispatch:
 
 concurrency:
@@ -208,7 +208,7 @@ jobs:
 
   terraform-apply-cloudflare:
     needs: [deploy-logpush-worker, deploy-proxy-worker, deploy-ollama-worker, deploy-provider-metrics-worker]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     environment: production
     concurrency:
       group: graft-ai-terraform-apply
@@ -217,7 +217,7 @@ jobs:
 
   terraform-apply-grafana:
     needs: [deploy-logpush-worker, deploy-proxy-worker, deploy-ollama-worker, deploy-provider-metrics-worker]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     environment: production
     concurrency:
       group: graft-ai-terraform-apply
@@ -226,7 +226,7 @@ jobs:
 
   update-wrangler-secrets:
     needs: [terraform-apply-grafana]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     environment: production
     # checkout, setup Terraform CLI, set TF_API_TOKEN, then
     # terraform -chdir=terraform/grafana init -input=false before terraform output -raw
@@ -234,7 +234,7 @@ jobs:
 
   verify-deployment:
     needs: [terraform-apply-cloudflare, terraform-apply-grafana, update-wrangler-secrets]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     environment: production
     # Tail Worker existence, proxy tail-consumer configuration, and Loki ingestion
     # after a real proxy request; Logpush mode additionally runs the Logpush smoke test.
@@ -351,7 +351,7 @@ terraform {
 | Terraform apply の並列実行による state 破損 | Terraform Cloud のロック + GitHub Actions concurrency 制御 |
 | Wrangler secret 登録値のマスク漏れ | `wrangler secret put` 実行前に `::add-mask::` を明示的に呼び出す |
 | Terraform Cloud local execution mode の差異 | CI 用コンテナイメージを固定し、Terraform バージョンをワークフローでピン留め |
-| `main` マージ時の誤デプロイ | main ブランチ保護ルールと PR レビューを維持 |
+| `master` マージ時の誤デプロイ | master ブランチ保護ルールと PR レビューを維持 |
 
 ---
 

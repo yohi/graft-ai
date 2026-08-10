@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches-ignore: [master]
+
+jobs:
+  checks:
+    name: Test / Typecheck / Format / Terraform Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Type check Workers
+        working-directory: workers
+        run: npm run typecheck:ci
+
+      - name: Run Worker tests
+        working-directory: workers
+        run: npm test
+
+      - name: Check formatting
+        working-directory: workers
+        run: npm run fmt:check
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate (cloudflare)
+        run: |
+          terraform -chdir=terraform init -backend=false
+          terraform -chdir=terraform validate
+
+      - name: Terraform validate (grafana)
+        run: |
+          terraform -chdir=terraform/grafana init -backend=false
+          terraform -chdir=terraform/grafana validate
+
+  plan-cloudflare:
+    name: Terraform Plan (cloudflare)
+    runs-on: ubuntu-latest
+    needs: [checks]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    environment: production
+    env:
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_grafana_cloud_loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+      TF_VAR_grafana_cloud_loki_username: ${{ secrets.GRAFANA_CLOUD_LOKI_USERNAME }}
+      TF_VAR_grafana_cloud_access_policy_token: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN }}
+      TF_VAR_origin_secret: ${{ secrets.ORIGIN_SECRET }}
+      TF_VAR_rsa_private_key_pem: ${{ secrets.RSA_PRIVATE_KEY_PEM }}
+      TF_VAR_workers_subdomain: ${{ vars.WORKERS_SUBDOMAIN }}
+      TF_VAR_logpush_dataset: ${{ vars.LOGPUSH_DATASET || 'ai_gateway_events' }}
+      TF_VAR_worker_script_name: ${{ vars.WORKER_SCRIPT_NAME || 'graft-ai-aig-logpush' }}
+      TF_VAR_logpush_job_name: ${{ vars.LOGPUSH_JOB_NAME || 'graft-ai-aig-logpush' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: terraform plan -input=false -no-color
+
+  plan-grafana:
+    name: Terraform Plan (grafana)
+    runs-on: ubuntu-latest
+    needs: [checks]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    environment: production
+    env:
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+      TF_VAR_grafana_cloud_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+      TF_VAR_grafana_stack_slug: ${{ vars.GRAFANA_STACK_SLUG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform/grafana
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: terraform/grafana
+        run: terraform plan -input=false -no-color

@@ -110,6 +110,18 @@ Grafana alert rules in `grafana/alerts/graft-ai-ollama-cloud-rules.json`.
 `OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp and the
 Prometheus endpoint must use HTTPS.
 
+The Ollama Worker derives each reset from the configured anchor and interval:
+`remainder = ((now - anchor) % interval + interval) % interval`,
+`remaining_seconds = interval - remainder`, and
+`next_reset_timestamp = now + remaining_seconds`. It publishes
+`ollama_cloud_reset_seconds_remaining{period}`,
+`ollama_cloud_reset_timestamp_seconds{period}`,
+`ollama_cloud_reset_progress_ratio{period}`, and
+`ollama_cloud_plan_info{plan,session_interval,weekly_interval}`. Missing or
+invalid anchor/interval configuration skips emission. Prometheus 429, 5xx, and
+network failures are retried up to three attempts; other 4xx responses are not
+retried.
+
 ## 📁 Directory Layout
 
 ```text

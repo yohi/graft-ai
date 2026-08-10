@@ -1,0 +1,317 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: graft-ai-terraform-apply
+  cancel-in-progress: false
+
+jobs:
+  deploy-logpush-worker:
+    name: Deploy Logpush Worker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: deploy --config wrangler.jsonc
+
+  deploy-tail-worker:
+    name: Deploy Tail Worker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: deploy --config wrangler.tail.jsonc
+
+  deploy-proxy-worker:
+    name: Deploy Proxy Worker
+    runs-on: ubuntu-latest
+    needs: [deploy-tail-worker]
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: deploy --config wrangler.proxy.jsonc
+
+  deploy-ollama-worker:
+    name: Deploy Ollama Worker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: deploy --config wrangler.ollama.jsonc
+
+  deploy-provider-metrics-worker:
+    name: Deploy Provider Metrics Worker
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Deploy with Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: deploy --config wrangler.provider-metrics.jsonc
+
+  terraform-apply-cloudflare:
+    name: Terraform Apply (cloudflare)
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-logpush-worker
+      - deploy-proxy-worker
+      - deploy-ollama-worker
+      - deploy-provider-metrics-worker
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    concurrency:
+      group: graft-ai-terraform-apply
+      cancel-in-progress: false
+    env:
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_grafana_cloud_loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+      TF_VAR_grafana_cloud_loki_username: ${{ secrets.GRAFANA_CLOUD_LOKI_USERNAME }}
+      TF_VAR_grafana_cloud_access_policy_token: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN }}
+      TF_VAR_origin_secret: ${{ secrets.ORIGIN_SECRET }}
+      TF_VAR_rsa_private_key_pem: ${{ secrets.RSA_PRIVATE_KEY_PEM }}
+      TF_VAR_workers_subdomain: ${{ vars.WORKERS_SUBDOMAIN }}
+      TF_VAR_logpush_dataset: ${{ vars.LOGPUSH_DATASET || 'ai_gateway_events' }}
+      TF_VAR_worker_script_name: ${{ vars.WORKER_SCRIPT_NAME || 'graft-ai-aig-logpush' }}
+      TF_VAR_logpush_job_name: ${{ vars.LOGPUSH_JOB_NAME || 'graft-ai-aig-logpush' }}
+    outputs:
+      logpush_job_id: ${{ steps.tf_output.outputs.logpush_job_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: terraform apply -auto-approve -input=false
+
+      - name: Capture outputs
+        id: tf_output
+        working-directory: terraform
+        run: |
+          echo "logpush_job_id=$(terraform output -raw logpush_job_id)" >> "$GITHUB_OUTPUT"
+
+  terraform-apply-grafana:
+    name: Terraform Apply (grafana)
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-logpush-worker
+      - deploy-proxy-worker
+      - deploy-ollama-worker
+      - deploy-provider-metrics-worker
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    concurrency:
+      group: graft-ai-terraform-apply
+      cancel-in-progress: false
+    env:
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+      TF_VAR_grafana_cloud_api_key: ${{ secrets.GRAFANA_CLOUD_API_KEY }}
+      TF_VAR_grafana_stack_slug: ${{ vars.GRAFANA_STACK_SLUG }}
+    outputs:
+      loki_url: ${{ steps.grafana_outputs.outputs.loki_url }}
+      loki_username: ${{ steps.grafana_outputs.outputs.loki_username }}
+      loki_token: ${{ steps.grafana_outputs.outputs.loki_token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform/grafana
+        run: terraform init -input=false
+
+      - name: Terraform apply
+        working-directory: terraform/grafana
+        run: terraform apply -auto-approve -input=false
+
+      - name: Capture outputs
+        id: grafana_outputs
+        working-directory: terraform/grafana
+        run: |
+          LOKI_URL=$(terraform output -raw grafana_loki_url)
+          LOKI_USER=$(terraform output -raw grafana_loki_username)
+          LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token)
+          echo "::add-mask::${LOKI_URL}"
+          echo "::add-mask::${LOKI_USER}"
+          echo "::add-mask::${LOKI_TOKEN}"
+          echo "loki_url=${LOKI_URL}" >> "$GITHUB_OUTPUT"
+          echo "loki_username=${LOKI_USER}" >> "$GITHUB_OUTPUT"
+          echo "loki_token=${LOKI_TOKEN}" >> "$GITHUB_OUTPUT"
+
+  update-wrangler-secrets:
+    name: Update Wrangler Secrets
+    runs-on: ubuntu-latest
+    needs: [terraform-apply-grafana]
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GRAFANA_LOKI_URL: ${{ needs.terraform-apply-grafana.outputs.loki_url }}
+      GRAFANA_LOKI_USERNAME: ${{ needs.terraform-apply-grafana.outputs.loki_username }}
+      GRAFANA_LOKI_TOKEN: ${{ needs.terraform-apply-grafana.outputs.loki_token }}
+      ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET }}
+      RSA_PRIVATE_KEY_PEM: ${{ secrets.RSA_PRIVATE_KEY_PEM }}
+      PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: workers/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers
+        run: npm ci
+
+      - name: Update secrets
+        run: bash scripts/ci-update-wrangler-secrets.sh
+
+  verify-deployment:
+    name: Verify Deployment
+    runs-on: ubuntu-latest
+    needs:
+      - terraform-apply-cloudflare
+      - terraform-apply-grafana
+      - update-wrangler-secrets
+    if: github.ref == 'refs/heads/master'
+    environment: production
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKERS_SUBDOMAIN: ${{ vars.WORKERS_SUBDOMAIN }}
+      PROXY_SECRET: ${{ secrets.PROXY_SECRET }}
+      GRAFANA_LOKI_URL: ${{ needs.terraform-apply-grafana.outputs.loki_url }}
+      GRAFANA_LOKI_USERNAME: ${{ needs.terraform-apply-grafana.outputs.loki_username }}
+      GRAFANA_LOKI_TOKEN: ${{ needs.terraform-apply-grafana.outputs.loki_token }}
+      LOGPUSH_JOB_ID: ${{ needs.terraform-apply-cloudflare.outputs.logpush_job_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run verification
+        run: bash scripts/ci-verify-deployment.sh

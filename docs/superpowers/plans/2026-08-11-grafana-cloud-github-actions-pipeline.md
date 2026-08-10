@@ -475,6 +475,7 @@ git commit -m "feat(scripts): add ci helper to update wrangler secrets from terr
 
 **Interfaces:**
 - Consumes: env vars `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `WORKERS_SUBDOMAIN`, `PROXY_SECRET`, `GRAFANA_LOKI_URL`, `GRAFANA_LOKI_USERNAME`, `GRAFANA_LOKI_TOKEN`, optional `LOGPUSH_JOB_ID`; uses `X-Request-ID` as the telemetry correlation ID and queries Loki `query_range`
+- Requires: `workers/src/proxy.ts` must preserve the incoming `X-Request-ID` as telemetry `request_id`; add or retain a regression test in `workers/tests/proxy.test.ts`
 - Produces: exit 0 if all verifications pass
 
 - [ ] **Step 1: スクリプトを作成**
@@ -558,11 +559,22 @@ echo "Deployment verification passed."
 chmod +x scripts/ci-verify-deployment.sh
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Proxy correlation contract を確認**
+
+`workers/src/proxy.ts` の telemetry 生成処理で、incoming `X-Request-ID` を `request_id` に優先して保存する。`workers/tests/proxy.test.ts` に、Cloudflare AI Gateway の `cf-aig-request-id` と異なる `X-Request-ID` を送信した場合でも、telemetry の `request_id` が correlation ID になる回帰テストを追加または維持する。
 
 ```bash
-git add scripts/ci-verify-deployment.sh
-git commit -m "feat(scripts): add deployment verification script for ci"
+make test
+make typecheck
+```
+
+Expected: proxy correlation test が PASS し、TypeScript typecheck も PASS すること。
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add scripts/ci-verify-deployment.sh workers/src/proxy.ts workers/tests/proxy.test.ts
+git commit -m "feat(ci): verify proxy correlation ID reaches Loki"
 ```
 
 ### Task 3.3: `.github/workflows/deploy.yml` を作成

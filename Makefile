@@ -51,3 +51,17 @@ deploy-ollama:
 
 deploy-provider-metrics:
 	cd workers && npx wrangler deploy --config wrangler.provider-metrics.jsonc
+
+.PHONY: validate-grafana plan-grafana apply-grafana
+
+validate-grafana:
+	terraform -chdir=terraform/grafana init -backend=false
+	terraform -chdir=terraform/grafana validate
+
+plan-grafana:
+	terraform -chdir=terraform/grafana init
+	terraform -chdir=terraform/grafana plan
+
+apply-grafana:
+	terraform -chdir=terraform/grafana init
+	terraform -chdir=terraform/grafana apply

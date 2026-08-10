@@ -10,10 +10,8 @@ Transform encrypted Cloudflare AI Gateway access logs into Loki JSON streams and
 push them to Grafana Cloud Loki, while remaining within the Grafana Cloud Free
 Tier limits (14-day retention, 10k active series, 50GB logs).
 
-> **Note:** Ollama Cloud rate-limit reset metrics are specified separately in
-> [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md).
-> OpenAI usage metrics are collected by the current Provider Metrics Worker
-> described below.
+> **Note:** Ollama Cloud rate-limit reset metrics and provider usage metrics are
+> documented in this specification and implemented by the scheduled Workers below.
 
 ## 2. Subsystems
 
@@ -90,8 +88,22 @@ OTLP/v1 JSON.
   `GET /v1/organization/usage/completions` (Bearer Admin Key, daily window)
 - The history window is controlled by `OPENAI_API_HISTORY_DAYS`; it defaults to
   `1` day when unset and accepts integer values from `1` through `31` days.
+- The OpenAI fetch is skipped when `OPENAI_API_HISTORY_DAYS` is unset or invalid;
+  other providers still execute.
+- When the OpenAI response contains zero cost buckets and zero token buckets,
+  the result is treated as empty and excluded from the push payload.
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token)
+- Codex `primary_window` and `secondary_window` are required; missing or
+  out-of-range values cause the Codex fetch to fail.
+- `GET .../wham/rate-limit-reset-credits` is a supplementary endpoint. When it
+  fails, Codex usage metrics are still pushed; only `codex_reset_credits` and
+  `codex_reset_credits_available_count` are omitted.
 - **OpenCodeGo:** HTML scraping of `opencode.ai/workspace/{id}/go` (Session Cookie)
+- OpenCodeGo rolling usage and rolling reset are required fields; the fetch
+  fails when they are absent. Weekly and monthly windows are optional; their
+  metrics are omitted when the response does not contain them.
+- When `OPENCODEGO_WORKSPACE_ID` is unset, the workspace ID is auto-fetched from
+  the OpenCodeGo `_server` endpoint before scraping the usage page.
 
 **Metrics pushed:**
 
@@ -100,7 +112,55 @@ OTLP/v1 JSON.
 - `opencodego_usage_ratio{period}`, `opencodego_reset_seconds_remaining{period}`, `opencodego_zen_balance_usd`
 
 **Error handling:** Each provider fetch is independent; a single failure does
-not prevent other metrics from being pushed.
+not prevent other metrics from being pushed. HTTP 401 and 403 responses are
+treated as immediate failures (cookie/key expired) and are not retried. HTTP
+429 and 5xx responses, as well as network failures, are retried up to three
+attempts with exponential backoff. Other 4xx responses are not retried. When
+all providers are skipped, misconfigured, or produce no metrics, the Worker
+logs an error and exits without pushing.
+
+### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
+
+A scheduled Worker (cron `*/5 * * * *`) derives session and weekly rate-limit
+reset metrics from a configured ISO 8601 anchor and documented reset intervals.
+It does not scrape the Ollama Cloud dashboard or attempt to infer actual usage.
+The resulting metrics are pushed to Grafana Cloud Prometheus via OTLP/v1 JSON.
+
+**Configuration:**
+
+- `OLLAMA_CLOUD_RESET_ANCHOR_ISO` is required and must be a strict ISO 8601
+  timestamp with timezone information.
+- `OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS` defaults to `18000` (5 hours).
+- `OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS` defaults to `604800` (7 days).
+- `OLLAMA_CLOUD_PLAN` is optional and defaults to `unknown`.
+- `GRAFANA_CLOUD_PROMETHEUS_URL`,
+  `GRAFANA_CLOUD_PROMETHEUS_USERNAME`, and
+  `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` are required for metric delivery.
+
+**Calculation:** For each period, let `elapsed = now - anchor` and
+`remainder = ((elapsed % interval) + interval) % interval`. The Worker emits
+`progress_ratio = remainder / interval`,
+`remaining_seconds = interval - remainder`, and
+`next_reset_timestamp = now + remaining_seconds`. The normalized modulo keeps
+the result valid when the scheduled time precedes the anchor.
+
+**Metrics pushed:**
+
+- `ollama_cloud_reset_seconds_remaining{period}`
+- `ollama_cloud_reset_timestamp_seconds{period}`
+- `ollama_cloud_reset_progress_ratio{period}`
+- `ollama_cloud_plan_info{plan,session_interval,weekly_interval}`
+
+**Error handling:** Missing or invalid anchor/interval configuration is logged
+and the scheduled invocation exits without pushing metrics. Prometheus 429 and
+5xx responses, as well as network failures, are retried up to three attempts
+with exponential backoff. Other 4xx responses are not retried.
+
+**Alerts:** Grafana alert rules (`grafana/alerts/graft-ai-ollama-cloud-rules.json`)
+fire when `ollama_cloud_reset_seconds_remaining{period="session"} < 3600` (1 hour
+before session reset) and when
+`ollama_cloud_reset_seconds_remaining{period="weekly"} < 86400` (24 hours before
+weekly reset).
 
 #### 2.4 Data Transformation Rules
 

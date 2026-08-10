@@ -10,10 +10,8 @@ English version: [SPEC.md](./SPEC.md)
 Loki に push します。同時に、Grafana Cloud Free
 Tier の制限（14日間保持、10k active series、50GB logs）内に収めます。
 
-> **注記:** Ollama Cloud レート制限リセットメトリクスは
-> [`docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md`](./docs/superpowers/specs/2026-07-05-ollama-cloud-reset-design.md)
-> で別途に定義されています。OpenAI 利用メトリクスは、下記の Provider Metrics
-> Worker が現行機能として収集します。
+> **注記:** Ollama Cloud のレート制限リセットメトリクスとプロバイダー利用
+> メトリクスは本仕様書に記載し、下記のスケジュール実行 Worker で実装します。
 
 ## 2. サブシステム
 
@@ -62,8 +60,22 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
   `GET /v1/organization/usage/completions`（Bearer Admin Key、日次 window）
 - 取得期間は `OPENAI_API_HISTORY_DAYS` で指定し、未設定時のデフォルトは1日、
   指定可能な範囲は1〜31日の整数です。
+- `OPENAI_API_HISTORY_DAYS` が未設定または不正の場合、OpenAI fetch をスキップし、
+  他のプロバイダーは継続実行します。
+- OpenAI レスポンスに cost bucket と token bucket がともに0件の場合、結果は空とみなし
+  push ペイロードから除外します。
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token）
+- Codex の `primary_window` と `secondary_window` は必須です。欠損や範囲外の値は
+  Codex fetch 全体を失敗させます。
+- `GET .../wham/rate-limit-reset-credits` は補助エンドポイントです。失敗時も Codex
+  usage メトリクスは push され、`codex_reset_credits` と
+  `codex_reset_credits_available_count` のみ省略されます。
 - **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping（Session Cookie）
+- OpenCodeGo の rolling usage と rolling reset は必須フィールドです。欠損時は fetch
+  が失敗します。weekly と monthly ウィンドウは任意で、レスポンスに含まれない場合は
+  それらのメトリクスは省略されます。
+- `OPENCODEGO_WORKSPACE_ID` 未設定時、使用量ページをスクレイピングする前に
+  OpenCodeGo の `_server` エンドポイントからワークスペース ID を自動取得します。
 
 **Metrics pushed:**
 
@@ -71,7 +83,54 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
 - `codex_usage_ratio{period}`、`codex_reset_timestamp_seconds{period}`、`codex_credits_remaining`、`codex_reset_credits`、`codex_reset_credits_available_count`、`codex_plan_info{plan}`
 - `opencodego_usage_ratio{period}`、`opencodego_reset_seconds_remaining{period}`、`opencodego_zen_balance_usd`
 
-**Error handling:** Provider ごとの fetch は独立しており、1つの失敗が他のメトリクス push を妨げません。
+**Error handling:** Provider ごとの fetch は独立しており、1つの失敗が他のメトリクス
+push を妨げません。HTTP 401 と 403 は即時失敗（cookie/key 期限切れ）として扱い、
+再試行しません。HTTP 429 と 5xx、およびネットワーク障害は指数バックオフで最大3回
+再試行します。それ以外の 4xx は再試行しません。全プロバイダーがスキップ・設定
+不正・メトリクス空の場合、Worker はエラーログを出力し push せずに終了します。
+
+### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
+
+Cron `*/5 * * * *` で実行する Worker です。設定した ISO 8601 のアンカー時刻と
+公式に文書化されたリセット間隔から、session と weekly のレート制限リセット
+メトリクスを派生します。Ollama Cloud のダッシュボードをスクレイピングしたり、
+実際の使用量を推測したりはしません。結果は OTLP/v1 JSON で Grafana Cloud
+Prometheus に push します。
+
+**設定:**
+
+- `OLLAMA_CLOUD_RESET_ANCHOR_ISO` は必須で、タイムゾーン情報を含む厳密な ISO 8601
+  時刻を指定します。
+- `OLLAMA_CLOUD_SESSION_INTERVAL_SECONDS` のデフォルトは `18000`（5時間）です。
+- `OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS` のデフォルトは `604800`（7日）です。
+- `OLLAMA_CLOUD_PLAN` は任意で、未設定時は `unknown` です。
+- `GRAFANA_CLOUD_PROMETHEUS_URL`、`GRAFANA_CLOUD_PROMETHEUS_USERNAME`、
+  `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` はメトリクス送信に必須です。
+
+**算出方法:** 各期間について `elapsed = now - anchor`、
+`remainder = ((elapsed % interval) + interval) % interval` として計算します。
+Worker は `progress_ratio = remainder / interval`、
+`remaining_seconds = interval - remainder`、
+`next_reset_timestamp = now + remaining_seconds` を送信します。この正規化された
+剰余により、実行時刻がアンカーより前でも正しい範囲になります。
+
+**送信メトリクス:**
+
+- `ollama_cloud_reset_seconds_remaining{period}`
+- `ollama_cloud_reset_timestamp_seconds{period}`
+- `ollama_cloud_reset_progress_ratio{period}`
+- `ollama_cloud_plan_info{plan,session_interval,weekly_interval}`
+
+**エラー処理:** アンカーまたは間隔の設定が未設定・不正な場合はログを出力し、
+メトリクスを送信せずスケジュール実行を終了します。Prometheus の 429、5xx、
+ネットワーク障害は指数バックオフで最大3回まで再試行します。それ以外の 4xx は
+再試行しません。
+
+**アラート:** Grafana アラートルール
+（`grafana/alerts/graft-ai-ollama-cloud-rules.json`）は、
+`ollama_cloud_reset_seconds_remaining{period="session"} < 3600`（session リセット1時間前）
+および `ollama_cloud_reset_seconds_remaining{period="weekly"} < 86400`
+（weekly リセット24時間前）で発火します。
 
 #### 2.4 データ変換ルール
 

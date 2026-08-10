@@ -88,8 +88,9 @@ OTLP/v1 JSON.
   `GET /v1/organization/usage/completions` (Bearer Admin Key, daily window)
 - The history window is controlled by `OPENAI_API_HISTORY_DAYS`; it defaults to
   `1` day when unset and accepts integer values from `1` through `31` days.
-- The OpenAI fetch is skipped when `OPENAI_API_HISTORY_DAYS` is unset or invalid;
-  other providers still execute.
+- The OpenAI fetch uses the default of `1` day when `OPENAI_API_HISTORY_DAYS` is
+  unset. It is skipped only when the variable is explicitly set to an invalid
+  value; other providers still execute.
 - When the OpenAI response contains zero cost buckets and zero token buckets,
   the result is treated as empty and excluded from the push payload.
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token)
@@ -135,7 +136,9 @@ The resulting metrics are pushed to Grafana Cloud Prometheus via OTLP/v1 JSON.
 - `OLLAMA_CLOUD_PLAN` is optional and defaults to `unknown`.
 - `GRAFANA_CLOUD_PROMETHEUS_URL`,
   `GRAFANA_CLOUD_PROMETHEUS_USERNAME`, and
-  `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` are required for metric delivery.
+  `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` are required for metric delivery. The
+  token must include the `metrics:write` scope and must be separate from a
+  Loki-only token with the `logs:write` scope.
 
 **Calculation:** For each period, let `elapsed = now - anchor` and
 `remainder = ((elapsed % interval) + interval) % interval`. The Worker emits

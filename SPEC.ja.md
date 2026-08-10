@@ -60,8 +60,9 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
   `GET /v1/organization/usage/completions`（Bearer Admin Key、日次 window）
 - 取得期間は `OPENAI_API_HISTORY_DAYS` で指定し、未設定時のデフォルトは1日、
   指定可能な範囲は1〜31日の整数です。
-- `OPENAI_API_HISTORY_DAYS` が未設定または不正の場合、OpenAI fetch をスキップし、
-  他のプロバイダーは継続実行します。
+- `OPENAI_API_HISTORY_DAYS` が未設定の場合はデフォルトの1日で取得します。
+  明示的に不正な値が設定された場合のみ OpenAI fetch をスキップし、他のプロバイダーは
+  継続実行します。
 - OpenAI レスポンスに cost bucket と token bucket がともに0件の場合、結果は空とみなし
   push ペイロードから除外します。
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token）
@@ -105,7 +106,8 @@ Prometheus に push します。
 - `OLLAMA_CLOUD_WEEKLY_INTERVAL_SECONDS` のデフォルトは `604800`（7日）です。
 - `OLLAMA_CLOUD_PLAN` は任意で、未設定時は `unknown` です。
 - `GRAFANA_CLOUD_PROMETHEUS_URL`、`GRAFANA_CLOUD_PROMETHEUS_USERNAME`、
-  `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` はメトリクス送信に必須です。
+  `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` はメトリクス送信に必須です。トークンには
+  `metrics:write` scope が必要で、Loki の `logs:write` 専用 token とは分離してください。
 
 **算出方法:** 各期間について `elapsed = now - anchor`、
 `remainder = ((elapsed % interval) + interval) % interval` として計算します。

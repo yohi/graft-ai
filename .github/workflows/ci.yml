@@ -69,7 +69,7 @@ jobs:
       TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       TF_VAR_grafana_cloud_loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
-      TF_VAR_grafana_cloud_loki_username: ${{ secrets.GRAFANA_CLOUD_LOKI_USERNAME }}
+      TF_VAR_grafana_cloud_loki_username: ${{ vars.GRAFANA_CLOUD_LOKI_USERNAME }}
       TF_VAR_grafana_cloud_access_policy_token: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN }}
       TF_VAR_origin_secret: ${{ secrets.ORIGIN_SECRET }}
       TF_VAR_rsa_private_key_pem: ${{ secrets.RSA_PRIVATE_KEY_PEM }}

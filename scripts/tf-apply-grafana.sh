@@ -9,8 +9,8 @@
 #   4. Re-registers the token as a Wrangler secret (overwrite)
 #
 # Usage (from repo root):
+#   terraform login app.terraform.io
 #   export TF_VAR_grafana_cloud_api_key="<your-org-api-key>"
-#   export TF_BACKEND_CONFIG_FILE="terraform/grafana/backend.hcl" # S3 backend bucket/key/region
 #   bash scripts/tf-apply-grafana.sh
 # -------------------------------------------------------------------
 set -euo pipefail
@@ -74,9 +74,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT/terraform/grafana"
 
 info "Running terraform init..."
-[[ -n "${TF_BACKEND_CONFIG_FILE:-}" ]] \
-  || die "TF_BACKEND_CONFIG_FILE is not set. Export it to the path of a backend.hcl file providing the S3 backend's bucket/key/region (see terraform/grafana/versions.tf)."
-terraform init -upgrade -backend-config="$TF_BACKEND_CONFIG_FILE"
+terraform init -input=false
 
 info "Running terraform apply (Grafana Access Policy + Token)..."
 terraform apply \

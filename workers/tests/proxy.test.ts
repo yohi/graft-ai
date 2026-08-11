@@ -148,4 +148,30 @@ describe("AI Gateway proxy Worker", () => {
 
     vi.restoreAllMocks();
   });
+
+  it("uses X-Request-ID as the telemetry correlation ID", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("{}", {
+        status: 200,
+        headers: { "cf-aig-request-id": "req-from-aig" },
+      }),
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const request = new Request("https://proxy.example.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "x-proxy-secret": "test-proxy-secret",
+        "x-request-id": "graft-ai-ci-correlation",
+      },
+      body: "{}",
+    });
+
+    await proxyWorker.fetch?.(request, buildEnv(), mockCtx as unknown as ExecutionContext);
+
+    const [line] = logSpy.mock.calls[0] ?? [];
+    expect((JSON.parse(String(line)) as TelemetryEvent).request_id).toBe("graft-ai-ci-correlation");
+
+    vi.restoreAllMocks();
+  });
 });

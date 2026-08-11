@@ -76,7 +76,10 @@ function buildTelemetryEvent(
   const tokens = parseTokenHeader(response.headers);
   return {
     _graft_ai_telemetry: true,
-    request_id: response.headers.get("cf-aig-request-id") ?? crypto.randomUUID(),
+    request_id:
+      request.headers.get("X-Request-ID") ??
+      response.headers.get("cf-aig-request-id") ??
+      crypto.randomUUID(),
     timestamp: new Date().toISOString(),
     model: response.headers.get("cf-aig-model") ?? "unknown",
     status_code: response.status,

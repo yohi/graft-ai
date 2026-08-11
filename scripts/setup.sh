@@ -162,7 +162,7 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
     cd "${REPO_ROOT}/terraform/grafana"
     info "Terraform init を実行中..."
     TF_LOG_FILE="${REPO_ROOT}/.terraform-init.log"
-    if terraform init -input=false -upgrade >"$TF_LOG_FILE" 2>&1; then
+    if terraform init -input=false >"$TF_LOG_FILE" 2>&1; then
       TF_APPLY_LOG="${REPO_ROOT}/.terraform-apply.log"
       info "Terraform apply で Access Policy + Token を自動構築中..."
       if terraform apply \

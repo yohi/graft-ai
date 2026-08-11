@@ -543,9 +543,11 @@ Use this if you want a quick self-check before deploying:
 
 ## ⚠️ Operational Notes
 
-- Terraform state is currently stored locally by default. Configure a remote
-  encrypted backend (e.g., S3 with SSE + DynamoDB locking) before production
-  use.
+- The Grafana Terraform module uses the Terraform Cloud workspace
+  `graft-ai-grafana`; authenticate with `terraform login app.terraform.io` (or
+  `TF_TOKEN_app_terraform_io` in automation) before running its setup targets.
+  The Cloudflare Terraform module remains separate and uses its own backend
+  configuration.
 - Verify the Cloudflare Logpush dataset name and available fields via the
   Cloudflare API before applying
   (`/accounts/{id}/logpush/datasets/{dataset}/fields`). The default dataset in

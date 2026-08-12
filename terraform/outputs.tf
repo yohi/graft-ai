@@ -13,8 +13,7 @@ output "worker_script_name" {
   value       = var.worker_script_name
 }
 
-output "logpush_destination_conf" {
-  description = "Destination configuration used for the Logpush job"
-  value       = local.destination_conf
-  sensitive   = true
+output "logpush_destination_url" {
+  description = "Destination URL used for the Logpush job (query parameters excluded)"
+  value       = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev"
 }

@@ -45,13 +45,12 @@ locals {
 
 resource "null_resource" "aig_logpush_job" {
   triggers = {
-    account_id          = var.cloudflare_account_id
-    dataset             = var.logpush_dataset
-    destination_conf    = local.destination_conf
-    job_name            = var.logpush_job_name
-    max_upload_bytes    = var.max_upload_bytes
-    max_upload_records  = var.max_upload_records
-    output_options_hash = sha256(local.logpush_payload)
+    dataset               = var.logpush_dataset
+    destination_conf_hash = nonsensitive(sha256(local.destination_conf))
+    job_name              = var.logpush_job_name
+    max_upload_bytes      = var.max_upload_bytes
+    max_upload_records    = var.max_upload_records
+    output_options_hash   = sha256(local.logpush_payload)
   }
 
   provisioner "local-exec" {

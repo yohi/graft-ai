@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.5.0"
 
   cloud {
-    organization = "graft-ai"
+    organization = "y_ohi"
     workspaces {
       name = "graft-ai-grafana"
     }

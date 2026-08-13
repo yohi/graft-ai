@@ -17,9 +17,7 @@ English version: [README.md](./README.md)
 
 本プロジェクトは **Grafana Cloud Free Tier**（14日間保持、10k active
 series、50GB logs）の制約内で動作するように最適化されています。デフォルトのデプロイ経路は Cloudflare
-**Workers Logpush** を使用し、これには **Cloudflare Workers Paid plan** が必要です。一方で、Cloudflare
-Worker と Tail Worker で通信を中継する **Free Tier proxy mode** も利用できるため、Logpush job なしでも運用できます。
-> **注記:** Tail Worker の利用には **Cloudflare Workers Paid または Enterprise plan** が必要です。"Free Tier" は Grafana Cloud の無料枠を指し、Cloudflare の無料プランではありません。
+**Workers Logpush** を使用し、これには **Cloudflare Workers Paid plan** が必要です。一方で、Cloudflare Worker だけで通信を中継する **Free Tier proxy-only mode** も利用できるため、Logpush job や Tail Worker なしで運用できます。
 
 ### 📊 機能サポート・ロードマップ マトリクス
 
@@ -27,7 +25,7 @@ Worker と Tail Worker で通信を中継する **Free Tier proxy mode** も利�
 
 | 機能 / プロバイダ | 現在できること (現状のサポート) | できないこと / 制限事項 | 将来の対応予定 (ロードマップ) |
 | :--- | :--- | :--- | :--- |
-| **Workers AI** | AI Gateway を経由したログの収集と Grafana Loki への転送 (Logpush / Free Proxy 両モード対応) | - | - |
+| **Workers AI** | AI Gateway を経由したログの収集と Grafana Loki への転送 (Logpush モードのみ) | - | - |
 | **OpenAI (via AI Gateway)** | AI Gateway を経由したログの収集と Grafana Loki への転送 | usage API を介した直接の使用量取得 | usage API を介した usage scraping 機能 (個別 API キーからの直接取得) |
 | **Anthropic (via AI Gateway)** | AI Gateway を経由したログの収集と Grafana Loki への転送 | usage API を介した直接の使用量取得 | - |
 | **Ollama Cloud** | セッション/週次のレートリミットリセット時間の算出と Grafana Metrics (Prometheus 形式) への転送 | リアルタイムアクセスログの転送 | リセット時間アンカーの動的な自動検出（現在は固定値ベース） |
@@ -162,9 +160,7 @@ graft-ai/
 
 - **Logpush mode:** Cloudflare Logpush から暗号化された AI Gateway
   アクセスログを受信し、Loki JSON streams へ変換して Grafana Cloud Loki に push します。
-- **Free Tier proxy mode:** client traffic を proxy Worker 経由にし、request ごとに marker 付きの構造化
-  `console.log()` telemetry line を出力します。Tail Worker がそのログを Loki 形式へ変換し、Grafana Cloud
-  Loki に push します。
+- **Free Tier proxy-only mode:** client traffic を proxy Worker 経由にし、上流の AI Gateway に転送してクライアントにそのまま返します。このモードでは Grafana Cloud Loki へのアクセスログ転送は行いません。
 
 #### データフロー
 
@@ -185,21 +181,16 @@ graft-ai/
   └─ HTTPS + Basic Auth で Grafana Cloud Loki に push
 ```
 
-##### Free Tier Proxy Mode (Logpush 不要)
-
 ```text
 [Client/App]
   └─ AI Gateway ではなく proxy Worker を直接呼ぶ
        ↓
-[Cloudflare Workers - workers/src/proxy.ts]
+[Cloudflare Workers - proxy.ts]
+  ├─ X-Proxy-Secret ヘッダーを検証
   ├─ Cloudflare AI Gateway にリクエストを forward
-  ├─ AI Gateway response を client にそのまま返す
-  └─ request ごとに JSON telemetry line を1行出力
-       ↓ Tail Worker logs
-[Cloudflare Workers - workers/src/tail-worker.ts]
-  ├─ marker 付き console.log line を filter
-  ├─ telemetry を transform.ts と同じ AI Gateway log shape に変換
-  └─ loki.ts 経由で Loki JSON streams を push
+  └─ AI Gateway response を client にそのまま返す
+       ↓
+  [Client receives the upstream response]
 ```
 
 #### 主要な設計ルール
@@ -246,30 +237,25 @@ Cloudflare アカウントで Workers Logpush を使えない場合は、この�
 
 #### ワンコマンドセットアップ（推奨）
 
-次のスクリプトで Free Tier パイプライン全体を自動セットアップできます。
+次のスクリプトで Proxy Worker を自動セットアップできます。
 
 ```bash
-bash scripts/setup.sh
+bash scripts/setup-free-tier.sh
 ```
 
-スクリプトは次の 10 ステップを自動で実行します。
+スクリプトは次の 5 ステップを自動で実行します。
 
-1. 前提ツールの確認（`npx wrangler`、`curl`、`jq`、`gcx`）
-2. `gcx` ログイン状態の確認
-3. `gcx` API を使用した Loki 接続情報（URL、ユーザー名）の自動取得
-4. Cloud Access Policy トークンの取得（Terraform による自動構築、または手動入力フォールバック）
-5. Cloudflare AI Gateway ID の自動検出（`CF_ACCOUNT_ID` は `wrangler.proxy.jsonc` から読み取られ、未設定または初期値の場合は処理を中断）
-6. `PROXY_SECRET` の自動生成
-7. Proxy Worker および Tail Worker への Wrangler secrets（`PROXY_SECRET`等）の登録
-8. ローカル開発用の `.dev.vars` ファイルの生成
-9. Tail Worker（`wrangler.tail.jsonc`）および Proxy Worker（`wrangler.proxy.jsonc`）のデプロイ
-10. `gcx` API を使用した Grafana ダッシュボード（`grafana/dashboards/graft-ai-overview.json`）の自動インポートとサマリー表示
+1. 前提ツールの確認 (`npx wrangler`)
+2. `PROXY_SECRET` の自動生成
+3. Proxy Worker への Wrangler secret (`PROXY_SECRET`) の登録
+4. ローカル開発用の `.dev.vars` ファイルの生成/更新
+5. Proxy Worker (`wrangler.proxy.jsonc`) のデプロイ
 
 `make setup-free-tier` でも実行できます。
 
-#### Cloud Access Policy トークン
+Proxy-only mode では AI Gateway access logs を Grafana Cloud Loki に転送しません。Proxy Worker を経由したリクエストのみが上流 AI Gateway に到達します。
 
-Tail Worker が Grafana Cloud Loki にログを push するには、`logs:write` スコープを持つ **Cloud Access Policy トークン**が必要です。
+Logpush モードで Loki へ転送する場合は、Grafana インスタンスで `logs:write` スコープを持つ Cloud Access Policy token を作成し、`wrangler.jsonc` 向けの Wrangler secret として登録してください。
 
 > **重要:** Cloud Access Policy の UI は grafana.com ポータルではなく、**Grafana インスタンス内**にあります。
 > 次の URL からアクセスしてください:
@@ -283,10 +269,8 @@ Tail Worker が Grafana Cloud Loki にログを push するには、`logs:write`
 #### 変数リファレンス
 
 **ルーティング変数**（上流 AI Gateway URL の構築に使用）:
-
-- `CF_ACCOUNT_ID` — Cloudflare アカウント ID
-- `AI_GATEWAY_ID` — URL パス中の AI Gateway スラッグ（例: `my-gateway`）。`scripts/setup.sh` が自動検出します。**実際の gateway スラッグと一致している必要があります**。
-
+- `CF_ACCOUNT_ID` — Cloudflare アカウント ID（32 桁の 16 進数文字列）。`workers/wrangler.proxy.jsonc` に設定してください。
+- `AI_GATEWAY_ID` — URL パス中の AI Gateway スラッグ（例: `my-gateway`）。**実際の gateway スラッグと一致している必要があります**。既定値のままではデプロイできません。
 **Loki ラベル変数**（低カーディナリティラベルのみ、ルーティングには不要）:
 
 - `GATEWAY_NAME` — Loki の `gateway` ラベル値。`AI_GATEWAY_ID` と別でも構いません。ダッシュボード向けの識別子です。
@@ -303,13 +287,9 @@ Tail Worker が Grafana Cloud Loki にログを push するには、`logs:write`
 [workers/src/proxy.ts]
   ├─ X-Proxy-Secret ヘッダーを検証
   ├─ method, headers, body, path, query を Cloudflare AI Gateway に forward
-  ├─ AI Gateway response を client へそのまま返す
-  └─ "_graft_ai_telemetry": true 付きの JSON telemetry line を 1 request につき 1 行出力
-       ↓ Tail Worker logs
-[workers/src/tail-worker.ts]
-  ├─ marker 付き console.log line を filter
-  ├─ telemetry を transform.ts と同じ AI Gateway log shape に変換
-  └─ loki.ts 経由で Loki JSON streams を push
+  └─ AI Gateway response を client へそのまま返す
+       ↓
+  [Client receives the upstream response]
 ```
 
 

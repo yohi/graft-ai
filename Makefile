@@ -35,9 +35,9 @@ deploy:
 	terraform -chdir=terraform init
 	terraform -chdir=terraform apply
 
-# Free Tier: full automated setup (Grafana Access Policy + Wrangler secrets + deploy)
+# Free Tier: proxy-only setup; no Tail Worker, Logpush, or Terraform apply.
 setup-free-tier:
-	bash scripts/setup.sh
+	bash scripts/setup-free-tier.sh
 
 # Free Tier: create/rotate Grafana Access Policy token via Terraform and re-register secrets
 setup-grafana:

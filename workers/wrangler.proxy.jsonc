@@ -4,7 +4,6 @@
   "main": "src/proxy.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
-  "tail_consumers": [{ "service": "graft-ai-aig-tail" }],
   "observability": {
     "enabled": true
   },

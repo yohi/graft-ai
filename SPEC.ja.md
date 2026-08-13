@@ -26,6 +26,7 @@ Loki に push します。
 #### 2.2 アーキテクチャ
 
 ```text
+##### Logpush Mode
 [Client/App]
     ↓
 [Cloudflare AI Gateway] ── logs ──→ [Cloudflare Logpush]
@@ -37,6 +38,15 @@ Loki に push します。
 [Grafana Cloud Loki]
                                        ↓
 [Grafana Cloud Dashboard]
+
+##### Free Tier Proxy-Only Mode
+
+[Client/App]
+↓ X-Proxy-Secret header
+[Cloudflare Workers - proxy.ts (graft-ai-aig-proxy)]
+├─ validates X-Proxy-Secret
+├─ forwards to Cloudflare AI Gateway (my-gateway)
+└─ returns the upstream response unchanged
 ```
 
 #### 2.3 構成要素
@@ -48,6 +58,8 @@ Loki に push します。
 | Transform Worker | Wrangler (`workers/src/index.ts`)      | 入口検証、解凍、復号、変換、Loki への push を実行します。    |
 | Credentials      | Wrangler secrets + `TF_VAR_*` env vars | Grafana token、origin secret、RSA private key を保持します。 |
 | Loki             | Grafana Cloud managed                  | 変換後 logs を14日間保存します。                             |
+| Proxy Worker     | Wrangler (`workers/src/proxy.ts`)      | X-Proxy-Secret を検証し、AI Gateway に転送して上流レスポンスを返します。 |
+| Tail Worker      | 有料プランのオプションコンポーネント   | Free Tier proxy-only mode では使用しません。                             |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 

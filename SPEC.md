@@ -49,14 +49,7 @@ Loki.
 [Cloudflare Workers - proxy.ts (graft-ai-aig-proxy)]
     ├─ validates X-Proxy-Secret
     ├─ forwards to Cloudflare AI Gateway (my-gateway)
-    └─ emits JSON telemetry log line
-         ↓ Tail Worker
-[Cloudflare Workers - tail-worker.ts (graft-ai-aig-tail)]
-    └─ pushes Loki JSON stream via loki.ts
-         ↓
-[Grafana Cloud Loki]
-         ↓
-[Grafana Dashboard (graft-ai-aig-overview)]
+    └─ returns the upstream response unchanged
 ```
 
 #### 2.3 Components
@@ -68,8 +61,8 @@ Loki.
 | Transform Worker | Wrangler (`workers/src/index.ts`) | Validates ingress, decompresses, decrypts, transforms, and pushes to Loki. |
 | Credentials | Wrangler secrets + `TF_VAR_*` env vars | Holds Grafana token, origin secret, and RSA private key. |
 | Loki | Grafana Cloud managed | Stores transformed logs for 14 days. |
-| Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, emits telemetry. |
-| Tail Worker | Wrangler (`workers/src/tail-worker.ts`) | Filters telemetry logs, transforms to Loki streams. |
+| Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, and returns the upstream response. |
+| Tail Worker | Paid-plan optional component | Not used in Free Tier proxy-only mode. |
 | Ollama Cloud Worker | Wrangler (`workers/src/ollama-cloud.ts`) | Derives reset metrics from a strict ISO 8601 anchor and pushes OTLP metrics. |
 | Ollama Cloud alerts | Grafana Alerting API (`grafana/alerts/`) | Fires session/weekly reset alerts from Prometheus metrics. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |

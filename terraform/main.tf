@@ -8,7 +8,7 @@ provider "cloudflare" {
 #
 # NOTE: cloudflare_logpush_job does not yet support the "ai_gateway_events"
 # dataset in provider v5, so the job is managed through the Cloudflare API.
-# The helper performs an idempotent upsert by job name.
+# The helper performs an idempotent upsert by job name and dataset.
 
 locals {
   destination_conf = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev?header_X-Origin-Secret=${urlencode(var.origin_secret)}"
@@ -45,9 +45,9 @@ locals {
 resource "terraform_data" "aig_logpush_job" {
   # Keep only non-secret values in input so the Terraform plan/state does not
   # store the Cloudflare API token. The token is passed to the create-time
-  # local-exec via its environment. On destroy, export CF_API_TOKEN in the
-  # calling shell (from TF_VAR_cloudflare_api_token or another source) so the
-  # helper can remove the Logpush job.
+  # local-exec via its environment. Terraform destroy provisioners cannot
+  # reference normal variables, so export CF_API_TOKEN in the calling shell
+  # before apply or destroy; the helper inherits it and can remove the job.
   triggers_replace = [
     nonsensitive(sha256(var.cloudflare_account_id)),
     nonsensitive(sha256(local.destination_conf)),
@@ -65,6 +65,7 @@ resource "terraform_data" "aig_logpush_job" {
       CF_API_TOKEN  = nonsensitive(var.cloudflare_api_token)
       CF_ACCOUNT_ID = var.cloudflare_account_id
       JOB_NAME      = var.logpush_job_name
+      DATASET       = var.logpush_dataset
       PAYLOAD       = local.logpush_payload
     }
     command = "${path.module}/manage-cloudflare-logpush-job.sh upsert"
@@ -75,6 +76,7 @@ resource "terraform_data" "aig_logpush_job" {
     environment = {
       CF_ACCOUNT_ID = self.input.cloudflare_account_id
       JOB_NAME      = self.input.logpush_job_name
+      DATASET       = self.input.logpush_dataset
     }
     command = "${path.module}/manage-cloudflare-logpush-job.sh delete"
   }

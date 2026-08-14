@@ -83,3 +83,68 @@ test("rejects a field_names block missing a required encrypted payload field", (
     },
   );
 });
+
+test("does not count quoted field names inside HCL comments", () => {
+  withVerifierFixture(
+    allFields.filter((field) => field !== "ResponseBody"),
+    (fixtureRoot) => {
+      writeFileSync(
+        join(fixtureRoot, "terraform", "main.tf"),
+        `field_names = [
+  ${allFields.filter((field) => field !== "ResponseBody").map((field) => `"${field}",`).join("\n  ")}
+  # "ResponseBody"
+]
+`,
+      );
+      assert.throws(
+        () =>
+          execFileSync(process.execPath, ["scripts/verify-terraform-logpush-fields.mjs"], {
+            cwd: fixtureRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          }),
+        (error) => {
+          assert.equal(error.status, 1);
+          assert.match(error.stderr, /Missing required Logpush fields: ResponseBody/);
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test("does not select a field_names block inside an HCL block comment", () => {
+  withVerifierFixture(
+    allFields.filter((field) => field !== "ResponseBody"),
+    (fixtureRoot) => {
+      const commentedFields = allFields.map((field) => `  "${field}",`).join("\n");
+      const actualFields = allFields
+        .filter((field) => field !== "ResponseBody")
+        .map((field) => `  "${field}",`)
+        .join("\n");
+      writeFileSync(
+        join(fixtureRoot, "terraform", "main.tf"),
+        `/* field_names = [
+${commentedFields}
+] */
+field_names = [
+${actualFields}
+]
+`,
+      );
+      assert.throws(
+        () =>
+          execFileSync(process.execPath, ["scripts/verify-terraform-logpush-fields.mjs"], {
+            cwd: fixtureRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          }),
+        (error) => {
+          assert.equal(error.status, 1);
+          assert.match(error.stderr, /Missing required Logpush fields: ResponseBody/);
+          return true;
+        },
+      );
+    },
+  );
+});

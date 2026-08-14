@@ -22,7 +22,7 @@ fi
 if [[ "$action" == "delete" && -z "${CF_API_TOKEN:-}" ]]; then
   printf 'CF_API_TOKEN is not set; skipping Logpush job deletion.\n' >&2
   printf 'Export CF_API_TOKEN before running terraform destroy if you want the job removed.\n' >&2
-  exit 1
+  exit 0
 fi
 
 api_base_url="${CLOUDFLARE_API_BASE_URL:-https://api.cloudflare.com/client/v4}"

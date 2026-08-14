@@ -60,12 +60,20 @@ run_setup() {
     bash "${fixture_root}/scripts/setup-free-tier.sh"
 }
 
-test_rejects_main_gateway_id() {
+test_accepts_main_gateway_id() {
+  local fixture_root
+  fixture_root="$(create_fixture accepts-main main)"
+
+  run_setup "$fixture_root" >/dev/null
+  [[ -e "${fixture_root}/npx.log" ]] || fail 'setup did not invoke npx for a valid main gateway'
+}
+
+test_rejects_gateway_placeholder() {
   local fixture_root output
-  fixture_root="$(create_fixture rejects-main main)"
+  fixture_root="$(create_fixture rejects-placeholder replace-with-ai-gateway-id)"
 
   if output="$(run_setup "$fixture_root" 2>&1)"; then
-    fail 'setup accepted AI_GATEWAY_ID=main'
+    fail 'setup accepted the AI_GATEWAY_ID placeholder'
   fi
 
   [[ "$output" == *'Set AI_GATEWAY_ID'* ]] || fail 'missing AI_GATEWAY_ID validation error'
@@ -86,7 +94,11 @@ EOF
   actual="$(<"${fixture_root}/workers/.dev.vars")"
   expected=$'EXISTING_KEY=kept\nPROXY_SECRET=abcdefghijklmnopqrstuvwxyzABCDEF\nANOTHER_KEY=also-kept'
   [[ "$actual" == "$expected" ]] || fail '.dev.vars did not preserve non-PROXY_SECRET keys'
-  mode="$(stat -c '%a' "${fixture_root}/workers/.dev.vars")"
+  if stat --version >/dev/null 2>&1; then
+    mode="$(stat -c '%a' "${fixture_root}/workers/.dev.vars")"
+  else
+    mode="$(stat -f '%Lp' "${fixture_root}/workers/.dev.vars")"
+  fi
   [[ "$mode" == '600' ]] || fail ".dev.vars mode was ${mode}, expected 600"
 }
 
@@ -113,7 +125,8 @@ test_accepts_jsonc_configuration() {
   [[ -e "${fixture_root}/npx.log" ]] || fail 'setup did not invoke npx for valid JSONC configuration'
 }
 
-test_rejects_main_gateway_id
+test_accepts_main_gateway_id
+test_rejects_gateway_placeholder
 test_replaces_secret_preserving_other_keys_and_mode
 test_appends_secret_preserving_existing_keys
 test_accepts_jsonc_configuration

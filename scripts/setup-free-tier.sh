@@ -122,7 +122,7 @@ ai_gateway_id="$(proxy_var '.vars.AI_GATEWAY_ID // empty')"
 [[ "$cf_account_id" =~ ^[0-9a-fA-F]{32}$ ]] ||
   die "CF_ACCOUNT_ID must be a 32-character hex string."
 
-[[ -n "$ai_gateway_id" && "$ai_gateway_id" != "replace-with-ai-gateway-id" && "$ai_gateway_id" != "main" ]] ||
+[[ -n "$ai_gateway_id" && "$ai_gateway_id" != "replace-with-ai-gateway-id" ]] ||
   die "Set AI_GATEWAY_ID in ${proxy_config} before deploying."
 
 if [[ -z "${PROXY_SECRET:-}" ]]; then

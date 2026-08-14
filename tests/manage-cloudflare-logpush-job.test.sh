@@ -19,11 +19,10 @@ printf '{"success":true,"result":[]}\n200'
 EOF
 chmod 700 "${tmpdir}/bin/curl"
 
-test_delete_requires_api_token() {
+test_delete_skips_without_api_token() {
   local output
-  if output="$(env -u CF_API_TOKEN CF_ACCOUNT_ID=0123456789abcdef0123456789abcdef JOB_NAME=test-job bash "$script_path" delete 2>&1)"; then
-    fail 'delete succeeded without CF_API_TOKEN'
-  fi
+  output="$(env -u CF_API_TOKEN CF_ACCOUNT_ID=0123456789abcdef0123456789abcdef JOB_NAME=test-job bash "$script_path" delete 2>&1)" ||
+    fail 'delete failed while skipping without CF_API_TOKEN'
 
   [[ "$output" == *'CF_API_TOKEN is not set'* ]] || fail 'missing CF_API_TOKEN requirement error'
 }
@@ -45,6 +44,6 @@ test_requests_use_bounded_timeouts_without_network() {
   grep -Fx -- '60' "$args_log" >/dev/null || fail 'curl lacks 60-second maximum time'
 }
 
-test_delete_requires_api_token
+test_delete_skips_without_api_token
 test_requests_use_bounded_timeouts_without_network
 printf 'PASS: manage-cloudflare-logpush-job regression tests\n'

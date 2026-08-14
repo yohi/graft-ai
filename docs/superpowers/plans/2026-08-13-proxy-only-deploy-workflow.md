@@ -4,7 +4,7 @@
 
 **Goal:** Close PR #31 and replace its Logpush/Tail-Worker-centric deploy workflow with a proxy-only mode production CD that deploys only the Proxy Worker, Ollama Worker, and Provider Metrics Worker from `master`.
 
-**Architecture:** Use GitHub Actions. Trigger on `master` push and `workflow_dispatch`. Each deployable Worker has its own job. Proxy-only mode intentionally does NOT deploy the Logpush receiver Worker, Tail Worker, or Terraform Logpush job. Optional Terraform Grafana workspace apply is retained for metrics/alert resources, but Loki secret updates for Logpush/Tail Workers are removed.
+**Architecture:** Use GitHub Actions. Trigger on `master` push and `workflow_dispatch`. Each deployable Worker has its own job. Proxy-only mode intentionally does NOT deploy the Logpush receiver Worker, Tail Worker, Terraform Logpush job, or Terraform Grafana workspace resources. Grafana metrics and alert resources are managed separately and are not part of this Worker-only CD workflow.
 
 **Tech Stack:** GitHub Actions YAML, Bash, Wrangler CLI, Terraform CLI.
 
@@ -91,7 +91,7 @@
   | `deploy-ollama-worker` | Deploy `graft-ai-ollama-cloud` via `wrangler.ollama.jsonc` |
   | `deploy-provider-metrics-worker` | Deploy `graft-ai-provider-metrics` via `wrangler.provider-metrics.jsonc` |
 
-  Use `cloudflare/wrangler-action@v3`. Each job runs only on `refs/heads/master` and targets the `production` environment.
+  Use the Wrangler action pinned to the v3 release commit shown below. Each job runs only on `refs/heads/master` and targets the `production` environment. No Terraform job is included: this workflow has no Terraform credentials, Terraform working directory, or Terraform dependency graph, and a Terraform failure cannot partially block Worker deployment. Terraform Logpush and Grafana resources remain explicit, separately invoked operations.
 
   ```yaml
   name: Deploy
@@ -108,15 +108,15 @@
       if: github.ref == 'refs/heads/master'
       environment: production
       steps:
-        - uses: actions/checkout@v4
-        - uses: actions/setup-node@v4
+        - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
           with:
             node-version: 22
             cache: npm
             cache-dependency-path: workers/package-lock.json
         - working-directory: workers
-          run: npm ci
-        - uses: cloudflare/wrangler-action@v3
+          run: npm ci --ignore-scripts
+        - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
           with:
             apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
             accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -129,15 +129,15 @@
       if: github.ref == 'refs/heads/master'
       environment: production
       steps:
-        - uses: actions/checkout@v4
-        - uses: actions/setup-node@v4
+        - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
           with:
             node-version: 22
             cache: npm
             cache-dependency-path: workers/package-lock.json
         - working-directory: workers
-          run: npm ci
-        - uses: cloudflare/wrangler-action@v3
+          run: npm ci --ignore-scripts
+        - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
           with:
             apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
             accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -150,15 +150,15 @@
       if: github.ref == 'refs/heads/master'
       environment: production
       steps:
-        - uses: actions/checkout@v4
-        - uses: actions/setup-node@v4
+        - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
           with:
             node-version: 22
             cache: npm
             cache-dependency-path: workers/package-lock.json
         - working-directory: workers
-          run: npm ci
-        - uses: cloudflare/wrangler-action@v3
+          run: npm ci --ignore-scripts
+        - uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
           with:
             apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
             accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -174,7 +174,9 @@
   actionlint .github/workflows/deploy.yml
   ```
 
-  Otherwise, push the file to a branch and confirm GitHub shows no workflow syntax errors.
+  Confirm each pinned commit in the GitHub repository history resolves to the intended release before handoff: checkout `11d5960a326750d5838078e36cf38b85af677262` (`v4`), setup-node `49933ea5288caeca8642d1e84afbd3f7d6820020` (`v4`), and wrangler-action `9acf94ace14e7dc412b076f2c5c20b8ce93c79cd` (`v3`).
+
+If `actionlint` is unavailable, push the file to a branch and confirm GitHub shows no workflow syntax errors.
 
 ---
 

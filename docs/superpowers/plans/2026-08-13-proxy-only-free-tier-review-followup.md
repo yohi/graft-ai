@@ -49,6 +49,8 @@
   ]
   ```
 
+  `RequestBody` と `ResponseBody` は Cloudflare Logpush の入力契約には含めるが、Worker の出力では既定で除外する。復号済みの本文を Loki に含めるのは、それぞれ `INCLUDE_REQUEST_BODY=true` または `INCLUDE_RESPONSE_BODY=true` を明示した場合だけとする。これらを有効化する場合は、プロンプト・個人情報・認証情報を機密データとして分類し、Loki へ送る前に認証情報と既知の個人情報をマスキングし、決定的にマスキングできない本文は送信しない。保持期間は Grafana Cloud Free Tier の14日以内とし、`logs:write` の最小権限 token と Grafana の最小権限ユーザー／チームだけが閲覧できるようアクセス制御する。`INCLUDE_METADATA` も同じ基準で扱う。
+
 - [ ] **Step 2: Validate Terraform**
 
   Run:
@@ -215,15 +217,16 @@
 ### Task 5: Regression tests for critical contracts
 
 **Files:**
-- Create or modify tests in `workers/tests/`
+- Modify: `tests/verify-terraform-logpush-fields.test.mjs`
+- Verify: `tests/setup-free-tier.test.sh`
 
 **Interfaces:**
 - Consumes: `terraform/main.tf` output semantics, `scripts/setup-free-tier.sh` behavior.
 - Produces: Tests that prevent future field-name drift and `.dev.vars` data loss.
 
-- [ ] **Step 1: Add a Terraform field contract test**
+- [ ] **Step 1: Extend the existing Node.js Terraform field contract test**
 
-  Create `workers/tests/terraform-logpush-fields.test.ts` that reads `terraform/main.tf`, extracts `field_names`, and asserts it contains at least:
+  Reuse `tests/verify-terraform-logpush-fields.test.mjs`, which already runs as a Node.js test from `make test`. Do not create a `workers/tests/` test that imports `node:fs`: `@cloudflare/vitest-pool-workers` executes Worker tests in workerd, where Node filesystem APIs are unavailable. If the contract must be consumed by a Worker test, read `terraform/main.tf` in Vitest `globalSetup` and expose the immutable contents through `provide()` instead. The Node test must extract `field_names` and assert it contains at least:
 
   ```typescript
   const REQUIRED_FIELDS = [
@@ -244,7 +247,7 @@
   ];
   ```
 
-  The test can be a simple Node script executed by Vitest that parses the HCL-like list with a regex. Keep the test deterministic and fast.
+  The existing verifier must strip HCL comments before extracting quoted list items, and the regression fixture must include a comment containing a quoted required field name. Keep the test deterministic and fast.
 
 - [ ] **Step 2: Run tests and typecheck**
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, symlinkSync, mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -42,6 +42,36 @@ test("validateAndResolvePath normalizes and rejects invalid paths", () => {
   assert.throws(() => validateAndResolvePath("../outside.jsonc"), /Path traversal detected/);
   const resolved = validateAndResolvePath("scripts/parse-jsonc.mjs");
   assert.ok(resolved.endsWith("scripts/parse-jsonc.mjs"));
+});
+
+test("validateAndResolvePath allows names beginning with ..", () => {
+  const baseDir = mkdtempSync(join(tmpdir(), "graft-ai-jsonc-base-"));
+  mkdirSync(join(baseDir, "..cache"));
+  writeFileSync(join(baseDir, "..cache", "config.jsonc"), "{}");
+  try {
+    const resolved = validateAndResolvePath("..cache/config.jsonc", baseDir);
+    assert.equal(resolved, join(baseDir, "..cache", "config.jsonc"));
+  } finally {
+    rmSync(baseDir, { force: true, recursive: true });
+  }
+});
+
+test("validateAndResolvePath rejects symlinks that resolve outside the base", () => {
+  const rootDir = mkdtempSync(join(tmpdir(), "graft-ai-jsonc-symlink-"));
+  const baseDir = join(rootDir, "base");
+  const outsideDir = join(rootDir, "outside");
+  mkdirSync(baseDir);
+  mkdirSync(outsideDir);
+  writeFileSync(join(outsideDir, "config.jsonc"), "{}");
+  symlinkSync(outsideDir, join(baseDir, "linked"), "dir");
+  try {
+    assert.throws(
+      () => validateAndResolvePath("linked/config.jsonc", baseDir),
+      /Path traversal detected/,
+    );
+  } finally {
+    rmSync(rootDir, { force: true, recursive: true });
+  }
 });
 
 test("parseJsonc parses actual repository wrangler configs", () => {

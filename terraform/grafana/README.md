@@ -2,7 +2,7 @@
 
 Grafana Cloud provider module: manages the `grafana_cloud_access_policy`
 (`logs:write` scope) and its `grafana_cloud_access_policy_token`, used by the
-Free Tier proxy mode Tail Worker to push logs to Grafana Cloud Loki.
+Paid-plan Logpush receiver Worker to push logs to Grafana Cloud Loki.
 
 ## Terraform Cloud backend
 
@@ -26,7 +26,6 @@ The normal setup paths preserve the provider selected in
 `.terraform.lock.hcl`:
 
 ```bash
-make setup-free-tier
 make setup-grafana
 make apply-grafana
 ```

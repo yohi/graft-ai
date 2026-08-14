@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,13 +28,18 @@ export function validateAndResolvePath(rawPath, baseDir = process.cwd()) {
   if (rawPath.includes("\0")) {
     throw new Error("Path must not contain null bytes");
   }
-  const resolvedBase = resolve(baseDir);
+  const resolvedBase = realpathSync(baseDir);
   const targetPath = resolve(resolvedBase, rawPath);
   const rel = relative(resolvedBase, targetPath);
-  if (rel.startsWith("..") || isAbsolute(rel) || (!targetPath.startsWith(resolvedBase + sep) && targetPath !== resolvedBase)) {
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new Error("Path traversal detected: path must be within base directory");
   }
-  return targetPath;
+  const canonicalTargetPath = realpathSync(targetPath);
+  const canonicalRel = relative(resolvedBase, canonicalTargetPath);
+  if (canonicalRel === ".." || canonicalRel.startsWith(`..${sep}`) || isAbsolute(canonicalRel)) {
+    throw new Error("Path traversal detected: path must be within base directory");
+  }
+  return canonicalTargetPath;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

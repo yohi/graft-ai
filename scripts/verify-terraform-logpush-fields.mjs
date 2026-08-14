@@ -28,19 +28,29 @@ const REQUIRED_FIELDS = [
 const tfPath = resolve(__dirname, "../terraform/main.tf");
 const content = readFileSync(tfPath, "utf8");
 
-const start = content.indexOf("field_names = [");
-if (start === -1) {
+const contentWithoutComments = content.replace(
+  /("(?:\\.|[^"\\])*")|#[^\r\n]*|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g,
+  (match, stringLiteral) => {
+    if (stringLiteral) {
+      return stringLiteral;
+    }
+    return match.includes("\n") ? "\n".repeat((match.match(/\n/g) || []).length) : "";
+  },
+);
+const startMatch = contentWithoutComments.match(/^\s*field_names\s*=\s*\[/m);
+if (!startMatch || startMatch.index === undefined) {
   console.error("field_names block not found");
   process.exit(1);
 }
-const end = content.indexOf("]", start);
+const start = startMatch.index;
+const end = contentWithoutComments.indexOf("]", start);
 if (end === -1) {
   console.error("field_names block not terminated");
   process.exit(1);
 }
-const block = content.slice(start, end + 1);
+const block = contentWithoutComments.slice(start, end + 1);
 const fields = new Set(
-  Array.from(block.matchAll(/"([A-Za-z]+)"/g), (match) => match[1]),
+  Array.from(block.matchAll(/^\s*"([A-Za-z]+)"\s*,?\s*$/gm), (match) => match[1]),
 );
 
 const missing = REQUIRED_FIELDS.filter((required) => !fields.has(required));

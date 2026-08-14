@@ -103,10 +103,7 @@ make deploy-ollama
 `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` must include the `metrics:write` scope for
 Prometheus delivery. A Loki-only token with `logs:write` will fail to deliver
 metrics. Use a separate Prometheus token from the Loki token, or use one shared
-token containing both `logs:write` and `metrics:write` scopes. `scripts/setup.sh`
-asks for the Prometheus token separately, registers it for the Ollama Worker,
-deploys the Worker, imports the Ollama dashboard, and provisions the two
-Grafana alert rules in `grafana/alerts/graft-ai-ollama-cloud-rules.json`.
+token containing both `logs:write` and `metrics:write` scopes.
 `OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp and the
 Prometheus endpoint must use HTTPS.
 
@@ -140,7 +137,7 @@ graft-ai/
 │   │       └── prometheus.ts
 │   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
 │   │   └── provider-metrics/     # provider fetchers + OTLP metrics client
-│   ├── tests/        # unit and integration tests (50 cases via Vitest)
+│   ├── tests/        # unit and integration tests (179 cases via Vitest)
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vitest.config.ts
@@ -156,11 +153,11 @@ graft-ai/
 ├── scripts/
 │   ├── setup-free-tier.sh   # One-command setup for proxy-only Free Tier mode
 │   └── setup.sh              # Legacy: superseded by setup-free-tier.sh
-├── terraform/        # Terraform: Cloudflare Logpush job + optional Grafana resources
+├── terraform/        # Terraform: Cloudflare Logpush API helper + optional Grafana resources
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
-│   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token (optional)
+│   ├── grafana/          # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
 ├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, setup-free-tier, setup-grafana
@@ -226,6 +223,12 @@ This subsystem supports two modes:
   Optionally includes decrypted `request_body`, `response_body`, and `metadata`
   when `env.INCLUDE_*` flags are explicitly enabled; by default these are
   excluded to protect prompts, response bodies, and metadata.
+- **Sensitive body handling:** The Worker does not automatically redact enabled
+  request bodies, response bodies, or metadata. Treat them as potentially
+  containing PII and credentials; sanitize them before enabling the flags, and
+  leave the flags disabled when deterministic redaction is unavailable. Keep
+  Loki retention within the Grafana Cloud Free Tier limit of 14 days and limit
+  access to the minimum Grafana users/teams and a token with only `logs:write`.
 - **Retry policy:** Loki 429 responses are retried up to 3 times with
   exponential backoff. The Loki handler returns the upstream status on final
   failure, and the Worker maps `429` and `>=500` responses to `503` while all
@@ -335,18 +338,6 @@ cd workers
 npx wrangler deploy --config wrangler.proxy.jsonc
 ```
 
-To create or rotate the Grafana Cloud Access Policy token and re-register the Wrangler secrets manually:
-
-```bash
-make setup-grafana
-```
-
-To import the Grafana dashboard manually, use the gcx CLI directly:
-
-```bash
-gcx api /api/dashboards/db -d @grafana/dashboards/graft-ai-overview.json
-```
-
 After deployment, send one client request through the proxy Worker and confirm
 that the upstream AI Gateway response is returned. Proxy-only mode does not
 send AI Gateway access logs to Loki.
@@ -361,7 +352,7 @@ GitHub Actions workflows drive continuous integration and deployment:
 
 - `.github/workflows/ci.yml` runs on every Pull Request and non-`master` push:
   - TypeScript type check, Vitest run, Prettier check
-  - Terraform fmt/validate for the Cloudflare workspace
+  - Terraform fmt/validate for the Cloudflare and Grafana workspaces
 - `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
   - Deploys the Proxy Worker, Ollama Cloud Worker, and Provider Metrics Worker via Wrangler
   - Uses the `production` GitHub environment
@@ -464,6 +455,12 @@ should run without missing-file or missing-secret errors.
 
    Keep this terminal open while you run Terraform commands.
 
+   Before `terraform apply` or `terraform destroy`, also export `CF_API_TOKEN` in
+   the same shell. Terraform destroy provisioners inherit this variable because
+   they cannot reference normal Terraform variables. The Logpush helper requires
+   it to remove the remote job and does not infer it from
+   `TF_VAR_cloudflare_api_token`.
+
 8. Run local checks before deploying:
 
    ```bash
@@ -486,7 +483,8 @@ should run without missing-file or missing-secret errors.
 
 Follow the same phased verification used during design:
 
-1. `terraform plan` — confirm only the `cloudflare_logpush_job` is created.
+1. `terraform plan` — confirm only `terraform_data.aig_logpush_job` and its
+   Cloudflare API-managed Logpush job are created.
 2. `make test` — run Worker unit and integration tests.
 3. `wrangler dev` — POST a sample gzipped NDJSON payload and confirm `200`.
 4. Real request — send a request through AI Gateway and wait for Loki to show

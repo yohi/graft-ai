@@ -80,7 +80,7 @@ Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で
 `OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
 Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
 
-`make setup-free-tier` は Logpush を使わない Proxy、Tail、Ollama Worker を構築します。
+`make setup-free-tier` は Logpush と Tail Worker を使わない Proxy Worker のみを構築します。
 Provider Metrics はプロバイダー資格情報が別管理のため、Secret 登録後に
 `make deploy-provider-metrics` で個別にデプロイしてください。
 
@@ -100,8 +100,7 @@ make deploy-ollama
 `metrics:write` scope が必要です。`logs:write` のみを持つ Loki 専用 token
 ではメトリクス送信に失敗します。Loki token とは別の Prometheus token を
 使用するか、共有 token に `logs:write` と `metrics:write` の両方を付与して
-ください。`scripts/setup.sh` は Prometheus token を別途入力して Ollama
-Worker に登録します。`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
+ください。`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
 時刻、Prometheus エンドポイントは HTTPS で指定してください。スクリプトは
 さらに Ollama ダッシュボードの import と
 `grafana/alerts/graft-ai-ollama-cloud-rules.json` の Alert Rule 登録を行います。
@@ -113,8 +112,8 @@ graft-ai/
 ├── workers/          # AI Gateway telemetry 用 TypeScript Cloudflare Workers
 │   ├── src/
 │   │   ├── index.ts      # fetch handler: auth → decompress → decrypt → transform → push
-│   │   ├── proxy.ts      # Free Tier proxy: client → AI Gateway + telemetry log
-│   │   ├── tail-worker.ts # Tail Worker: telemetry log → Loki
+│   │   ├── proxy.ts      # Free Tier proxy: client → AI Gateway
+│   │   ├── tail-worker.ts # Paid-plan optional Tail Worker: telemetry log → Loki
 │   │   ├── crypto.ts     # 暗号化フィールド向け RSA-OAEP unwrap + AES-GCM decrypt
 │   │   ├── transform.ts  # NDJSON → Loki JSON streams（labels, timestamp, log line）
 │   │   ├── loki.ts       # Basic Auth と 429 retry を持つ Loki HTTP push client
@@ -125,13 +124,13 @@ graft-ai/
 │   │       └── prometheus.ts
 │   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
 │   │   └── provider-metrics/     # provider fetcher + OTLP metrics client
-│   ├── tests/        # Vitest による unit / integration tests（50 cases）
+│   ├── tests/        # Vitest による unit / integration tests（179 cases）
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vitest.config.ts
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
-│   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
+│   ├── wrangler.tail.jsonc  # Paid-plan optional Tail Worker config
 │   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
 │   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
 ├── grafana/
@@ -139,13 +138,13 @@ graft-ai/
 │       ├── graft-ai-overview.json      # AI Gateway ダッシュボード定義（13 パネル）
 │       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics ダッシュボード
 ├── scripts/
-│   ├── setup.sh              # ワンコマンドセットアップ（Free Tier proxy mode）
-│   └── setup-free-tier.sh   # 旧スクリプト: setup.sh に統合済み
-├── terraform/        # Terraform: Cloudflare Logpush job + Grafana リソース（optional）
+│   ├── setup-free-tier.sh   # Proxy-only Free Tier セットアップ
+│   └── setup.sh             # Legacy: 旧来の統合セットアップ
+├── terraform/        # Terraform: Cloudflare Logpush API helper + Grafana リソース（optional）
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
-│   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token（optional）
+│   ├── grafana/          # Grafana Cloud provider: Access Policy + token（optional）
 │   └── versions.tf
 ├── tests/fixtures/   # AI Gateway NDJSON サンプル fixture
 ├── Makefile          # install, typecheck, test, fmt, validate, deploy, deploy-provider-metrics, setup-free-tier, setup-grafana 用ターゲット
@@ -211,6 +210,12 @@ graft-ai/
   `env.INCLUDE_*`
   flags が明示的に有効な場合のみ含めます。デフォルトでは prompt、response
   body、metadata の保護のため除外します。
+- **機密本文の扱い:** Worker は有効化された request body、response body、metadata
+  を自動でマスキングしません。PII や認証情報を含み得る機密データとして扱い、
+  フラグを有効化する前に送信元で無害化してください。決定的にマスキングできない
+  場合はフラグを無効のままにします。Loki の保持期間は Grafana Cloud Free Tier
+  の14日以内とし、最小限の Grafana ユーザー／チームと `logs:write` のみを持つ
+  token にアクセスを制限してください。
 - **Retry policy:** Loki 429
   response は指数バックオフで最大3回 retry します。Loki 側の最終失敗時は upstream の status を返し、Worker 側で
   `429` と `>=500` を `503`、それ以外の non-2xx を `400` に変換します。
@@ -228,13 +233,13 @@ make test             # Vitest suite を実行
 make fmt              # Terraform と Workers source を format
 make validate         # terraform validate（Logpush mode only）
 make deploy           # wrangler deploy + terraform apply（Logpush mode only）
-make setup-free-tier  # scripts/setup.sh を実行（Free Tier proxy mode、ワンコマンド）
+make setup-free-tier  # scripts/setup-free-tier.sh を実行（Proxy-only Free Tier）
 make setup-grafana    # scripts/tf-apply-grafana.sh を実行し、Access Policy トークンの作成/ローテーションと Wrangler シークレットの再登録を行う
 ```
 
 ### Free Tier セットアップ（No Logpush）
 
-Cloudflare アカウントで Workers Logpush を使えない場合は、このモードを使います。Logpush は Paid Workers plan が必要です。既存の Logpush receiver は `workers/src/index.ts` に残し、`wrangler.jsonc` でデプロイします。Free Tier proxy Worker は `workers/src/proxy.ts` にあり、`wrangler.proxy.jsonc` でデプロイします。Tail Worker は `workers/src/tail-worker.ts` にあり、`wrangler.tail.jsonc` でデプロイします。
+Cloudflare アカウントで Workers Logpush を使えない場合は、この Proxy-only モードを使います。Logpush receiver と Tail Worker はこのモードではデプロイしません。Proxy Worker は `workers/src/proxy.ts` にあり、`wrangler.proxy.jsonc` でデプロイします。
 
 #### ワンコマンドセットアップ（推奨）
 
@@ -256,27 +261,13 @@ bash scripts/setup-free-tier.sh
 
 Proxy-only mode では AI Gateway access logs を Grafana Cloud Loki に転送しません。Proxy Worker を経由したリクエストのみが上流 AI Gateway に到達します。
 
-Logpush モードで Loki へ転送する場合は、Grafana インスタンスで `logs:write` スコープを持つ Cloud Access Policy token を作成し、`wrangler.jsonc` 向けの Wrangler secret として登録してください。
-
-> **重要:** Cloud Access Policy の UI は grafana.com ポータルではなく、**Grafana インスタンス内**にあります。
-> 次の URL からアクセスしてください:
-> `https://{stack}.grafana.net/admin/access-policies`
-> （Administration → Cloud access policies）
->
-> **注意:** Grafana Cloud API Key（`grafana.com/orgs/.../api-keys`）は**廃止**されています。Service Account トークンも Loki への push には**使えません**。`logs:write` スコープを持つ Cloud Access Policy トークンを必ず使用してください。
-
-`scripts/setup.sh` は gcx CLI 経由で Loki URL と username を自動取得します。Access Policy トークンの作成のみ手動で行い、プロンプトに貼り付けてください。
+Proxy-only モードでは Loki 用の Cloud Access Policy token は必要ありません。Logpush モードの Loki 設定は、下記の「Logpush セットアップとデプロイ」節に従ってください。
 
 #### 変数リファレンス
 
 **ルーティング変数**（上流 AI Gateway URL の構築に使用）:
 - `CF_ACCOUNT_ID` — Cloudflare アカウント ID（32 桁の 16 進数文字列）。`workers/wrangler.proxy.jsonc` に設定してください。
 - `AI_GATEWAY_ID` — URL パス中の AI Gateway スラッグ（例: `my-gateway`）。**実際の gateway スラッグと一致している必要があります**。既定値のままではデプロイできません。
-**Loki ラベル変数**（低カーディナリティラベルのみ、ルーティングには不要）:
-
-- `GATEWAY_NAME` — Loki の `gateway` ラベル値。`AI_GATEWAY_ID` と別でも構いません。ダッシュボード向けの識別子です。
-- `ENV_LABEL` — Loki の `env` ラベル値。例: `prod`、`staging`。
-
 デプロイ前に非シークレット値を `workers/wrangler.proxy.jsonc` に記入してください。
 
 #### Free Tier データフロー
@@ -391,6 +382,11 @@ Logpush モードで Loki へ転送する場合は、Grafana インスタンス�
 
    Terraform を実行する間は、このターミナルを開いたままにします。
 
+   `terraform apply` または `terraform destroy` の前には同じ shell で
+   `CF_API_TOKEN` も export してください。Terraform の destroy provisioner は
+   通常の Terraform variable を参照できないため、この変数を継承して使用します。
+   Logpush helper は `TF_VAR_cloudflare_api_token` から自動推測しません。
+
 8. デプロイ前にローカルチェックを実行します。
 
    ```bash
@@ -413,8 +409,8 @@ Logpush モードで Loki へ転送する場合は、Grafana インスタンス�
 
 設計時と同じ段階的な検証を行います。
 
-1. `terraform plan` — `cloudflare_logpush_job`
-   のみが作成されることを確認します。
+1. `terraform plan` — `terraform_data.aig_logpush_job` と Logpush API helper により
+   対象ジョブだけが作成されることを確認します。
 2. `make test` — Worker unit / integration tests を実行します。
 3. `wrangler dev` — gzipped NDJSON sample payload を POST し、`200`
    が返ることを確認します。
@@ -456,8 +452,8 @@ Logpush モードで Loki へ転送する場合は、Grafana インスタンス�
 
 ## ⚠️ 運用メモ
 
-- Terraform state は現在デフォルトでローカル保存です。本番利用前に remote
-  encrypted backend（例: S3 with SSE + DynamoDB locking）を設定してください。
+- Terraform state は `graft-ai-cloudflare` Terraform Cloud workspace に保存されます。
+  適用前に設定済みの Terraform Cloud workspace へログインしてください。
 - 適用前に Cloudflare API で Cloudflare Logpush dataset
   name と利用可能 field を確認してください（`/accounts/{id}/logpush/datasets/{dataset}/fields`）。`terraform/variables.tf`
   の default dataset は `ai_gateway_events`
@@ -475,8 +471,8 @@ Logpush モードで Loki へ転送する場合は、Grafana インスタンス�
   status、Grafana Cloud Logs
   Usage を監視し、この見積もりと週次で比較してください。
 - **対応サービス (LLM) プロバイダの追加・拡張:**
-  - **AI Gateway 経由での利用 (OpenAI, Anthropic 等):** すでにデプロイ済みの Proxy Worker がリクエストを自動で中継するため、`setup.sh` の再実行や再デプロイは不要です。アプリ側の接続先を Proxy Worker URL に向け、各モデルを設定するだけで収集されます。
-  - **新規 Worker や独自の API キーの追加:** 将来的に AI Gateway 以外の収集 Worker や、プロバイダ固有の API キーを増やす場合は、`setup.sh` に新しい Worker のデプロイ処理やシークレット設定を追加した上で、スクリプトを再実行して適用してください。
+  - **AI Gateway 経由での利用 (OpenAI, Anthropic 等):** すでにデプロイ済みの Proxy Worker がリクエストを自動で中継するため、`setup-free-tier.sh` の再実行や再デプロイは不要です。アプリ側の接続先を Proxy Worker URL に向け、各モデルを設定するだけで利用できます。
+  - **新規 Worker や独自の API キーの追加:** 新しい Worker やプロバイダ固有の API キーを追加する場合は、対象 Worker の Wrangler 設定と Secret を個別に更新し、対応する `make deploy-*` ターゲットを実行してください。
 
 ## 📄 ライセンス
 

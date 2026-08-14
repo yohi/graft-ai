@@ -14,6 +14,7 @@ validate:
 
 test:
 	cd workers && npx vitest run
+	node --test tests/parse-jsonc.test.mjs
 	node scripts/verify-terraform-logpush-fields.mjs
 	node --test tests/verify-terraform-logpush-fields.test.mjs
 	bash tests/setup-free-tier.test.sh

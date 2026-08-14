@@ -13,10 +13,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-deploy-ref:
+    name: Validate deployment ref
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject non-master manual deployments
+        if: github.ref != 'refs/heads/master'
+        run: |
+          printf '%s\n' "Deployment is restricted to master; selected ref was ${GITHUB_REF}." >&2
+          exit 1
+
   deploy-proxy-worker:
     name: Deploy Proxy Worker
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    needs: validate-deploy-ref
     environment: production
     timeout-minutes: 15
     steps:
@@ -37,96 +47,9 @@ jobs:
       - name: Validate proxy gateway configuration
         working-directory: workers
         run: |
-          config_values="$(node <<'NODE'
-          const { readFileSync } = require("node:fs");
-
-          const input = readFileSync("wrangler.proxy.jsonc", "utf8");
-          let withoutComments = "";
-          let inString = false;
-          let escaped = false;
-          let inLineComment = false;
-          let inBlockComment = false;
-
-          for (let index = 0; index < input.length; index += 1) {
-            const character = input[index];
-            const next = input[index + 1];
-
-            if (inLineComment) {
-              if (character === "\n") {
-                inLineComment = false;
-                withoutComments += character;
-              }
-              continue;
-            }
-
-            if (inBlockComment) {
-              if (character === "*" && next === "/") {
-                inBlockComment = false;
-                index += 1;
-              } else if (character === "\n") {
-                withoutComments += character;
-              }
-              continue;
-            }
-
-            if (!inString && character === "/" && next === "/") {
-              inLineComment = true;
-              index += 1;
-              continue;
-            }
-
-            if (!inString && character === "/" && next === "*") {
-              inBlockComment = true;
-              index += 1;
-              continue;
-            }
-
-            withoutComments += character;
-            if (character === '"' && !escaped) {
-              inString = !inString;
-            }
-            escaped = character === "\\" && !escaped;
-            if (character !== "\\") {
-              escaped = false;
-            }
-          }
-
-          let normalized = "";
-          inString = false;
-          escaped = false;
-          for (let index = 0; index < withoutComments.length; index += 1) {
-            const character = withoutComments[index];
-            if (character === '"' && !escaped) {
-              inString = !inString;
-            }
-
-            if (!inString && character === ",") {
-              let next = index + 1;
-              while (/\s/.test(withoutComments[next] ?? "")) {
-                next += 1;
-              }
-              if (withoutComments[next] === "}" || withoutComments[next] === "]") {
-                escaped = false;
-                continue;
-              }
-            }
-
-            normalized += character;
-            escaped = character === "\\" && !escaped;
-            if (character !== "\\") {
-              escaped = false;
-            }
-          }
-
-          const config = JSON.parse(normalized);
-          process.stdout.write(JSON.stringify({
-            gateway_id: config?.vars?.AI_GATEWAY_ID ?? "",
-            account_id: config?.vars?.CF_ACCOUNT_ID ?? "",
-          }));
-          NODE
-          )"
-          gateway_id="$(jq -r '.gateway_id' <<<"$config_values")"
-          account_id="$(jq -r '.account_id' <<<"$config_values")"
+          config_values="$(node ../scripts/parse-jsonc.mjs wrangler.proxy.jsonc)"
+          gateway_id="$(jq -r '.vars.AI_GATEWAY_ID // empty' <<<"$config_values")"
+          account_id="$(jq -r '.vars.CF_ACCOUNT_ID // empty' <<<"$config_values")"
           if [[ -z "$gateway_id" || "$gateway_id" == "replace-with-ai-gateway-id" ]]; then
             printf '%s\n' 'Set a real AI_GATEWAY_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
             exit 1
@@ -147,7 +70,7 @@ jobs:
   deploy-ollama-worker:
     name: Deploy Ollama Cloud Worker
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    needs: validate-deploy-ref
     environment: production
     timeout-minutes: 15
     steps:
@@ -176,7 +99,7 @@ jobs:
   deploy-provider-metrics-worker:
     name: Deploy Provider Metrics Worker
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
+    needs: validate-deploy-ref
     environment: production
     timeout-minutes: 15
     steps:

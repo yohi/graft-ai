@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 setup_source="${repo_root}/scripts/setup-free-tier.sh"
+parser_source="${repo_root}/scripts/parse-jsonc.mjs"
 readonly proxy_secret="abcdefghijklmnopqrstuvwxyzABCDEF"
 
 tmpdir="$(mktemp -d)"
@@ -20,6 +21,7 @@ create_fixture() {
 
   mkdir -p "${fixture_root}/bin" "${fixture_root}/scripts" "${fixture_root}/workers"
   cp "$setup_source" "${fixture_root}/scripts/setup-free-tier.sh"
+  cp "$parser_source" "${fixture_root}/scripts/parse-jsonc.mjs"
   cat > "${fixture_root}/bin/npx" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${NPX_CALL_LOG:?}"

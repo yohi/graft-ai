@@ -36,6 +36,22 @@ EOF
   printf '%s\n' "$fixture_root"
 }
 
+create_jsonc_fixture() {
+  local fixture_root
+  fixture_root="$(create_fixture accepts-jsonc actual-gateway)"
+  cat > "${fixture_root}/workers/wrangler.proxy.jsonc" <<'EOF'
+{
+  // Keep this URL to ensure comment stripping does not alter string values.
+  "vars": {
+    "CF_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
+    "AI_GATEWAY_ID": "actual-gateway",
+    "UPSTREAM_URL": "https://example.test/api",
+  },
+}
+EOF
+  printf '%s\n' "$fixture_root"
+}
+
 run_setup() {
   local fixture_root="$1"
   PATH="${fixture_root}/bin:${PATH}" \
@@ -89,7 +105,16 @@ EOF
   [[ "$actual" == "$expected" ]] || fail '.dev.vars did not append PROXY_SECRET only'
 }
 
+test_accepts_jsonc_configuration() {
+  local fixture_root
+  fixture_root="$(create_jsonc_fixture)"
+
+  run_setup "$fixture_root" >/dev/null || fail 'setup rejected valid JSONC configuration'
+  [[ -e "${fixture_root}/npx.log" ]] || fail 'setup did not invoke npx for valid JSONC configuration'
+}
+
 test_rejects_main_gateway_id
 test_replaces_secret_preserving_other_keys_and_mode
 test_appends_secret_preserving_existing_keys
+test_accepts_jsonc_configuration
 printf 'PASS: setup-free-tier regression tests\n'

@@ -26,6 +26,7 @@ Loki に push します。
 #### 2.2 アーキテクチャ
 
 ```text
+##### Logpush Mode
 [Client/App]
     ↓
 [Cloudflare AI Gateway] ── logs ──→ [Cloudflare Logpush]
@@ -37,6 +38,15 @@ Loki に push します。
 [Grafana Cloud Loki]
                                        ↓
 [Grafana Cloud Dashboard]
+
+##### Free Tier Proxy-Only Mode
+
+[Client/App]
+↓ X-Proxy-Secret header
+[Cloudflare Workers - proxy.ts (graft-ai-aig-proxy)]
+├─ validates X-Proxy-Secret
+├─ forwards to Cloudflare AI Gateway (my-gateway)
+└─ returns the upstream response unchanged
 ```
 
 #### 2.3 構成要素
@@ -44,10 +54,12 @@ Loki に push します。
 | Component        | Managed By                             | Responsibility                                               |
 | ---------------- | -------------------------------------- | ------------------------------------------------------------ |
 | AI Gateway       | 既存サービス                           | AI requests を proxy し、access logs を生成します。          |
-| Logpush Job      | Terraform (`cloudflare_logpush_job`)   | Gateway logs を取得し、Worker に NDJSON を POST します。     |
+| Logpush Job      | Terraform (`terraform_data.aig_logpush_job` + Cloudflare API helper) | Gateway logs を取得し、Worker に NDJSON を POST します。 |
 | Transform Worker | Wrangler (`workers/src/index.ts`)      | 入口検証、解凍、復号、変換、Loki への push を実行します。    |
 | Credentials      | Wrangler secrets + `TF_VAR_*` env vars | Grafana token、origin secret、RSA private key を保持します。 |
 | Loki             | Grafana Cloud managed                  | 変換後 logs を14日間保存します。                             |
+| Proxy Worker     | Wrangler (`workers/src/proxy.ts`)      | X-Proxy-Secret を検証し、AI Gateway に転送して上流レスポンスを返します。 |
+| Tail Worker      | 有料プランのオプションコンポーネント   | Free Tier proxy-only mode では使用しません。                             |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
@@ -159,6 +171,11 @@ Worker は `progress_ratio = remainder / interval`、
      data を含む可能性があるため opt-in です。
    - Headers、user IPs、auth tokens、raw prompts/response
      bodies はデフォルトで除外します。
+   - `INCLUDE_*` flag を有効化した場合も Worker は本文や metadata を自動で
+     マスキングしません。有効化した内容は PII や認証情報を含み得る機密データ
+     として扱い、送信前に無害化してください。決定的にマスキングできない場合は
+     flag を無効のままにします。Loki の保持期間は14日以内とし、最小権限の
+     Grafana ユーザー／チームと `logs:write` のみを持つ token にアクセスを制限します。
 
 #### 2.5 信頼性とエラー処理
 
@@ -180,7 +197,7 @@ Worker は `progress_ratio = remainder / interval`、
   tenant ID、password は `logs:write` scope を持つ Access Policy Token です。
 - Secrets は commit せず、`*.tfvars` にも保存しません。環境変数または Wrangler
   secrets を使用します。
-- Terraform state は encrypted remote backend を使用するべきです。
+- Terraform state は設定済みの暗号化 Terraform Cloud workspace に保存します。
 
 #### 2.7 テストと検証
 
@@ -207,7 +224,7 @@ Worker は `progress_ratio = remainder / interval`、
   names を確認します。
 - RSA public key を AI Gateway Logpush settings に upload します。private
   key は Worker が使用します。
-- 本番利用前に encrypted remote Terraform backend を設定します。
+- 設定済みの暗号化 Terraform Cloud workspace にログインしてから適用します。
 - **Monitoring checklist:** Workers Analytics の exceptions と subrequest
   errors、Terraform output または Cloudflare dashboard の Logpush
   `last_delivery` status、Grafana Cloud **Logs Usage** dashboard、実際の log

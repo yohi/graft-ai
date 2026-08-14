@@ -2,11 +2,11 @@
 
 Grafana Cloud provider module: manages the `grafana_cloud_access_policy`
 (`logs:write` scope) and its `grafana_cloud_access_policy_token`, used by the
-Free Tier proxy mode Tail Worker to push logs to Grafana Cloud Loki.
+Paid-plan Logpush receiver Worker to push logs to Grafana Cloud Loki.
 
 ## Terraform Cloud backend
 
-`versions.tf` uses the Terraform Cloud organization `graft-ai` and workspace
+`versions.tf` uses the Terraform Cloud organization `y_ohi` and workspace
 `graft-ai-grafana`. All normal Grafana Terraform commands therefore use the
 Terraform Cloud workspace state; do not pass S3 `-backend-config` arguments or
 set `TF_BACKEND_CONFIG_FILE`.
@@ -26,7 +26,6 @@ The normal setup paths preserve the provider selected in
 `.terraform.lock.hcl`:
 
 ```bash
-make setup-free-tier
 make setup-grafana
 make apply-grafana
 ```
@@ -50,7 +49,7 @@ The Terraform Cloud backend configuration is already present in
 automated setup command on that checkout:
 
 1. Authenticate to Terraform Cloud as described above and confirm access to
-   organization `graft-ai` and workspace `graft-ai-grafana`.
+   organization `y_ohi` and workspace `graft-ai-grafana`.
 2. From this directory, make a backup of the local state outside the repository
    or in a protected location.
 3. Initialize the configured backend and approve the state copy when prompted:

@@ -49,14 +49,7 @@ Loki.
 [Cloudflare Workers - proxy.ts (graft-ai-aig-proxy)]
     ├─ validates X-Proxy-Secret
     ├─ forwards to Cloudflare AI Gateway (my-gateway)
-    └─ emits JSON telemetry log line
-         ↓ Tail Worker
-[Cloudflare Workers - tail-worker.ts (graft-ai-aig-tail)]
-    └─ pushes Loki JSON stream via loki.ts
-         ↓
-[Grafana Cloud Loki]
-         ↓
-[Grafana Dashboard (graft-ai-aig-overview)]
+    └─ returns the upstream response unchanged
 ```
 
 #### 2.3 Components
@@ -64,12 +57,12 @@ Loki.
 | Component | Managed By | Responsibility |
 | --------- | ---------- | -------------- |
 | AI Gateway | Existing service | Proxies AI requests and generates access logs. |
-| Logpush Job | Terraform (`cloudflare_logpush_job`) | Fetches gateway logs and POSTs NDJSON to the Worker. |
+| Logpush Job | Terraform (`terraform_data.aig_logpush_job` + Cloudflare API helper) | Fetches gateway logs and POSTs NDJSON to the Worker. |
 | Transform Worker | Wrangler (`workers/src/index.ts`) | Validates ingress, decompresses, decrypts, transforms, and pushes to Loki. |
 | Credentials | Wrangler secrets + `TF_VAR_*` env vars | Holds Grafana token, origin secret, and RSA private key. |
 | Loki | Grafana Cloud managed | Stores transformed logs for 14 days. |
-| Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, emits telemetry. |
-| Tail Worker | Wrangler (`workers/src/tail-worker.ts`) | Filters telemetry logs, transforms to Loki streams. |
+| Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, and returns the upstream response. |
+| Tail Worker | Paid-plan optional component | Not used in Free Tier proxy-only mode. |
 | Ollama Cloud Worker | Wrangler (`workers/src/ollama-cloud.ts`) | Derives reset metrics from a strict ISO 8601 anchor and pushes OTLP metrics. |
 | Ollama Cloud alerts | Grafana Alerting API (`grafana/alerts/`) | Fires session/weekly reset alerts from Prometheus metrics. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
@@ -191,6 +184,12 @@ weekly reset).
      bodies, or other sensitive data.
    - Headers, user IPs, auth tokens, and raw prompts/response bodies are
      excluded by default.
+   - The Worker does not automatically redact body or metadata content when an
+     `INCLUDE_*` flag is enabled. Treat enabled content as potentially containing
+     PII or credentials, sanitize it before delivery, and keep the flag disabled
+     when deterministic redaction is unavailable. Retain Loki data for no more
+     than 14 days and restrict access to least-privilege Grafana users/teams and
+     a token limited to the `logs:write` scope.
 
 #### 2.5 Reliability and Error Handling
 
@@ -213,7 +212,7 @@ weekly reset).
   password = Access Policy Token with `logs:write` scope.
 - Secrets are never committed or stored in `*.tfvars`. Use environment variables
   or Wrangler secrets.
-- Terraform state should use an encrypted remote backend.
+- Terraform state uses encrypted Terraform Cloud workspaces.
 
 #### 2.7 Testing and Validation
 
@@ -231,7 +230,7 @@ weekly reset).
 - Terraform provider: `cloudflare/cloudflare` v5.x.
 - Terraform provider (optional): `grafana/grafana ~> 3.0` for managing Grafana Cloud Access Policy and token.
 - Worker deployment via Wrangler; Terraform manages only the Logpush job (and optionally Grafana Access Policy).
-- Free Tier proxy mode requires no Terraform; deploy via `scripts/setup.sh` or the manual Wrangler commands.
+- Free Tier proxy mode requires no Terraform; deploy via `scripts/setup-free-tier.sh` or the manual Wrangler commands.
 - Cloud Access Policy with `logs:write` scope is required for Loki push. Service Account tokens do **not** work for Loki push.
 - Grafana Cloud Free Tier limits apply.
 
@@ -241,7 +240,7 @@ weekly reset).
   applying Terraform.
 - Upload the RSA public key to the AI Gateway Logpush settings; the private key
   is used by the Worker.
-- Configure a remote encrypted Terraform backend before production use.
+- Authenticate the configured encrypted Terraform Cloud workspaces before applying changes.
 - **Monitoring checklist:** Workers Analytics for exceptions and subrequest
   errors; Logpush `last_delivery` status via Terraform output or the Cloudflare
   dashboard; Grafana Cloud **Logs Usage** dashboard; weekly comparison of actual
@@ -250,11 +249,12 @@ weekly reset).
   raw. At 100k requests/day, expect roughly 1.5–4.5 GB/month, which fits within
   the Grafana Cloud Free Tier 50 GB/month logs allowance.
 - **Grafana dashboard URL:** `https://{stack}.grafana.net/d/graft-ai-aig-overview`
-  (imported automatically by `scripts/setup.sh` via gcx API).
+  (import the dashboard separately for Logpush mode).
 - **AI Gateway ID vs. GATEWAY_NAME:** `AI_GATEWAY_ID` must match the actual
   gateway slug used in the Cloudflare AI Gateway URL path (e.g., `my-gateway`);
-  it is auto-detected by `scripts/setup.sh`. `GATEWAY_NAME` is a separate Loki
-  label value and does not need to match the gateway slug.
+  it must be set in `workers/wrangler.proxy.jsonc` before proxy deployment.
+  `GATEWAY_NAME` is a separate Loki label value and does not need to match the
+  gateway slug.
 - **Cloud Access Policy UI:** The Access Policy is created inside the Grafana
   instance at `https://{stack}.grafana.net/admin/access-policies`
   (Administration → Cloud access policies), **not** on the grafana.com portal.

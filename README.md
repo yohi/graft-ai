@@ -18,9 +18,8 @@ usages, and access logs from multiple AI provider endpoints into a unified
 This project is optimized to run within the **Grafana Cloud Free Tier**
 (14-day retention, 10k active series, 50GB logs). The default deployment path
 uses Cloudflare **Workers Logpush**, which requires a **Cloudflare Workers
-Paid plan**. An alternative **Free Tier proxy mode** is available and routes traffic
-through a Cloudflare Worker plus a Tail Worker so no Logpush job is needed.
-> **Note:** Tail Workers require a **Cloudflare Workers Paid or Enterprise plan**; the "Free Tier" refers to Grafana Cloud's free tier, not Cloudflare's.
+Paid plan**. An alternative **Free Tier proxy-only mode** routes traffic through
+a Cloudflare Worker without Workers Logpush or a Tail Worker.
 
 ### 📊 Feature Support & Roadmap Matrix
 
@@ -28,9 +27,10 @@ The current support status and planned roadmap items are summarized below:
 
 | Feature / Provider | What's Possible Now (Current Support) | What's Not Possible / Limitations | Future Plans (Roadmap) |
 | :--- | :--- | :--- | :--- |
-| **Workers AI** | Collect access logs via AI Gateway and forward them to Grafana Loki (both Logpush & Free Proxy modes) | - | - |
-| **OpenAI (via AI Gateway)** | Collect access logs via AI Gateway and forward them to Grafana Loki | Direct usage scraping via OpenAI APIs | Direct usage scraping from OpenAI APIs using API keys |
-| **Anthropic (via AI Gateway)** | Collect access logs via AI Gateway and forward them to Grafana Loki | Direct usage scraping via Anthropic APIs | - |
+| **Workers AI** | Use Workers AI through AI Gateway | - | - |
+| **OpenAI (via AI Gateway)** | Use OpenAI through AI Gateway | Direct usage scraping via OpenAI APIs | Direct usage scraping from OpenAI APIs using API keys |
+| **Anthropic (via AI Gateway)** | Use Anthropic through AI Gateway | Direct usage scraping via Anthropic APIs | - |
+| **AI Gateway access log forwarding** | Collect AI Gateway access logs and forward them to Grafana Loki via Workers Logpush | Proxy-only mode does not forward access logs | - |
 | **Ollama Cloud** | Calculate session/weekly rate-limit reset times and push to Grafana Metrics (Prometheus format) | Real-time access logs forwarding | Dynamic auto-detection of rate-limit reset anchors (currently uses static anchors) |
 | **OpenAI (Direct Connect)** | - (only supported via AI Gateway proxy) | Direct cost/token scraping via API keys | Scheduled usage scraping from OpenAI Usage APIs |
 
@@ -83,7 +83,7 @@ The non-secret history window is configured in
 `1` through `31` days. Run `make deploy-provider-metrics` from the repository
 root after registering the secrets.
 
-`make setup-free-tier` provisions the Logpush-free proxy, Tail, and Ollama
+`make setup-free-tier` provisions the Logpush-free proxy
 Workers. Provider Metrics is deployed separately with
 `make deploy-provider-metrics` because its provider credentials are independent
 of the proxy setup.
@@ -103,10 +103,7 @@ make deploy-ollama
 `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` must include the `metrics:write` scope for
 Prometheus delivery. A Loki-only token with `logs:write` will fail to deliver
 metrics. Use a separate Prometheus token from the Loki token, or use one shared
-token containing both `logs:write` and `metrics:write` scopes. `scripts/setup.sh`
-asks for the Prometheus token separately, registers it for the Ollama Worker,
-deploys the Worker, imports the Ollama dashboard, and provisions the two
-Grafana alert rules in `grafana/alerts/graft-ai-ollama-cloud-rules.json`.
+token containing both `logs:write` and `metrics:write` scopes.
 `OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp and the
 Prometheus endpoint must use HTTPS.
 
@@ -129,8 +126,7 @@ graft-ai/
 ├── workers/          # TypeScript Cloudflare Workers for AI Gateway telemetry
 │   ├── src/
 │   │   ├── index.ts      # fetch handler: auth → decompress → decrypt → transform → push
-│   │   ├── proxy.ts      # Free Tier proxy: client → AI Gateway + telemetry log
-│   │   ├── tail-worker.ts # Tail Worker: telemetry log → Loki
+│   │   ├── proxy.ts      # Free Tier proxy-only: client ↔ AI Gateway
 │   │   ├── crypto.ts     # RSA-OAEP unwrap + AES-GCM decrypt for encrypted log fields
 │   │   ├── transform.ts  # NDJSON → Loki JSON streams (labels, timestamp, log line)
 │   │   ├── loki.ts       # Loki HTTP push client with Basic Auth and 429 retry
@@ -141,13 +137,13 @@ graft-ai/
 │   │       └── prometheus.ts
 │   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
 │   │   └── provider-metrics/     # provider fetchers + OTLP metrics client
-│   ├── tests/        # unit and integration tests (50 cases via Vitest)
+│   ├── tests/        # unit and integration tests (179 cases via Vitest)
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── vitest.config.ts
 │   ├── wrangler.jsonc       # Logpush mode Worker config
 │   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
-│   ├── wrangler.tail.jsonc  # Free Tier Tail Worker config
+  │   ├── wrangler.tail.jsonc  # Paid-plan optional Tail Worker config
 │   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
 │   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
 ├── grafana/
@@ -155,13 +151,13 @@ graft-ai/
 │       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)
 │       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics dashboard
 ├── scripts/
-│   ├── setup.sh              # One-command full setup (Free Tier proxy mode)
-│   └── setup-free-tier.sh   # Legacy: superseded by setup.sh
-├── terraform/        # Terraform: Cloudflare Logpush job + optional Grafana resources
+│   ├── setup-free-tier.sh   # One-command setup for proxy-only Free Tier mode
+│   └── setup.sh              # Legacy: superseded by setup-free-tier.sh
+├── terraform/        # Terraform: Cloudflare Logpush API helper + optional Grafana resources
 │   ├── main.tf
 │   ├── variables.tf
 │   ├── outputs.tf
-│   ├── grafana.tf       # Grafana Cloud provider: Access Policy + token (optional)
+│   ├── grafana/          # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
 ├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, setup-free-tier, setup-grafana
@@ -177,9 +173,8 @@ This subsystem supports two modes:
 - **Logpush mode:** receives encrypted AI Gateway access logs via Cloudflare
   Logpush, transforms them into Loki JSON streams, and pushes them to Grafana
   Cloud Loki.
-- **Free Tier proxy mode:** routes client traffic through a proxy Worker, emits
-  one marked structured `console.log()` telemetry line per request, and uses a
-  Tail Worker to transform those logs and push them to Grafana Cloud Loki.
+- **Free Tier proxy-only mode:** routes client traffic through a proxy Worker
+  and returns the upstream response. It does not collect AI Gateway access logs.
 
 #### Data Flow
 
@@ -207,21 +202,15 @@ This subsystem supports two modes:
   └─ calls proxy Worker instead of AI Gateway directly
        ↓
 [Cloudflare Workers - workers/src/proxy.ts]
+  ├─ validates X-Proxy-Secret
   ├─ forwards request to Cloudflare AI Gateway
-  ├─ streams AI Gateway response back to client
-  └─ emits one JSON telemetry line per request
-       ↓ Tail Worker logs
-[Cloudflare Workers - workers/src/tail-worker.ts]
-  ├─ filters marked console.log lines
-  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
-  └─ pushes Loki JSON streams via loki.ts
+  └─ streams AI Gateway response back to client
 ```
 
 #### Key Design Rules
 
-- **Ingress authentication:** Logpush sends the `X-Origin-Secret` header; the
-  Worker compares it with `env.ORIGIN_SECRET` using a constant-time comparison.
-  Mismatches return `401` to avoid retry loops.
+- **Proxy authentication:** The proxy compares `X-Proxy-Secret` with
+  `env.PROXY_SECRET` using a constant-time comparison. Mismatches return `401`.
 - **Timestamp handling:** `RequestTime` is treated as seconds if ≤10 digits,
   milliseconds if 11–13 digits, and rejected as precision-lost if ≥14 digits.
   The offending log line is skipped and logged.
@@ -234,6 +223,12 @@ This subsystem supports two modes:
   Optionally includes decrypted `request_body`, `response_body`, and `metadata`
   when `env.INCLUDE_*` flags are explicitly enabled; by default these are
   excluded to protect prompts, response bodies, and metadata.
+- **Sensitive body handling:** The Worker does not automatically redact enabled
+  request bodies, response bodies, or metadata. Treat them as potentially
+  containing PII and credentials; sanitize them before enabling the flags, and
+  leave the flags disabled when deterministic redaction is unavailable. Keep
+  Loki retention within the Grafana Cloud Free Tier limit of 14 days and limit
+  access to the minimum Grafana users/teams and a token with only `logs:write`.
 - **Retry policy:** Loki 429 responses are retried up to 3 times with
   exponential backoff. The Loki handler returns the upstream status on final
   failure, and the Worker maps `429` and `>=500` responses to `503` while all
@@ -252,46 +247,40 @@ make test             # run Vitest suite
 make fmt              # format Terraform and Workers sources
 make validate         # terraform validate (Logpush mode only)
 make deploy           # wrangler deploy + terraform apply (Logpush mode only)
-make setup-free-tier  # run scripts/setup.sh (Free Tier proxy mode, one-command)
+make setup-free-tier  # deploy the Free Tier proxy-only Worker
 make setup-grafana    # run scripts/tf-apply-grafana.sh to create/rotate Access Policy token and re-register Wrangler secrets
 ```
 
 ### Free Tier Setup (No Logpush)
 
 Use this mode when your Cloudflare account cannot use Workers Logpush because
-Logpush requires a Paid Workers plan. The existing Logpush receiver remains in
-`workers/src/index.ts` and is deployed via `wrangler.jsonc`. The Free Tier proxy
-Worker is in `workers/src/proxy.ts` and is deployed via
-`wrangler.proxy.jsonc`. The Tail Worker is in `workers/src/tail-worker.ts` and
-is deployed via `wrangler.tail.jsonc`.
+Logpush and Tail Workers require a Paid Workers plan. The proxy Worker is in
+`workers/src/proxy.ts` and is deployed via `wrangler.proxy.jsonc`.
+Set `CF_ACCOUNT_ID` and the real `AI_GATEWAY_ID` in that configuration before
+running the setup script.
 
 #### One-Command Setup (Recommended)
 
-Run the following script to set up the entire Free Tier pipeline automatically:
+Run the following script to set up the Proxy Worker automatically:
 
 ```bash
-bash scripts/setup.sh
+bash scripts/setup-free-tier.sh
 ```
 
-The script performs these 10 steps automatically:
+The script performs these steps automatically:
 
-1. Verify prerequisites (`npx wrangler`, `curl`, `jq`, `gcx`)
-2. Verify Grafana `gcx` login status
-3. Fetch Grafana Cloud Loki connection info (URL, username) via gcx API
-4. Obtain the Cloud Access Policy token (using Terraform auto-provisioning or manual input fallback)
-5. Auto-detect the Cloudflare AI Gateway ID (reads `CF_ACCOUNT_ID` from `wrangler.proxy.jsonc` and aborts if empty or placeholder)
-6. Auto-generate a random `PROXY_SECRET`
-7. Register Wrangler secrets (like `PROXY_SECRET`) on both the Proxy Worker and the Tail Worker
-8. Generate `.dev.vars` for local development
-9. Deploy both the Tail Worker (`wrangler.tail.jsonc`) and the Proxy Worker (`wrangler.proxy.jsonc`)
-10. Import the Grafana dashboard (`grafana/dashboards/graft-ai-overview.json`) via gcx API and print summary
+1. Verify `npx`, Wrangler, and `jq`
+2. Generate a random `PROXY_SECRET`
+3. Register `PROXY_SECRET` on the Proxy Worker
+4. Generate `workers/.dev.vars` for local development
+5. Deploy the Proxy Worker (`wrangler.proxy.jsonc`)
 
 Alternatively, run `make setup-free-tier` from the repo root.
 
-#### Cloud Access Policy Token
+Proxy-only mode does not send AI Gateway access logs to Grafana Cloud Loki.
+Only requests sent through the proxy are forwarded to AI Gateway.
 
-The Tail Worker needs a **Cloud Access Policy token** with `logs:write` scope
-to push logs to Grafana Cloud Loki.
+For Logpush mode, create a Cloud Access Policy token with `logs:write` scope in your Grafana instance and register it as a Wrangler secret on `wrangler.jsonc`.
 
 > **Important:** The Cloud Access Policy UI is inside your **Grafana instance**,
 > not the grafana.com portal. Navigate to:
@@ -302,18 +291,14 @@ to push logs to Grafana Cloud Loki.
 > deprecated. Service Account tokens also **cannot** push to Loki — you must
 > use a Cloud Access Policy token with `logs:write` scope.
 
-`scripts/setup.sh` fetches the Loki URL and username automatically via the gcx
-CLI. You only need to create the Access Policy token manually and paste it when
-prompted.
+Set non-secret values in `workers/wrangler.proxy.jsonc` before deploying. `AI_GATEWAY_ID` must match the actual gateway slug, not an arbitrary name.
 
 #### Variable Reference
 
 **Routing variables** (used to build the upstream AI Gateway URL):
 
 - `CF_ACCOUNT_ID` — your Cloudflare account ID
-- `AI_GATEWAY_ID` — the AI Gateway slug used in the URL path
-  (e.g., `my-gateway`). Automatically detected by `scripts/setup.sh`.
-  **This must match the actual gateway slug**, not an arbitrary name.
+- `AI_GATEWAY_ID` — the AI Gateway slug used in the URL path (e.g., `my-gateway`). **This must match the actual gateway slug**, not an arbitrary name.
 
 **Loki label variables** (low-cardinality labels only, not used for routing):
 
@@ -323,7 +308,7 @@ prompted.
 
 Set non-secret values in `workers/wrangler.proxy.jsonc` before deploying.
 
-#### Free Tier Data Flow
+#### Free Tier Proxy-Only Data Flow
 
 ```text
 [Client/App]
@@ -332,58 +317,52 @@ Set non-secret values in `workers/wrangler.proxy.jsonc` before deploying.
 [workers/src/proxy.ts]
   ├─ validates X-Proxy-Secret header
   ├─ forwards method, headers, body, path, and query to Cloudflare AI Gateway
-  ├─ streams the AI Gateway response back to the client unchanged
-  └─ emits one JSON telemetry line marked with "_graft_ai_telemetry": true
-       ↓ Tail Worker logs
-[workers/src/tail-worker.ts]
-  ├─ filters marked console.log lines
-  ├─ converts telemetry into the same AI Gateway log shape used by transform.ts
-  └─ pushes Loki JSON streams via loki.ts
+  └─ streams the AI Gateway response back to the client unchanged
+       ↓
+  [Client receives the upstream response]
 ```
 
 #### Manual Setup (Alternative)
 
-If you prefer not to use `scripts/setup.sh`, register secrets and deploy
-manually:
+If you prefer not to use `scripts/setup-free-tier.sh`, register secrets and deploy manually:
 
 ```bash
 cd workers
 npx wrangler secret put PROXY_SECRET --config wrangler.proxy.jsonc
-npx wrangler secret put GRAFANA_CLOUD_LOKI_URL --config wrangler.tail.jsonc
-npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME --config wrangler.tail.jsonc
-npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.tail.jsonc
 ```
 
-Deploy the Tail Worker first, then deploy the proxy Worker with the configured
-tail consumer:
+Deploy only the proxy Worker:
 
 ```bash
 cd workers
-npx wrangler deploy --config wrangler.tail.jsonc
 npx wrangler deploy --config wrangler.proxy.jsonc
 ```
 
-To create or rotate the Grafana Cloud Access Policy token and re-register the Wrangler secrets manually:
-
-```bash
-make setup-grafana
-```
-
-To import the Grafana dashboard manually, use the gcx CLI directly:
-
-```bash
-gcx api /api/dashboards/db -d @grafana/dashboards/graft-ai-overview.json
-```
-
 After deployment, send one client request through the proxy Worker and confirm
-that Grafana Cloud Loki receives a log stream with only these labels: `model`,
-`status_code`, `env`, and `gateway`.
+that the upstream AI Gateway response is returned. Proxy-only mode does not
+send AI Gateway access logs to Loki.
 
-> **Note:** `make deploy` and `make validate` run Terraform and only apply
-> to the Logpush mode. For Free Tier mode, use `make setup-free-tier` or
-> the manual `npx wrangler deploy` commands shown above.
+> **Note:** `make deploy`, `make plan`, `make apply`, and `make validate` are
+> Logpush-mode commands. Proxy-only mode does not use Terraform Logpush.
+> Use `make setup-free-tier` or the manual proxy deployment command above.
 
-## 🛠️ Logpush Setup & Deployment (Workers Paid)
+## CI/CD
+
+GitHub Actions workflows drive continuous integration and deployment:
+
+- `.github/workflows/ci.yml` runs on every Pull Request and non-`master` push:
+  - TypeScript type check, Vitest run, Prettier check
+  - Terraform fmt/validate for the Cloudflare and Grafana workspaces
+- `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
+  - Deploys the Proxy Worker, Ollama Cloud Worker, and Provider Metrics Worker via Wrangler
+  - Uses the `production` GitHub environment
+
+Required repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+Provider Metrics and Ollama Cloud Workers need their own secrets registered via Wrangler before the first deploy.
+
+Configure the GitHub `production` environment with **Required reviewers** and restrict deployment branches to `master` before enabling `deploy.yml`.
+
+## 🛠️ Logpush Setup & Deployment (Workers Paid only)
 
 ### Quick Start
 
@@ -435,11 +414,7 @@ should run without missing-file or missing-secret errors.
      secrets.
 
 4. Fill in `workers/.dev.vars`:
-   - `GRAFANA_CLOUD_LOKI_URL` - your Loki endpoint
-   - `GRAFANA_CLOUD_LOKI_USERNAME` - your Loki tenant ID / username
-   - `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` - your Grafana token
-   - `ORIGIN_SECRET` - a random shared secret for Logpush → Worker
-   - `RSA_PRIVATE_KEY_PEM` - the private key used to decrypt Logpush payloads
+- Logpush-only secrets are not required in Proxy-only mode
 
    Example: if you see `your-random-origin-secret-here`, replace it with your
    own secret string.
@@ -480,6 +455,12 @@ should run without missing-file or missing-secret errors.
 
    Keep this terminal open while you run Terraform commands.
 
+   Before `terraform apply` or `terraform destroy`, also export `CF_API_TOKEN` in
+   the same shell. Terraform destroy provisioners inherit this variable because
+   they cannot reference normal Terraform variables. The Logpush helper requires
+   it to remove the remote job and does not infer it from
+   `TF_VAR_cloudflare_api_token`.
+
 8. Run local checks before deploying:
 
    ```bash
@@ -502,7 +483,8 @@ should run without missing-file or missing-secret errors.
 
 Follow the same phased verification used during design:
 
-1. `terraform plan` — confirm only the `cloudflare_logpush_job` is created.
+1. `terraform plan` — confirm only `terraform_data.aig_logpush_job` and its
+   Cloudflare API-managed Logpush job are created.
 2. `make test` — run Worker unit and integration tests.
 3. `wrangler dev` — POST a sample gzipped NDJSON payload and confirm `200`.
 4. Real request — send a request through AI Gateway and wait for Loki to show
@@ -516,11 +498,8 @@ Follow the same phased verification used during design:
   repo root.
 - If Terraform tries to manage secret values, move them back to `TF_VAR_*`
   environment variables.
-- If `make deploy` fails before the Terraform apply step, re-check
-  `scripts/verify-deployment-env.sh` output and the Cloudflare login state.
-- If Logpush does not deliver data, confirm the dataset name in
-  `terraform/terraform.tfvars` matches the Cloudflare account and that the RSA
-  public key was uploaded to the Logpush settings.
+- If `make deploy` fails before the Terraform apply step, re-check `scripts/verify-deployment-env.sh` output and the Cloudflare login state.
+- If Logpush does not deliver data, confirm the dataset name in `terraform/terraform.tfvars` matches the Cloudflare account and that the RSA public key was uploaded to the Logpush settings.
 
 ### Copy-Paste Checklist
 
@@ -563,9 +542,7 @@ Use this if you want a quick self-check before deploying:
   GB/month limit. After deployment, monitor Workers Analytics for
   exceptions/subrequest errors, watch Logpush `last_delivery` status, and
   compare Grafana Cloud Logs Usage against this estimate weekly.
-- **Adding and Scaling LLM Providers:**
-  - **Via AI Gateway (OpenAI, Anthropic, etc.):** The Proxy Worker automatically relays these requests. You do NOT need to redeploy or rerun `setup.sh`. Simply direct your app's API requests to the Proxy Worker URL and configure the desired models.
-  - **Adding New Workers or Provider-Specific Secrets:** If you introduce new data-collection Workers (outside AI Gateway) or want to register provider-specific API keys, add the corresponding build/deployment and secret configuration blocks to `setup.sh` and then rerun it.
+  - **Via AI Gateway (OpenAI, Anthropic, etc.):** The Proxy Worker relays these requests when you route traffic through it. You do NOT need to redeploy or rerun `setup-free-tier.sh` when adding models. Simply direct your app's API requests to the Proxy Worker URL.
 
 ## 📄 License
 

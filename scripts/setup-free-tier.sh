@@ -17,7 +17,11 @@ dev_vars="${workers_dir}/.dev.vars"
 
 proxy_var() {
   local query="$1"
-  jq -r "$query" "$proxy_config" 2>/dev/null || true
+  local value
+  if ! value="$(jq -r "$query" "$proxy_config" 2>/dev/null)"; then
+    die "Unable to parse ${proxy_config}; it must contain jq-compatible JSON."
+  fi
+  printf '%s\n' "$value"
 }
 
 cf_account_id="$(proxy_var '.vars.CF_ACCOUNT_ID // empty')"
@@ -35,7 +39,8 @@ if [[ -z "${PROXY_SECRET:-}" ]]; then
   if command -v python3 >/dev/null 2>&1; then
     PROXY_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(36))')"
   else
-    PROXY_SECRET="$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9_-' | head -c 48)"
+    command -v openssl >/dev/null 2>&1 || die "python3 or openssl is required to generate PROXY_SECRET."
+    PROXY_SECRET="$(openssl rand -hex 24)"
   fi
 fi
 

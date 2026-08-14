@@ -7,6 +7,7 @@ if [[ "${1:-}" != "upsert" && "${1:-}" != "delete" ]]; then
 fi
 
 command -v jq >/dev/null 2>&1 || { printf 'jq is required\n' >&2; exit 1; }
+command -v curl >/dev/null 2>&1 || { printf 'curl is required\n' >&2; exit 1; }
 
 readonly action="$1"
 
@@ -31,13 +32,22 @@ api_request() {
   local method="$1" url="$2"
   shift 2
   local response status
-  response="$(curl --silent --show-error --write-out $'\n%{http_code}' \
-    -X "$method" "$url" \
-    -H "Authorization: Bearer ${CF_API_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    "$@")"
+  if ! response="$(curl --silent --show-error --write-out $'\n%{http_code}' \
+      -X "$method" "$url" \
+      -H "Authorization: Bearer ${CF_API_TOKEN}" \
+      -H 'Content-Type: application/json' \
+      "$@")"; then
+    printf 'Cloudflare API request failed: %s %s (curl error)\n' "$method" "$url" >&2
+    return 1
+  fi
   status="${response##*$'\n'}"
   response="${response%$'\n'*}"
+
+  if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
+    printf 'Cloudflare API request failed: %s %s (invalid HTTP status: %q)\n' \
+      "$method" "$url" "$status" >&2
+    return 1
+  fi
 
   if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
     printf 'Cloudflare API request failed: %s %s (HTTP %s)\n' "$method" "$url" "$status" >&2

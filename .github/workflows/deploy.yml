@@ -5,12 +5,20 @@ on:
     branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy-proxy-worker:
     name: Deploy Proxy Worker
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
     environment: production
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -39,6 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
     environment: production
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -67,6 +76,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
     environment: production
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -43,7 +43,7 @@ resource "grafana_cloud_access_policy_token" "loki_write" {
   provider         = grafana.cloud
   region           = data.grafana_cloud_stack.this.region_slug
   access_policy_id = grafana_cloud_access_policy.loki_write.policy_id
-  name             = "graft-ai-loki-write-graft-ai-loki-write"
+  name             = "graft-ai-loki-write"
   display_name     = "graft-ai-loki-write"
   expires_at       = timeadd(timestamp(), "8760h")
 

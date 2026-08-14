@@ -30,12 +30,20 @@ jobs:
         run: npm run typecheck:ci
 
       - name: Run Worker tests
-        working-directory: workers
-        run: npm test
+        run: make test
 
       - name: Check formatting
         working-directory: workers
         run: npm run fmt:check
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Check workflows and shell scripts
+        run: |
+          "$(go env GOPATH)/bin/actionlint"
+          shellcheck scripts/*.sh terraform/*.sh tests/*.sh
+          bash -n scripts/*.sh terraform/*.sh tests/*.sh
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3

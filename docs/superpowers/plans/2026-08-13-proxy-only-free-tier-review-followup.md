@@ -72,10 +72,11 @@
 
 - [ ] **Step 1: Add AI_GATEWAY_ID placeholder check**
 
-  After the existing `CF_ACCOUNT_ID` check, add a second guard:
+  After the existing `CF_ACCOUNT_ID` check, reject the placeholder value from the parsed configuration:
 
   ```bash
-  grep -q '"AI_GATEWAY_ID": "main"' "$proxy_config" &&
+  ai_gateway_id="$(jq -r '.vars.AI_GATEWAY_ID // empty' "$proxy_config")"
+  [[ -n "$ai_gateway_id" && "$ai_gateway_id" != "main" ]] ||
     die "Set AI_GATEWAY_ID in ${proxy_config} before deploying."
   ```
 
@@ -87,17 +88,25 @@
 
   ```bash
   umask 077
+  tmp_vars="$(mktemp "${dev_vars}.tmp.XXXXXX")"
+  chmod 600 "$tmp_vars"
+  trap 'rm -f "$tmp_vars"' EXIT
+  proxy_secret_written=false
   if [[ -f "$dev_vars" ]]; then
-    # Keep existing dev values; only update PROXY_SECRET.
-    if grep -q '^PROXY_SECRET=' "$dev_vars"; then
-      sed -i "s/^PROXY_SECRET=.*/PROXY_SECRET=${PROXY_SECRET}/" "$dev_vars"
-    else
-      printf 'PROXY_SECRET=%s\n' "$PROXY_SECRET" >> "$dev_vars"
-    fi
-  else
-    printf 'PROXY_SECRET=%s\n' "$PROXY_SECRET" > "$dev_vars"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == PROXY_SECRET=* ]]; then
+        printf 'PROXY_SECRET=%s\n' "$PROXY_SECRET" >> "$tmp_vars"
+        proxy_secret_written=true
+      else
+        printf '%s\n' "$line" >> "$tmp_vars"
+      fi
+    done < "$dev_vars"
   fi
-  chmod 600 "$dev_vars"
+  if [[ "$proxy_secret_written" == false ]]; then
+    printf 'PROXY_SECRET=%s\n' "$PROXY_SECRET" >> "$tmp_vars"
+  fi
+  mv "$tmp_vars" "$dev_vars"
+  trap - EXIT
   ```
 
 - [ ] **Step 3: Make wrangler commands work with CLOUDFLARE_API_TOKEN**
@@ -222,6 +231,9 @@
     "RequestDuration",
     "Path",
     "Method",
+    "Metadata",
+    "RequestBody",
+    "ResponseBody",
   ];
   ```
 
@@ -253,6 +265,8 @@
   make fmt
   make validate
   git diff --check
+  bash -n scripts/setup-free-tier.sh
+  shellcheck scripts/setup-free-tier.sh
   ```
 
 - [ ] **Step 2: Re-run CodeRabbit review**

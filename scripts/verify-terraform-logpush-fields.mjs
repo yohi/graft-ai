@@ -20,6 +20,9 @@ const REQUIRED_FIELDS = [
   "RequestDuration",
   "Path",
   "Method",
+  "Metadata",
+  "RequestBody",
+  "ResponseBody",
 ];
 
 const tfPath = resolve(__dirname, "../terraform/main.tf");

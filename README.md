@@ -265,30 +265,13 @@ bash scripts/setup-free-tier.sh
 
 The script performs these steps automatically:
 
-1. Verify `npx` and Wrangler
+1. Verify `npx`, Wrangler, and `jq`
 2. Generate a random `PROXY_SECRET`
 3. Register `PROXY_SECRET` on the Proxy Worker
 4. Generate `workers/.dev.vars` for local development
 5. Deploy the Proxy Worker (`wrangler.proxy.jsonc`)
 
 Alternatively, run `make setup-free-tier` from the repo root.
-
-## CI/CD
-
-GitHub Actions workflows drive continuous integration and deployment:
-
-- `.github/workflows/ci.yml` runs on every Pull Request and non-`master` push:
-  - TypeScript type check, Vitest run, Prettier check
-  - Terraform fmt/validate for the Cloudflare workspace
-- `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
-  - Deploys the Proxy Worker, Ollama Cloud Worker, and Provider Metrics Worker via Wrangler
-  - Uses the `production` GitHub environment
-
-Required repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
-Provider Metrics and Ollama Cloud Workers need their own secrets registered via Wrangler before the first deploy.
-
-Configure the GitHub `production` environment with **Required reviewers** and restrict deployment branches to `master` before enabling `deploy.yml`.
-
 
 Proxy-only mode does not send AI Gateway access logs to Grafana Cloud Loki.
 Only requests sent through the proxy are forwarded to AI Gateway.
@@ -370,6 +353,22 @@ send AI Gateway access logs to Loki.
 > **Note:** `make deploy`, `make plan`, `make apply`, and `make validate` are
 > Logpush-mode commands. Proxy-only mode does not use Terraform Logpush.
 > Use `make setup-free-tier` or the manual proxy deployment command above.
+
+## CI/CD
+
+GitHub Actions workflows drive continuous integration and deployment:
+
+- `.github/workflows/ci.yml` runs on every Pull Request and non-`master` push:
+  - TypeScript type check, Vitest run, Prettier check
+  - Terraform fmt/validate for the Cloudflare workspace
+- `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
+  - Deploys the Proxy Worker, Ollama Cloud Worker, and Provider Metrics Worker via Wrangler
+  - Uses the `production` GitHub environment
+
+Required repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+Provider Metrics and Ollama Cloud Workers need their own secrets registered via Wrangler before the first deploy.
+
+Configure the GitHub `production` environment with **Required reviewers** and restrict deployment branches to `master` before enabling `deploy.yml`.
 
 ## 🛠️ Logpush Setup & Deployment (Workers Paid only)
 

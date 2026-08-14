@@ -22,7 +22,7 @@ fi
 if [[ "$action" == "delete" && -z "${CF_API_TOKEN:-}" ]]; then
   printf 'CF_API_TOKEN is not set; skipping Logpush job deletion.\n' >&2
   printf 'Export CF_API_TOKEN before running terraform destroy if you want the job removed.\n' >&2
-  exit 0
+  exit 1
 fi
 
 api_base_url="${CLOUDFLARE_API_BASE_URL:-https://api.cloudflare.com/client/v4}"
@@ -32,7 +32,7 @@ api_request() {
   local method="$1" url="$2"
   shift 2
   local response status
-  if ! response="$(curl --silent --show-error --write-out $'\n%{http_code}' \
+  if ! response="$(curl --silent --show-error --connect-timeout 10 --max-time 60 --write-out $'\n%{http_code}' \
       -X "$method" "$url" \
       -H "Authorization: Bearer ${CF_API_TOKEN}" \
       -H 'Content-Type: application/json' \

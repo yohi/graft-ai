@@ -34,6 +34,20 @@ jobs:
         working-directory: workers
         run: npm ci --ignore-scripts
 
+      - name: Validate proxy gateway configuration
+        working-directory: workers
+        run: |
+          gateway_id="$(node -e 'const { readFileSync } = require("node:fs"); const config = JSON.parse(readFileSync("wrangler.proxy.jsonc", "utf8")); process.stdout.write(config.vars.AI_GATEWAY_ID ?? "")')"
+          account_id="$(node -e 'const { readFileSync } = require("node:fs"); const config = JSON.parse(readFileSync("wrangler.proxy.jsonc", "utf8")); process.stdout.write(config.vars.CF_ACCOUNT_ID ?? "")')"
+          if [[ -z "$gateway_id" || "$gateway_id" == "main" || "$gateway_id" == "replace-with-ai-gateway-id" ]]; then
+            printf '%s\n' 'Set a real AI_GATEWAY_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
+            exit 1
+          fi
+          if [[ ! "$account_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            printf '%s\n' 'Set a valid 32-character hex CF_ACCOUNT_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
+            exit 1
+          fi
+
       - name: Deploy with Wrangler
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:

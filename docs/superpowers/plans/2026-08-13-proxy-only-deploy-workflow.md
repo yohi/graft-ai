@@ -78,7 +78,7 @@
 - Create: `.github/workflows/deploy.yml`
 
 **Interfaces:**
-- Consumes: GitHub Secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `PROXY_SECRET`, etc.), GitHub Variables (`WORKERS_SUBDOMAIN`).
+- Consumes: GitHub Secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) and any Wrangler secrets already registered for the deployed Workers.
 - Produces: A deploy workflow that deploys only proxy-only mode Workers.
 
 - [ ] **Step 1: Write the deploy workflow**
@@ -224,7 +224,7 @@
   make fmt
   make validate
   git diff --check
-  bash -n .github/workflows/deploy.yml || true  # YAML syntax only; actionlint preferred
+  actionlint .github/workflows/deploy.yml
   ```
 
 - [ ] **Step 2: Push to a new branch and open a replacement PR**

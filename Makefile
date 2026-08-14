@@ -14,6 +14,10 @@ validate:
 
 test:
 	cd workers && npx vitest run
+	node scripts/verify-terraform-logpush-fields.mjs
+	node --test tests/verify-terraform-logpush-fields.test.mjs
+	bash tests/setup-free-tier.test.sh
+	bash tests/manage-cloudflare-logpush-job.test.sh
 
 typecheck:
 	cd workers && npm run typecheck:ci

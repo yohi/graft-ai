@@ -245,7 +245,7 @@ bash scripts/setup-free-tier.sh
 
 スクリプトは次の 5 ステップを自動で実行します。
 
-1. 前提ツールの確認 (`npx wrangler`)
+1. 前提ツールの確認 (`npx wrangler` と `jq`)
 2. `PROXY_SECRET` の自動生成
 3. Proxy Worker への Wrangler secret (`PROXY_SECRET`) の登録
 4. ローカル開発用の `.dev.vars` ファイルの生成/更新

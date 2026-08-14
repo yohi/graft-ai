@@ -16,7 +16,8 @@ dev_vars="${workers_dir}/.dev.vars"
 [[ -f "$proxy_config" ]] || die "Missing ${proxy_config}."
 
 proxy_var() {
-  jq -r "$1" "$proxy_config" 2>/dev/null || true
+  local query="$1"
+  jq -r "$query" "$proxy_config" 2>/dev/null || true
 }
 
 cf_account_id="$(proxy_var '.vars.CF_ACCOUNT_ID // empty')"
@@ -44,7 +45,7 @@ fi
 
 cd "$workers_dir"
 info "Registering PROXY_SECRET on graft-ai-aig-proxy..."
-printf '%s' "$PROXY_SECRET" | npx wrangler secret put PROXY_SECRET --config wrangler.proxy.jsonc
+printf '%s' "$PROXY_SECRET" | npx --no-install wrangler secret put PROXY_SECRET --config wrangler.proxy.jsonc
 
 umask 077
 if [[ -f "$dev_vars" ]]; then
@@ -62,7 +63,7 @@ chmod 600 "$dev_vars"
 success "Wrote ${dev_vars} for local development."
 
 info "Deploying graft-ai-aig-proxy..."
-npx wrangler deploy --config wrangler.proxy.jsonc
+npx --no-install wrangler deploy --config wrangler.proxy.jsonc
 success "Proxy-only setup complete."
 
 cat <<'SUMMARY'

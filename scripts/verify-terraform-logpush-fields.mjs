@@ -36,9 +36,11 @@ if (end === -1) {
   process.exit(1);
 }
 const block = content.slice(start, end + 1);
-const fields = Array.from(block.matchAll(/"([A-Za-z]+)"/g)).map((m) => m[1]);
+const fields = new Set(
+  Array.from(block.matchAll(/"([A-Za-z]+)"/g), (match) => match[1]),
+);
 
-const missing = REQUIRED_FIELDS.filter((required) => !fields.includes(required));
+const missing = REQUIRED_FIELDS.filter((required) => !fields.has(required));
 if (missing.length > 0) {
   console.error(`Missing required Logpush fields: ${missing.join(", ")}`);
   process.exit(1);

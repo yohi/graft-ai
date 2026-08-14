@@ -15,6 +15,7 @@ jobs:
   validate-deployment:
     name: Validate deployment
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 5
     permissions:
       contents: read
@@ -34,17 +35,20 @@ jobs:
           node-version: 22
 
       - name: Validate proxy gateway configuration
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_AI_GATEWAY_ID: ${{ vars.CLOUDFLARE_AI_GATEWAY_ID || secrets.CLOUDFLARE_AI_GATEWAY_ID }}
         working-directory: workers
         run: |
           config_values="$(node ../scripts/parse-jsonc.mjs wrangler.proxy.jsonc)"
-          gateway_id="$(jq -r '.vars.AI_GATEWAY_ID // empty' <<<"$config_values")"
-          account_id="$(jq -r '.vars.CF_ACCOUNT_ID // empty' <<<"$config_values")"
+          gateway_id="${CLOUDFLARE_AI_GATEWAY_ID:-$(jq -r '.vars.AI_GATEWAY_ID // empty' <<<"$config_values")}"
+          account_id="${CLOUDFLARE_ACCOUNT_ID:-$(jq -r '.vars.CF_ACCOUNT_ID // empty' <<<"$config_values")}"
           if [[ -z "$gateway_id" || "$gateway_id" == "replace-with-ai-gateway-id" ]]; then
-            printf '%s\n' 'Set a real AI_GATEWAY_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
+            printf '%s\n' 'Set CLOUDFLARE_AI_GATEWAY_ID in GitHub secrets/variables (or AI_GATEWAY_ID in workers/wrangler.proxy.jsonc) before deploying.' >&2
             exit 1
           fi
           if [[ ! "$account_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
-            printf '%s\n' 'Set a valid 32-character hex CF_ACCOUNT_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
+            printf '%s\n' 'Set a valid 32-character hex CLOUDFLARE_ACCOUNT_ID in GitHub secrets/variables or workers/wrangler.proxy.jsonc before deploying.' >&2
             exit 1
           fi
 
@@ -77,7 +81,8 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers
-          command: deploy --config wrangler.proxy.jsonc
+          command: deploy --config wrangler.proxy.jsonc --var CF_ACCOUNT_ID:${{ secrets.CLOUDFLARE_ACCOUNT_ID }} --var AI_GATEWAY_ID:${{ vars.CLOUDFLARE_AI_GATEWAY_ID || secrets.CLOUDFLARE_AI_GATEWAY_ID }}
+
 
   deploy-ollama-worker:
     name: Deploy Ollama Cloud Worker

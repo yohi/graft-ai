@@ -12,10 +12,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  validate-deploy-ref:
-    name: Validate deployment ref
+  validate-deployment:
+    name: Validate deployment
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Reject non-master manual deployments
         if: github.ref != 'refs/heads/master'
@@ -23,10 +25,33 @@ jobs:
           printf '%s\n' "Deployment is restricted to master; selected ref was ${GITHUB_REF}." >&2
           exit 1
 
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Validate proxy gateway configuration
+        working-directory: workers
+        run: |
+          config_values="$(node ../scripts/parse-jsonc.mjs wrangler.proxy.jsonc)"
+          gateway_id="$(jq -r '.vars.AI_GATEWAY_ID // empty' <<<"$config_values")"
+          account_id="$(jq -r '.vars.CF_ACCOUNT_ID // empty' <<<"$config_values")"
+          if [[ -z "$gateway_id" || "$gateway_id" == "replace-with-ai-gateway-id" ]]; then
+            printf '%s\n' 'Set a real AI_GATEWAY_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
+            exit 1
+          fi
+          if [[ ! "$account_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            printf '%s\n' 'Set a valid 32-character hex CF_ACCOUNT_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
+            exit 1
+          fi
+
   deploy-proxy-worker:
     name: Deploy Proxy Worker
     runs-on: ubuntu-latest
-    needs: validate-deploy-ref
+    needs: validate-deployment
     environment: production
     timeout-minutes: 15
     permissions:
@@ -46,21 +71,6 @@ jobs:
         working-directory: workers
         run: npm ci --ignore-scripts
 
-      - name: Validate proxy gateway configuration
-        working-directory: workers
-        run: |
-          config_values="$(node ../scripts/parse-jsonc.mjs wrangler.proxy.jsonc)"
-          gateway_id="$(jq -r '.vars.AI_GATEWAY_ID // empty' <<<"$config_values")"
-          account_id="$(jq -r '.vars.CF_ACCOUNT_ID // empty' <<<"$config_values")"
-          if [[ -z "$gateway_id" || "$gateway_id" == "replace-with-ai-gateway-id" ]]; then
-            printf '%s\n' 'Set a real AI_GATEWAY_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
-            exit 1
-          fi
-          if [[ ! "$account_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
-            printf '%s\n' 'Set a valid 32-character hex CF_ACCOUNT_ID in workers/wrangler.proxy.jsonc before deploying.' >&2
-            exit 1
-          fi
-
       - name: Deploy with Wrangler
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:
@@ -72,7 +82,7 @@ jobs:
   deploy-ollama-worker:
     name: Deploy Ollama Cloud Worker
     runs-on: ubuntu-latest
-    needs: validate-deploy-ref
+    needs: validate-deployment
     environment: production
     timeout-minutes: 15
     permissions:
@@ -103,7 +113,7 @@ jobs:
   deploy-provider-metrics-worker:
     name: Deploy Provider Metrics Worker
     runs-on: ubuntu-latest
-    needs: validate-deploy-ref
+    needs: validate-deployment
     environment: production
     timeout-minutes: 15
     permissions:

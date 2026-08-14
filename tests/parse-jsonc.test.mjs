@@ -39,6 +39,7 @@ test("validateAndResolvePath normalizes and rejects invalid paths", () => {
   assert.throws(() => validateAndResolvePath(""), /non-empty string/);
   assert.throws(() => validateAndResolvePath(null), /non-empty string/);
   assert.throws(() => validateAndResolvePath("test\0bad.jsonc"), /null bytes/);
+  assert.throws(() => validateAndResolvePath("../outside.jsonc"), /Path traversal detected/);
   const resolved = validateAndResolvePath("scripts/parse-jsonc.mjs");
   assert.ok(resolved.endsWith("scripts/parse-jsonc.mjs"));
 });
@@ -51,10 +52,11 @@ test("parseJsonc parses actual repository wrangler configs", () => {
 
 test("parseJsonc CLI works when executed directly", () => {
   const scriptPath = fileURLToPath(new URL("../scripts/parse-jsonc.mjs", import.meta.url));
-  const tempFilePath = join(tmpdir(), `test-config-${Date.now()}.jsonc`);
+  const tempFileName = `test-config-${Date.now()}.jsonc`;
+  const tempFilePath = join(tmpdir(), tempFileName);
   try {
     writeFileSync(tempFilePath, '{\n  // comment\n  "key": "value",\n}');
-    const stdout = execFileSync(process.execPath, [scriptPath, tempFilePath], { encoding: "utf8" });
+    const stdout = execFileSync(process.execPath, [scriptPath, tempFileName], { cwd: tmpdir(), encoding: "utf8" });
     assert.deepEqual(JSON.parse(stdout), { key: "value" });
   } finally {
     try {

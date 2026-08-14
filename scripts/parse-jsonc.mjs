@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function stripComments(input) {
@@ -21,15 +21,20 @@ export function parseJsonc(input) {
   return JSON.parse(stripTrailingCommas(stripComments(input)));
 }
 
-export function validateAndResolvePath(rawPath) {
+export function validateAndResolvePath(rawPath, baseDir = process.cwd()) {
   if (!rawPath || typeof rawPath !== "string") {
     throw new Error("Path must be a non-empty string");
   }
   if (rawPath.includes("\0")) {
     throw new Error("Path must not contain null bytes");
   }
-  const normalized = normalize(rawPath);
-  return isAbsolute(normalized) ? normalized : resolve(process.cwd(), normalized);
+  const resolvedBase = resolve(baseDir);
+  const targetPath = resolve(resolvedBase, rawPath);
+  const rel = relative(resolvedBase, targetPath);
+  if (rel.startsWith("..") || isAbsolute(rel) || (!targetPath.startsWith(resolvedBase + sep) && targetPath !== resolvedBase)) {
+    throw new Error("Path traversal detected: path must be within base directory");
+  }
+  return targetPath;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

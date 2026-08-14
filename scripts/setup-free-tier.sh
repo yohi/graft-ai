@@ -16,7 +16,7 @@ dev_vars="${workers_dir}/.dev.vars"
 
 [[ -f "$proxy_config" ]] || die "Missing ${proxy_config}."
 
-if ! proxy_json="$(node "$repo_root/scripts/parse-jsonc.mjs" "$proxy_config")"; then
+if ! proxy_json="$(cd "$workers_dir" && node "$repo_root/scripts/parse-jsonc.mjs" "wrangler.proxy.jsonc")"; then
   die "Unable to parse ${proxy_config} as JSONC."
 fi
 

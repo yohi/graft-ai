@@ -146,9 +146,13 @@
 - Consumes: Current README text, new `scripts/setup-free-tier.sh` behavior, Logpush-only deployment path.
 - Produces: Consistent instructions that do not tell users to skip required Logpush secrets.
 
-- [ ] **Step 1: Fix the Free Tier feature matrix**
+- [ ] **Step 1: Separate provider support from shared log forwarding**
 
-  In the Feature Support matrix around line 30, change **Workers AI** current support from `(both Logpush & Free Proxy modes)` to `Collect access logs via AI Gateway and forward them to Grafana Loki (Logpush mode only)`. Proxy-only mode does not forward logs.
+  In the Feature Support matrix around line 30, keep provider rows focused on
+  provider support through AI Gateway. Add a separate AI Gateway access-log
+  forwarding row that states that Workers Logpush forwards access logs to
+  Grafana Loki and that proxy-only mode does not forward logs. Apply the same
+  separation to the Japanese README matrix.
 
 - [ ] **Step 2: Remove stale references to `scripts/setup.sh`**
 
@@ -189,7 +193,10 @@
 
   Around line 20-22, mirror the English change: remove Tail Worker mention, clarify that Free Tier proxy-only mode routes traffic without Logpush/Tail Worker.
 
-  Around line 30, change **Workers AI** current support to mirror the English correction: `(Logpush モードのみ)`.
+  Around line 30, keep the **Workers AI**, **OpenAI**, and **Anthropic** rows
+  focused on provider support through AI Gateway. Add a separate AI Gateway
+  access-log forwarding row that explains the Workers Logpush-only limitation,
+  matching the English README.
 
 - [ ] **Step 2: Update README.ja.md Free Tier data flow**
 

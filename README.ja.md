@@ -25,9 +25,10 @@ series、50GB logs）の制約内で動作するように最適化されてい�
 
 | 機能 / プロバイダ | 現在できること (現状のサポート) | できないこと / 制限事項 | 将来の対応予定 (ロードマップ) |
 | :--- | :--- | :--- | :--- |
-| **Workers AI** | AI Gateway を経由したログの収集と Grafana Loki への転送 (Logpush モードのみ) | - | - |
-| **OpenAI (via AI Gateway)** | AI Gateway を経由したログの収集と Grafana Loki への転送 | usage API を介した直接の使用量取得 | usage API を介した usage scraping 機能 (個別 API キーからの直接取得) |
-| **Anthropic (via AI Gateway)** | AI Gateway を経由したログの収集と Grafana Loki への転送 | usage API を介した直接の使用量取得 | - |
+| **Workers AI** | AI Gateway 経由で Workers AI を利用可能 | - | - |
+| **OpenAI (via AI Gateway)** | AI Gateway 経由で OpenAI を利用可能 | usage API を介した直接の使用量取得 | usage API を介した usage scraping 機能 (個別 API キーからの直接取得) |
+| **Anthropic (via AI Gateway)** | AI Gateway 経由で Anthropic を利用可能 | usage API を介した直接の使用量取得 | - |
+| **AI Gateway アクセスログ転送** | Workers Logpush 経由で AI Gateway のアクセスログを収集し、Grafana Loki に転送 | Proxy-only mode ではアクセスログを転送しない | - |
 | **Ollama Cloud** | セッション/週次のレートリミットリセット時間の算出と Grafana Metrics (Prometheus 形式) への転送 | リアルタイムアクセスログの転送 | リセット時間アンカーの動的な自動検出（現在は固定値ベース） |
 | **OpenAI (直接接続)** | - (AI Gateway 経由のみ) | APIキーを指定した使用量データの直接取得 | OpenAI API からの使用量データの自動定期スクレイピング |
 

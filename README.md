@@ -27,9 +27,10 @@ The current support status and planned roadmap items are summarized below:
 
 | Feature / Provider | What's Possible Now (Current Support) | What's Not Possible / Limitations | Future Plans (Roadmap) |
 | :--- | :--- | :--- | :--- |
-| **Workers AI** | Collect access logs via AI Gateway and forward them to Grafana Loki (Logpush mode only) | - | - |
-| **OpenAI (via AI Gateway)** | Collect access logs via AI Gateway and forward them to Grafana Loki | Direct usage scraping via OpenAI APIs | Direct usage scraping from OpenAI APIs using API keys |
-| **Anthropic (via AI Gateway)** | Collect access logs via AI Gateway and forward them to Grafana Loki | Direct usage scraping via Anthropic APIs | - |
+| **Workers AI** | Use Workers AI through AI Gateway | - | - |
+| **OpenAI (via AI Gateway)** | Use OpenAI through AI Gateway | Direct usage scraping via OpenAI APIs | Direct usage scraping from OpenAI APIs using API keys |
+| **Anthropic (via AI Gateway)** | Use Anthropic through AI Gateway | Direct usage scraping via Anthropic APIs | - |
+| **AI Gateway access log forwarding** | Collect AI Gateway access logs and forward them to Grafana Loki via Workers Logpush | Proxy-only mode does not forward access logs | - |
 | **Ollama Cloud** | Calculate session/weekly rate-limit reset times and push to Grafana Metrics (Prometheus format) | Real-time access logs forwarding | Dynamic auto-detection of rate-limit reset anchors (currently uses static anchors) |
 | **OpenAI (Direct Connect)** | - (only supported via AI Gateway proxy) | Direct cost/token scraping via API keys | Scheduled usage scraping from OpenAI Usage APIs |
 

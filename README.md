@@ -557,8 +557,10 @@ Use this if you want a quick self-check before deploying:
   are never set. Check the current setting via
   `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}` (or
   Cloudflare Dashboard → AI Gateway → your gateway → Settings →
-  Rate-limiting) and raise `rate_limiting_limit` (or switch to
-  `"sliding"`) if you see this pattern.
+  Rate-limiting) and raise `rate_limiting_limit` or adjust
+  `rate_limiting_interval` if you see this pattern. Note that
+  `rate_limiting_technique="sliding"` enables strict rolling-window
+  enforcement rather than increasing allowed throughput.
 
 ## 📄 License
 

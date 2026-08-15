@@ -484,8 +484,10 @@ Proxy-only モードでは Loki 用の Cloud Access Policy token は必要あり
   `total_tokens=0` になります。現在の設定は
   `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}`（または
   Cloudflare Dashboard → AI Gateway → 対象 gateway → Settings →
-  Rate-limiting）で確認できます。この症状が出た場合は `rate_limiting_limit` を
-  上げる、または `"sliding"` 方式への変更を検討してください。
+  Rate-limiting）で確認できます。この症状が出た場合は `rate_limiting_limit` の
+  引き上げや `rate_limiting_interval` の調整を行ってください（なお、`"sliding"`
+  方式はスループット上限を緩和するものではなく、厳格なローリングウィンドウ制御を
+  適用するための設定です）。
 
 ## 📄 ライセンス
 

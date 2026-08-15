@@ -473,6 +473,21 @@ Proxy-only モードでは Loki 用の Cloud Access Policy token は必要あり
 - **対応サービス (LLM) プロバイダの追加・拡張:**
   - **AI Gateway 経由での利用 (OpenAI, Anthropic 等):** すでにデプロイ済みの Proxy Worker がリクエストを自動で中継するため、`setup-free-tier.sh` の再実行や再デプロイは不要です。アプリ側の接続先を Proxy Worker URL に向け、各モデルを設定するだけで利用できます。
   - **新規 Worker や独自の API キーの追加:** 新しい Worker やプロバイダ固有の API キーを追加する場合は、対象 Worker の Wrangler 設定と Secret を個別に更新し、対応する `make deploy-*` ターゲットを実行してください。
+- **AI Gateway のレート制限:** 各 AI Gateway には独自の rate limit
+  （`rate_limiting_limit` / `rate_limiting_interval` /
+  `rate_limiting_technique`）が設定されており、上記の Loki 429 retry
+  ロジックとは別物です。同じ gateway を他の高並列クライアント（例: 複数の AI
+  エージェントの並列実行や負荷テスト）と共有していると、デフォルトの limit では
+  不足し、超過したリクエストはモデルプロバイダに到達する**前**に AI Gateway 自体
+  から `429` で拒否されます。この場合、変換後の Loki ログでは `cf-aig-model` /
+  `cf-aig-tokens` レスポンスヘッダーが一切付与されず、`model="unknown"` かつ
+  `total_tokens=0` になります。現在の設定は
+  `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}`（または
+  Cloudflare Dashboard → AI Gateway → 対象 gateway → Settings →
+  Rate-limiting）で確認できます。この症状が出た場合は `rate_limiting_limit` の
+  引き上げや `rate_limiting_interval` の調整を行ってください（なお、`"sliding"`
+  方式はスループット上限を緩和するものではなく、厳格なローリングウィンドウ制御を
+  適用するための設定です）。
 
 ## 📄 ライセンス
 

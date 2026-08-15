@@ -4,23 +4,44 @@
     "uid": "graft-ai-ollama-cloud",
     "title": "graft-ai — Ollama Cloud Rate Limits",
     "description": "Ollama Cloud rate limit reset metrics via graft-ai",
-    "tags": ["graft-ai", "ollama-cloud", "prometheus"],
+    "tags": [
+      "graft-ai",
+      "ollama-cloud",
+      "prometheus"
+    ],
     "timezone": "browser",
     "schemaVersion": 39,
     "version": 1,
     "refresh": "5m",
-    "time": { "from": "now-24h", "to": "now" },
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
     "timepicker": {},
-    "templating": { "list": [] },
+    "templating": {
+      "list": []
+    },
     "panels": [
       {
         "id": 1,
         "type": "stat",
         "title": "Session Reset In",
-        "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "gridPos": {
+          "x": 0,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
         "options": {
-          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
           "orientation": "auto",
           "textMode": "auto",
           "colorMode": "background",
@@ -28,13 +49,24 @@
         },
         "fieldConfig": {
           "defaults": {
-            "color": { "mode": "thresholds" },
+            "color": {
+              "mode": "thresholds"
+            },
             "thresholds": {
               "mode": "absolute",
               "steps": [
-                { "color": "red", "value": null },
-                { "color": "yellow", "value": 3600 },
-                { "color": "green", "value": 14400 }
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 3600
+                },
+                {
+                  "color": "green",
+                  "value": 14400
+                }
               ]
             },
             "unit": "dtdurations"
@@ -42,7 +74,10 @@
         },
         "targets": [
           {
-            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
             "expr": "ollama_cloud_reset_seconds_remaining{period=\"session\"}",
             "legendFormat": "Session",
             "refId": "A"
@@ -53,10 +88,22 @@
         "id": 2,
         "type": "stat",
         "title": "Weekly Reset In",
-        "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
-        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "gridPos": {
+          "x": 6,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
         "options": {
-          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
           "orientation": "auto",
           "textMode": "auto",
           "colorMode": "background",
@@ -64,13 +111,24 @@
         },
         "fieldConfig": {
           "defaults": {
-            "color": { "mode": "thresholds" },
+            "color": {
+              "mode": "thresholds"
+            },
             "thresholds": {
               "mode": "absolute",
               "steps": [
-                { "color": "red", "value": null },
-                { "color": "yellow", "value": 86400 },
-                { "color": "green", "value": 172800 }
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 86400
+                },
+                {
+                  "color": "green",
+                  "value": 172800
+                }
               ]
             },
             "unit": "dtdurations"
@@ -78,7 +136,10 @@
         },
         "targets": [
           {
-            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
             "expr": "ollama_cloud_reset_seconds_remaining{period=\"weekly\"}",
             "legendFormat": "Weekly",
             "refId": "A"
@@ -89,25 +150,48 @@
         "id": 3,
         "type": "gauge",
         "title": "Session Progress",
-        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
-        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "gridPos": {
+          "x": 12,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
         "options": {
-          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
           "orientation": "auto",
           "showThresholdLabels": false,
           "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
-            "color": { "mode": "thresholds" },
+            "color": {
+              "mode": "thresholds"
+            },
             "min": 0,
             "max": 1,
             "thresholds": {
               "mode": "absolute",
               "steps": [
-                { "color": "green", "value": null },
-                { "color": "yellow", "value": 0.75 },
-                { "color": "red", "value": 0.9 }
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.75
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
               ]
             },
             "unit": "percentunit"
@@ -115,7 +199,10 @@
         },
         "targets": [
           {
-            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
             "expr": "ollama_cloud_reset_progress_ratio{period=\"session\"}",
             "legendFormat": "Session",
             "refId": "A"
@@ -126,25 +213,48 @@
         "id": 4,
         "type": "gauge",
         "title": "Weekly Progress",
-        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
-        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "gridPos": {
+          "x": 18,
+          "y": 0,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
         "options": {
-          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
           "orientation": "auto",
           "showThresholdLabels": false,
           "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
-            "color": { "mode": "thresholds" },
+            "color": {
+              "mode": "thresholds"
+            },
             "min": 0,
             "max": 1,
             "thresholds": {
               "mode": "absolute",
               "steps": [
-                { "color": "green", "value": null },
-                { "color": "yellow", "value": 0.75 },
-                { "color": "red", "value": 0.9 }
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.75
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
               ]
             },
             "unit": "percentunit"
@@ -152,7 +262,10 @@
         },
         "targets": [
           {
-            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
             "expr": "ollama_cloud_reset_progress_ratio{period=\"weekly\"}",
             "legendFormat": "Weekly",
             "refId": "A"
@@ -163,12 +276,22 @@
         "id": 5,
         "type": "timeseries",
         "title": "Reset Timestamps",
-        "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
-        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "gridPos": {
+          "x": 0,
+          "y": 4,
+          "w": 24,
+          "h": 8
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
         "options": {},
         "fieldConfig": {
           "defaults": {
-            "color": { "mode": "palette-classic" },
+            "color": {
+              "mode": "palette-classic"
+            },
             "custom": {
               "drawStyle": "line",
               "lineInterpolation": "linear",
@@ -180,21 +303,35 @@
               "insertNulls": false,
               "showPoints": "auto",
               "pointSize": 5,
-              "stacking": { "mode": "none", "group": "A" },
+              "stacking": {
+                "mode": "none",
+                "group": "A"
+              },
               "axisPlacement": "auto",
               "axisLabel": "",
               "axisColorMode": "text",
-              "scaleDistribution": { "type": "linear" },
+              "scaleDistribution": {
+                "type": "linear"
+              },
               "axisCenteredZero": false,
-              "hideFrom": { "tooltip": false, "viz": false, "legend": false },
-              "thresholdsStyle": { "mode": "off" }
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              },
+              "thresholdsStyle": {
+                "mode": "off"
+              }
             },
             "unit": "dateTimeAsIso"
           }
         },
         "targets": [
           {
-            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
             "expr": "ollama_cloud_reset_timestamp_seconds",
             "legendFormat": "{{period}}",
             "refId": "A"
@@ -202,7 +339,11 @@
         ]
       }
     ],
-    "annotations": { "list": [] }
+    "annotations": {
+      "list": []
+    }
   },
-  "overwrite": false
+  "folderUid": "",
+  "message": "graft-ai dashboard sync (see git log for change details)",
+  "overwrite": true
 }

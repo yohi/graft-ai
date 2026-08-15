@@ -147,7 +147,7 @@ graft-ai/
 │   ├── grafana/          # Grafana Cloud provider: Access Policy + token（optional）
 │   └── versions.tf
 ├── tests/fixtures/   # AI Gateway NDJSON サンプル fixture
-├── Makefile          # install, typecheck, test, fmt, validate, deploy, deploy-provider-metrics, setup-free-tier, setup-grafana 用ターゲット
+├── Makefile          # install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, setup-free-tier, setup-grafana 用ターゲット
 ├── README.md         # 英語版 README
 └── README.ja.md      # このファイル
 ```
@@ -157,6 +157,7 @@ graft-ai/
 ### Subsystem 1 — Cloudflare AI Gateway ログ収集
 
 このサブシステムは2つのモードをサポートします。
+
 
 - **Logpush mode:** Cloudflare Logpush から暗号化された AI Gateway
   アクセスログを受信し、Loki JSON streams へ変換して Grafana Cloud Loki に push します。
@@ -284,9 +285,25 @@ Proxy-only モードでは Loki 用の Cloud Access Policy token は必要あり
   [Client receives the upstream response]
 ```
 
+## CI/CD
 
+
+GitHub Actions ワークフローで継続的インテグレーションと自動デプロイを行います:
+
+- `.github/workflows/ci.yml`: Pull Request および `master` 以外の push 時に実行
+  - TypeScript 型検査、Vitest テスト、Prettier フォーマットチェック
+  - Cloudflare および Grafana の Terraform fmt / validate
+- `.github/workflows/deploy.yml`: `master` への push および `workflow_dispatch` で実行
+  - Proxy Worker、Ollama Cloud Worker、Provider Metrics Worker を Wrangler でデプロイ
+  - Grafana ダッシュボード（`graft-ai-overview.json`、`graft-ai-ollama-cloud.json`）を Grafana HTTP API 経由でデプロイ
+  - `production` GitHub Environment を使用
+
+必要なリポジトリ Secrets / Variables:
+- Cloudflare: `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`
+- Grafana Dashboards: `GRAFANA_STACK_SLUG`（Variable）または `GRAFANA_URL`、`GRAFANA_SERVICE_ACCOUNT_TOKEN` / `GRAFANA_API_KEY`（Secret）
 
 ## 🛠️ Logpush セットアップとデプロイ（Workers Paid）
+
 
 ### クイックスタート
 

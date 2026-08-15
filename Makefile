@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics clean setup-free-tier setup-grafana
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana
 
 install:
 	cd workers && npm install
@@ -17,6 +17,7 @@ test:
 	node --test tests/parse-jsonc.test.mjs
 	node scripts/verify-terraform-logpush-fields.mjs
 	node --test tests/verify-terraform-logpush-fields.test.mjs
+	node --test tests/deploy-dashboards.test.mjs
 	bash tests/setup-free-tier.test.sh
 	bash tests/manage-cloudflare-logpush-job.test.sh
 
@@ -56,6 +57,10 @@ deploy-ollama:
 
 deploy-provider-metrics:
 	cd workers && npx wrangler deploy --config wrangler.provider-metrics.jsonc
+
+deploy-dashboards:
+	node scripts/deploy-dashboards.mjs
+
 
 .PHONY: validate-grafana plan-grafana apply-grafana
 

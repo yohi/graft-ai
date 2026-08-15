@@ -160,7 +160,7 @@ graft-ai/
 │   ├── grafana/          # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
-├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, setup-free-tier, setup-grafana
+├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, setup-free-tier, setup-grafana
 └── README.md         # this file
 ```
 
@@ -355,12 +355,16 @@ GitHub Actions workflows drive continuous integration and deployment:
   - Terraform fmt/validate for the Cloudflare and Grafana workspaces
 - `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
   - Deploys the Proxy Worker, Ollama Cloud Worker, and Provider Metrics Worker via Wrangler
+  - Deploys Grafana dashboards (`graft-ai-overview.json`, `graft-ai-ollama-cloud.json`) via Grafana HTTP API
   - Uses the `production` GitHub environment
 
-Required repository secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+Required repository secrets/variables:
+- Cloudflare: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+- Grafana Dashboards: `GRAFANA_STACK_SLUG` (variable) or `GRAFANA_URL`, and `GRAFANA_SERVICE_ACCOUNT_TOKEN` / `GRAFANA_API_KEY` (secret).
 Provider Metrics and Ollama Cloud Workers need their own secrets registered via Wrangler before the first deploy.
 
 Configure the GitHub `production` environment with **Required reviewers** and restrict deployment branches to `master` before enabling `deploy.yml`.
+
 
 ## 🛠️ Logpush Setup & Deployment (Workers Paid only)
 

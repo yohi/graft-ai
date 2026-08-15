@@ -5,6 +5,7 @@ import {
   resolveGrafanaUrl,
   resolveGrafanaToken,
   deployDashboard,
+  parseCliArgs,
   main,
 } from "../scripts/deploy-dashboards.mjs";
 
@@ -155,4 +156,49 @@ test("deployDashboard throws meaningful error on HTTP failure", async () => {
 test("main CLI runner returns 0 for successful dry-run", async () => {
   const exitCode = await main(["--dry-run"]);
   assert.equal(exitCode, 0);
+});
+
+test("parseCliArgs defaults to standard dashboard files and dryRun false", () => {
+  const parsed = parseCliArgs([]);
+  assert.equal(parsed.dryRun, false);
+  assert.deepEqual(parsed.targetFiles, [
+    "grafana/dashboards/graft-ai-overview.json",
+    "grafana/dashboards/graft-ai-ollama-cloud.json",
+  ]);
+});
+
+test("parseCliArgs parses --dry-run and positional arguments", () => {
+  const parsed = parseCliArgs(["--dry-run", "custom/dashboard.json"]);
+  assert.equal(parsed.dryRun, true);
+  assert.deepEqual(parsed.targetFiles, ["custom/dashboard.json"]);
+});
+
+test("parseCliArgs rejects unsupported options", () => {
+  assert.throws(() => parseCliArgs(["--dryrun"]), /Unknown option: --dryrun/);
+  assert.throws(() => parseCliArgs(["--unsupported-flag"]), /Unknown option: --unsupported-flag/);
+});
+
+test("main CLI runner returns 1 when unknown option like --dryrun is provided", async () => {
+  const exitCode = await main(["--dryrun"]);
+  assert.equal(exitCode, 1);
+});
+
+test("deployDashboard passes AbortSignal to fetchFn", async () => {
+  let capturedSignal = null;
+  const mockFetch = async (url, options) => {
+    capturedSignal = options.signal;
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ uid: "graft-ai-aig-overview", status: "success" }),
+    };
+  };
+
+  await deployDashboard("grafana/dashboards/graft-ai-overview.json", {
+    grafanaUrl: "https://my-stack.grafana.net",
+    token: "test-token",
+    fetchImpl: mockFetch,
+  });
+
+  assert.ok(capturedSignal instanceof AbortSignal);
 });

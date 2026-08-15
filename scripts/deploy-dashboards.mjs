@@ -73,6 +73,8 @@ export function resolveGrafanaToken(env = process.env) {
   return token.trim();
 }
 
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 /**
  * Deploys a dashboard JSON file to Grafana Cloud / Grafana instance.
  *
@@ -83,6 +85,8 @@ export function resolveGrafanaToken(env = process.env) {
  *   folderUid?: string,
  *   dryRun?: boolean,
  *   fetchImpl?: typeof fetch,
+ *   timeoutMs?: number,
+ *   signal?: AbortSignal,
  * }} options
  */
 export async function deployDashboard(filePath, options = {}) {
@@ -113,6 +117,8 @@ export async function deployDashboard(filePath, options = {}) {
   const grafanaUrl = options.grafanaUrl || resolveGrafanaUrl();
   const token = options.token || resolveGrafanaToken();
   const fetchFn = options.fetchImpl || globalThis.fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const signal = options.signal ?? AbortSignal.timeout(timeoutMs);
 
   const endpoint = `${grafanaUrl}/api/dashboards/db`;
   const response = await fetchFn(endpoint, {
@@ -123,6 +129,7 @@ export async function deployDashboard(filePath, options = {}) {
       Accept: "application/json",
     },
     body: JSON.stringify(payload),
+    signal,
   });
 
   const responseText = await response.text();
@@ -151,18 +158,53 @@ export async function deployDashboard(filePath, options = {}) {
 }
 
 /**
- * Main entry point for CLI usage.
+ * Parses and validates CLI arguments.
+ *
+ * @param {string[]} args
+ * @returns {{ dryRun: boolean, targetFiles: string[] }}
  */
-export async function main(args = process.argv.slice(2), env = process.env) {
-  const dryRun = args.includes("--dry-run");
-  const positionalArgs = args.filter((arg) => !arg.startsWith("--"));
+export function parseCliArgs(args = []) {
+  const supportedFlags = new Set(["--dry-run"]);
+  let dryRun = false;
+  const targetFiles = [];
+
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      if (!supportedFlags.has(arg)) {
+        throw new Error(`Unknown option: ${arg}`);
+      }
+      if (arg === "--dry-run") {
+        dryRun = true;
+      }
+    } else {
+      targetFiles.push(arg);
+    }
+  }
 
   const defaultFiles = [
     "grafana/dashboards/graft-ai-overview.json",
     "grafana/dashboards/graft-ai-ollama-cloud.json",
   ];
 
-  const targetFiles = positionalArgs.length > 0 ? positionalArgs : defaultFiles;
+  return {
+    dryRun,
+    targetFiles: targetFiles.length > 0 ? targetFiles : defaultFiles,
+  };
+}
+
+/**
+ * Main entry point for CLI usage.
+ */
+export async function main(args = process.argv.slice(2), env = process.env) {
+  let parsed;
+  try {
+    parsed = parseCliArgs(args);
+  } catch (err) {
+    console.error(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  const { dryRun, targetFiles } = parsed;
 
   let grafanaUrl;
   let token;

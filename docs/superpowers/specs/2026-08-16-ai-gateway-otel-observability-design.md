@@ -28,11 +28,14 @@ Gateway の trace spans を Grafana Cloud または self-hosted Grafana から�
 - Grafana Cloud の retention は tenant、契約プラン、stack 設定から決まる実効値を
   使用する。設計では7日または30日を既定値として仮定せず、デプロイ時に Logs、
   Traces、Metrics の実効 retention を記録して受入確認する。
-- sampling は既定100%とし、運用設定で低くできるようにする。sampling decision は
+- sampling は既定100%とし、運用設定で低くできるようにする。設定のdecimal rateは
+  浮動小数点へ変換せず、`0..1`の範囲を検証して
+  `rate_ppm=floor(rate*1_000_000)`で`0..1,000,000`の整数へ正規化する。sampling decisionは
   lowercase 32桁 hex の trace_id と固定 seed `graft-ai-otel-v1` を UTF-8 連結し、
-  SHA-256 の先頭8 bytesをbig-endian unsigned integerとして `hash / 2^64 < rate` で
-  決める。rate の精度は `0.000001`、sampling priority override は受け付けず、同じ
-  trace_id/rate/seed は常に同じ decision とする。Tempo trace と Loki payload に同じ
+  SHA-256 の先頭8 bytesをbig-endian unsigned integer `hash`として、exact integer
+  arithmeticによる `hash*1_000_000 < rate_ppm*2^64` の厳密な`<`で決める。GoとNodeの
+  どちらも64-bit hashをfloatへ変換しない。sampling priority overrideは受け付けず、同じ
+  trace_id/rate_ppm/seed は常に同じ decision とする。Tempo trace と Loki payload に同じ
   decision を適用し、spanmetrics は sampling 前の request spans から生成する。
   RED metrics は全量、Tempo と Loki は sampled trace のみとする。
 - sampling fixture は rate=`0.5`、seed=`graft-ai-otel-v1` とし、入力文字列を
@@ -40,6 +43,9 @@ Gateway の trace spans を Grafana Cloud または self-hosted Grafana から�
   prefix `f75a2b34049e94d6` なので sampled out、`ffffffffffffffffffffffffffffffff` は
   prefix `1d4e75600b429028` なので sampled in、`11111111111111111111111111111111` は
   prefix `db81a30e59fe0b64` なので sampled out とする。これを acceptance fixture に固定する。
+  同じ3 trace IDsについて、rate `0`（`0` ppm）はすべてsampled out、rate
+  `0.000001`（`1` ppm）はすべてsampled out、rate `0.5`（`500000` ppm）は上記の
+  out/in/out、rate `1`（`1000000` ppm）はすべてsampled inを期待値として固定する。
 - ローカルの実 request 検証には Cloudflare Tunnel を使う。
 - payload 保護は明示 credential の redaction に限定し、包括的な PII/DLP は
   提供しない。
@@ -343,9 +349,13 @@ retention は self-hosted では Tempo `14d`、Loki `7d`、Prometheus `14d` を
 Compose の persistent storage 設定に固定する。Grafana Cloud では Alloy が retention
 を設定しないため、tenant の実効 retention（Logs、Traces、Metrics）を Cloud UI/API
 から取得して検証記録に残す。Cloud 側を7日に変更したり、全 tenant の既定値を30日と
-仮定したりしない。既存 payload protection policy の上限に合わせ、Grafana Cloud Logs の
-payload retention が `14d` を超える tenant は acceptance を失敗させ、payload export を
-有効化しない。Traces/Metrics は tenant の実効値を記録する。
+仮定したりしない。Grafana Cloud Logs payload export は、取得が成功し、値が正の期間として
+妥当で、`14d`以下の場合だけ有効化する。retention情報が提供されない場合は
+`retention_unavailable`、取得処理が失敗した場合は `retention_lookup_failed`、値を期間として
+解釈できないか0以下の場合は `retention_invalid`、`14d`を超える場合は
+`retention_exceeds_14d` を記録し、payload export を無効化する。reason record にはtenant
+URL、認証情報、API response bodyを含めない。Traces/Metrics はtenantの実効値を記録するが、
+その取得成否でpayload exportを有効化しない。
 
 ## 4. Payload protection
 
@@ -468,9 +478,12 @@ Docker Compose で次のコンポーネントを起動する。
 - Loki
 - Prometheus
 - cloudflared
-- bounded export dispatcher（Alloy deployment が queue owner として起動）
 
-Compose は Alloy、Tempo、Loki、Prometheus、cloudflared、dispatcher の image を immutable
+bounded export dispatcher は custom Alloy binary に組み込み、Alloy deployment が
+queue owner として起動する。独立した Compose service にはしない。
+
+Compose は Grafana、Alloy、Tempo、Loki、Prometheus、cloudflared の6 services で構成する。
+Grafana、Alloy、Tempo、Loki、Prometheus、cloudflared の image を immutable
 digest で pin し、`latest` や floating tag を使わない。digest は実装開始時に固定し、
 receiver の `http` block と exporter の queue/retry fields をその version で contract test
 する。
@@ -482,11 +495,36 @@ baseline として payload 7日、trace metadata と metrics 14日の retention 
 設定する。Prometheus は OTLP receiver を有効化し、Compose smoke test が
 `http://prometheus:9090/api/v1/query` で canonical metrics を読める状態にする。
 
+Compose の host publication は Grafana の
+`127.0.0.1:${GRAFANA_PORT:-3000}:3000` だけとする。cloudflared は outbound Tunnel
+connection を開始し、host port を公開せず、internal network の
+`http://alloy:4318/v1/traces` へ転送する。Alloy、Tempo、Loki、Prometheus には
+`ports` を設定せず、host から Tunnel を迂回して receiver/backend へ接続できない構成に
+する。Grafana は `GF_AUTH_ANONYMOUS_ENABLED=false` とし、administrator password を
+`GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password` で Compose
+secret file から読み込む。static Compose test は Alloy/backend/cloudflared の host
+binding、loopback 以外の Grafana binding、anonymous access、有効な password file
+参照の欠落を拒否する。
+
+No-external-credentials local smoke は production topology と Tunnel acceptance を分離する。
+Compose には profile-only one-shot `smoke` helper を定義し、Node.js driver を Compose
+network 内で実行して `http://alloy:4318/v1/traces`、Prometheus、Loki、Tempo の internal
+endpoints に接続する。この helper は6つの production servicesには数えない。自動 smoke
+では Grafana、Alloy、Tempo、Loki、Prometheus の5 servicesだけを起動し、cloudflared は
+起動しない。`compose-smoke.test.sh`を唯一のentrypointとし、一時Grafana password、OTLP
+bearer token、HMAC key filesとignored/generated Compose overrideを作る。overrideはsmoke
+helperの固定service addressだけをtrusted peer setへ追加し、全ての`up`、`run`、`down`へ
+base fileと一緒に渡す。scriptは成功・失敗のどちらでも生成物を削除する。このprofile限定の
+trust exceptionはproduction/Tunnel acceptanceで使用しない。cloudflared は `tunnel`
+profile に置き、実 credential file と public hostname
+があるG0/acceptanceだけで起動する。CIはplaceholder secret-file pathsを使った Compose
+config と cloudflared ingress config の静的検証だけを行い、実Tunnelを開かない。
+
 ドキュメントの検証手順は次の順序にする。
 
 1. ローカル secret file と環境変数を設定し、非秘密設定
    `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf` を明示する。
-2. Compose stack を起動する。
+2. `--profile tunnel` で Compose stack を起動する。
 3. cloudflared の公開 URL、`CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`、受信 token を
    Cloudflare AI Gateway OTel exporter に登録する。
 4. 実際の AI Gateway request を送信する。
@@ -509,25 +547,35 @@ provisioning、backend endpoint、authentication、tenant の実効 retention �
 
 ### 7.1 Receiver limits and rate limiting
 
-`otelcol.receiver.otlp` の `http` block は、Alloy の pinned version が提供する同名の
-有限値を設定する。baseline は `max_request_body_size=8388608` bytes（8 MiB）、
-`read_header_timeout=5s`、`read_timeout=30s`、`write_timeout=10s` とする。pinned version
-でこれらを receiver に設定できない場合は reference stack の preflight を失敗させ、
-未記載の reverse proxy へ暗黙に置き換えない。Cloudflare WAF/Tunnel の rate limit は
-receiver timeout の代替ではない。
+Custom Alloy receiver config は `max_request_body_size=8388608` bytes（8 MiB）を設定し、
+同じconfigからHTTP boundaryの `http.Server` を構築する。`http.Server`は
+`ReadHeaderTimeout=5s`、`ReadTimeout=30s`、`WriteTimeout=10s` を設定し、
+`Receiver.ServeHTTP`をhandlerへ接続する。receiver handlerのunit testだけではserver-level
+timeoutを証明できないため、integration testは実際のTCP listenerへslow header、slow body、
+blocked response writerを接続し、各timeoutとtimeout response/connection terminationを確認する。
+このfactoryを唯一のtimeout ownerとし、stock receiver HTTP blockや未記載のreverse proxyへ
+timeout責務を重複させない。Cloudflare WAF/Tunnelのrate limitはreceiver timeoutの代替ではない。
 
 Alloy receiver の同時 request 上限は `100`、dispatcher ingress queue は `1,000 items`
-とする。Cloudflare WAF/Tunnel が検証して上書きした source metadata の source IP を
-source identity とし、client が指定した `X-Forwarded-For`、`CF-Connecting-IP`、その他の
-header を直接信用しない。IPv4 は dotted decimal、IPv6 は小文字 RFC 5952 表記へ正規化し、
-zone ID を除去する。各 source
-ごとに token bucket の `120 requests/minute`、burst `20`、refill `2 tokens/sec` の rate
-limit を適用する。source IP を取得できない場合は `unknown` の共有 bucket に送る。source identity は
-metric label にせず、秘密鍵 `OTEL_RATE_LIMIT_HMAC_KEY` と canonical source IP から
-`HMAC-SHA-256(key, "otel-ingress-source-v1\\0" + canonical_ip)` を計算した full hex の
-`source_id_hash` として rate-limit log の structured field にのみ記録する。鍵は secret file、
-環境変数、または Secrets Store から注入し、ログ・dashboard・Compose・設定ファイルには
-保存しない。rate limit は
+とする。production Compose はcloudflaredを専用internal subnetの固定service addressへ置き、
+そのaddressだけを `OTEL_TRUSTED_PROXY_CIDRS` に設定する。`0.0.0.0/0`、`::/0`、Compose
+subnet全体、host-facing CIDRは許可しない。receiverはTCP peerがこのset外ならrequest
+line/headerのparse後、body、auth token、source headerを処理または信用する前に`403`と固定reason
+`untrusted_source`で拒否する。trusted peerの場合だけCloudflare edgeが
+上書きする単一値の `CF-Connecting-IP` をsource metadataとして受け入れ、client指定の
+`X-Forwarded-For`、`True-Client-IP`、その他のforwarding headerは常に無視する。
+`CF-Connecting-IP`が欠落または不正なら拒否せず`unknown` bucketへ分類する。これによりpublic
+trafficはCloudflare edge→Tunnel→cloudflaredの経路だけをtrusted pathとし、direct originを
+許可しない。IPv4 は dotted decimal、IPv6 は小文字 RFC 5952 表記へ正規化し、zone ID を
+除去する。各 source ごとの token bucket は capacity `20` tokens、refill
+`2 tokens/second`、steady state `120 requests/minute` とし、固定長時間窓として実装しない。
+source IP を取得できない場合は `unknown` の共有 bucket に送る。rate-limit bucket のキーは
+canonical source IP そのものを永続化せず、秘密鍵 `OTEL_RATE_LIMIT_HMAC_KEY` と canonical
+source IP から、後述するdomain-separated `prefix || canonical_ip_utf8`を入力として
+HMAC-SHA-256を計算したfull hexの
+`source_id_hash` とする。`source_id_hash` は rate-limit log の structured field にだけ記録し、
+metric label にしない。鍵は secret file、環境変数、または Secrets Store から注入し、ログ・
+dashboard・Compose・設定ファイルには保存しない。rate limit は
 Cloudflare AI Gateway request を制限するものではなく、telemetry ingress の送信量だけを
 制限する。
 
@@ -546,14 +594,27 @@ capacity+1 の fixture は、最初の1,000 itemをFIFOで保持し、1,001 item
 | 条件 | 応答 | 必須 metric/log |
 | --- | --- | --- |
 | bearer token 不一致・欠落 | `401` | `otel_ingress_rejections_total{reason="auth"}` と token 非表示の auth log |
+| direct origin・未信頼peer | `403` | `otel_ingress_rejections_total{reason="untrusted_source"}` |
 | `/v1/traces` 以外の path | `404` | `otel_ingress_rejections_total{reason="path"}` |
 | 不正な OTLP payload | `400` | `otel_ingress_rejections_total{reason="parse"}` |
 | 未対応または Content-Type 不一致 | `415` | `otel_ingress_rejections_total{reason="content_type"}` |
 | `Content-Encoding` が `identity` 以外 | `415` | `otel_ingress_rejections_total{reason="compression"}` |
 | request body が8 MiB超 | `413` | `otel_ingress_rejections_total{reason="body_size"}` と受信 bytes log |
 | header/body timeout | `408` | `otel_ingress_rejections_total{reason="timeout"}` |
-| source rate limit 超過 | `429` と `Retry-After` | `otel_ingress_rate_limited_total` と source-scoped rate-limit log |
+| source rate limit 超過 | `429` と `Retry-After: <integer-seconds>` | `otel_ingress_rate_limited_total` と source-scoped rate-limit log |
 | 認証済みで受理した OTLP | `200`（受理後は非同期送信） | `otel_ingress_requests_total{status="accepted"}` |
+
+`Retry-After` は HTTP-date ではなく ASCII decimal integer の delta-seconds とする。値は
+次の token が利用可能になるまでの秒数を切り上げ、`1`未満にはしない。ingress queue 満杯時は
+新しい envelope を固定 drop reason `capacity` で破棄するが、source rate limit 超過とは
+別の事象なので、Cloudflare-facing response は `200` のままとする。
+
+Source identityのdomain separation prefixはUTF-8 bytes
+`otel-ingress-source-v1`に単一NUL byteを連結したものとする。HMAC keyはsecret file、環境変数、
+またはSecrets Storeからだけ取得し、
+`HMAC-SHA-256(key, prefix || canonical_ip_utf8)`を計算する。fixtureはtrusted peer、untrusted
+peer、spoofed `X-Forwarded-For`、trusted `CF-Connecting-IP`、missing/invalid metadata、IPv4、
+IPv6、NUL終端prefix、3種類のsecret sourceを固定する。
 
 共通で `otel_ingress_active_requests`、`otel_ingress_request_bytes`、
 `otel_ingress_queue_items{queue="dispatcher",unit="items"}`、
@@ -682,13 +743,17 @@ status、成功可否に影響させない。
 - spanmetrics tests: canonical metric names、request span predicate、multi-span trace の
   非重複、model/provider/status labels、request、error、latency の値を PromQL で確認すること
 - payload/metadata の self-hosted retention configuration と Grafana Cloud の実効
-  retention verification tests。Cloud Logs payload が14日超なら export を有効化しない。
+  retention verification tests。Cloud Logs retention が有効な正の期間かつ14日以下の場合だけ
+  payload exportを有効化し、unavailable、lookup failure、invalid、14日超の各fixtureでは
+  exportを無効化して対応する固定sanitized reasonを確認する。
 - Compose smoke test: synthetic OTLP spans を実際に Alloy へ送信し、Prometheus の
   `/api/v1/query`、Loki の `/loki/api/v1/query_range`、Tempo の trace detail で同じ
   request の model/provider、RED、numeric payload、redaction 結果を確認すること
 - dashboard JSON、PromQL、LogQL、Tempo `tracesToLogsV2` provisioning、trace 時刻の
   ±5分 shift、payload status 欠損表示の validation
-- 既存 Worker の `make test`、`make typecheck`
+- 既存 Worker の `make test`、`make typecheck`。Tail Workerについては
+  `workers/src/tail-worker.ts`、`workers/wrangler.tail.jsonc`、
+  `workers/tests/tail-worker.test.ts`とそのLoki出力契約が不変であることを確認する。
 - Terraform を変更した場合の `make validate`
 
 ### Acceptance gate
@@ -719,12 +784,13 @@ status、成功可否に影響させない。
 12. 明示 credential が保存・表示されないことを redaction test と実データ確認で検証する。
 13. self-hosted の Tempo 14日、Loki 7日、Prometheus 14日の設定と、Grafana Cloud の
     Logs/Traces/Metrics の実効 retention を環境ごとに確認する。
-14. `make test`、`make typecheck` を実行し、既存 Logpush/proxy の fixture と
+14. `make test`、`make typecheck` を実行し、既存 Logpush/proxy fixture、Tail Worker source、
+    Wrangler config、Tail Worker tests/Loki output、および
     `grafana/dashboards/graft-ai-overview.json` の既存 panel/query が変わらないことを確認する。
-15. `docker compose -f deploy/otel/docker-compose.yml up -d`、health check、synthetic
-    OTLP smoke test、`docker compose -f deploy/otel/docker-compose.yml down` を実行し、
-    immutable image digest を使う self-hosted Compose stack を空の環境から再実行できる
-    ことを確認する。
+15. `make otel-smoke`を実行し、scriptがlocal-only temporary secretsとsmoke overrideを生成して
+    全Compose commandへ渡し、health checkとsynthetic OTLP smokeを完了し、生成物を削除すること、
+    immutable image digestを使うself-hosted Compose stackを外部credentialsのない環境から
+    再実行できることを確認する。この結果を実Tunnel acceptanceの代替にしない。
 
 ## 9. Scope boundaries
 

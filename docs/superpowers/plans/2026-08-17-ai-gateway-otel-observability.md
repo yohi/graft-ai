@@ -8,7 +8,7 @@
 
 **Architecture:** Cloudflare AI Gateway sends OTLP/HTTP through Cloudflare Tunnel to a pinned custom Grafana Alloy distribution. Custom Alloy code owns ingress validation, fail-closed redaction, request-span election, deterministic sampling, branch-local fan-out, and bounded backend dispatch; stock components are used only where their contracts are sufficient. Tempo stores metadata, Loki stores redacted request payload logs, Prometheus stores unsampled request-span RED metrics, and a separate dashboard joins traces to Loki through `tracesToLogsV2`.
 
-**Tech Stack:** Go custom Alloy distribution, Grafana Alloy/OpenTelemetry Collector components, Docker Compose, cloudflared, Grafana, Tempo, Loki, Prometheus, Node.js contract tests, Vitest, shell tests, Make, and GitHub Actions.
+**Tech Stack:** Go custom Alloy distribution, Grafana Alloy/OpenTelemetry Collector components, Docker Compose, cloudflared, Grafana, Tempo, Loki, Prometheus, Node.js 22+ ESM contract tests, Vitest, shell tests, Make, and GitHub Actions.
 
 ## Global Constraints
 
@@ -17,15 +17,43 @@
 - `CLOUDFLARE_OTEL_EXPORT_ENCODING` is required and accepts only `protobuf` or `json`; reference environments use `protobuf` and `application/x-protobuf`.
 - Public ingress is exactly `/v1/traces`; unknown paths return `404`, content-type mismatch returns `415`, and non-identity compression returns `415`.
 - `Authorization: Bearer ${OTEL_INGEST_TOKEN}` and backend credentials come only from secret files, environment variables, or Secrets Store. Never put credentials in source, dashboards, URLs, logs, or `*.tfvars`.
+- Source metadata is trusted only when the TCP peer is in the explicit
+  cloudflared-only `OTEL_TRUSTED_PROXY_CIDRS` set. Reject direct origins with
+  `403/untrusted_source`, ignore all client forwarding headers except the
+  Cloudflare-edge-overwritten `CF-Connecting-IP` on that trusted path, and use
+  the shared `unknown` bucket when that header is absent or invalid.
 - Redaction occurs before any exporter, debug log, or queue. Failed redaction drops only payload fields and records `payload_dropped=true` with `payload_drop_reason="redaction_failure"`.
-- Sampling uses lowercase 32-character hex trace IDs, seed `graft-ai-otel-v1`, SHA-256 of `trace_id + seed`, first 8 bytes big-endian, and `hash / 2^64 < rate`; precision is `0.000001` and priority overrides are rejected.
+- Sampling uses lowercase 32-character hex trace IDs, seed
+  `graft-ai-otel-v1`, SHA-256 of `trace_id + seed`, and the first 8 bytes as a
+  big-endian unsigned integer. Parse the configured decimal rate without
+  floating point, reject values outside `0..1`, and convert it to integer ppm
+  with `rate_ppm=floor(rate*1_000_000)`. Sample only when
+  `hash*1_000_000 < rate_ppm*2^64`, using exact integer arithmetic and strict
+  `<`; priority overrides are rejected.
 - Spanmetrics receives selected request spans before sampling. Tempo and Loki use one trace-level decision; sampled-out traces appear in neither backend.
 - Loki labels are only `model`, `status_code`, `env`, and `gateway`.
 - Escaped Loki JSON lines are limited to `262144` bytes; truncation preserves UTF-8 boundaries, identity/numeric fields, and `[TRUNCATED]`.
-- Receiver limits are 8 MiB, 5s header timeout, 30s read timeout, 10s write timeout, 100 concurrent requests, and a 1,000-item drop-new ingress queue.
+- Receiver limits are 8 MiB, 5s header timeout, 30s read timeout, 10s write
+  timeout, 100 concurrent requests, and a 1,000-item drop-new ingress queue.
+  Source rate limiting uses the canonical source identity hash as its bucket
+  key, capacity `20` tokens, refill `2` tokens/second (steady state
+  `120 requests/minute`), and an `unknown` bucket when source metadata is
+  unavailable. A rate-limited response is `429` with `Retry-After` as an ASCII
+  decimal integer number of seconds, rounded up and at least `1`. An ingress
+  queue overflow drops only the new item with fixed reason `capacity` and
+  still returns `200`.
 - Backend queues, retry, eviction, fixed drop reasons, and alerts follow spec §7.3 exactly.
-- Self-hosted retention is Tempo `14d`, Loki `7d`, and Prometheus `14d`; Grafana Cloud retention is read from the tenant and recorded. Disable payload export when Cloud Logs retention exceeds `14d`.
+- Self-hosted retention is Tempo `14d`, Loki `7d`, and Prometheus `14d`.
+  Grafana Cloud payload export is enabled only when Cloud Logs retention is
+  retrieved successfully and parses to a positive duration no greater than
+  `14d`. Disable it for unavailable, failed, invalid, or over-`14d` results and
+  record exactly one sanitized reason: `retention_unavailable`,
+  `retention_lookup_failed`, `retention_invalid`, or
+  `retention_exceeds_14d`.
 - All container images use immutable digests. Never use `latest` or floating tags.
+- Root contract and smoke scripts require Node.js 22 or newer and use only
+  `.mjs`; do not rely on native TypeScript stripping, an implicit loader, or a
+  nearest-package module-type lookup. CI remains pinned to Node.js 22.
 - Run `make test`, `make typecheck`, and `make fmt` after TypeScript/configuration changes. Run `make validate` after Terraform changes.
 
 ---
@@ -65,9 +93,15 @@ This is a prerequisite gate, not a PR. No implementation PR starts until it pass
 
 After G0, implement the work as **eight linear stacked PRs**. Each branch is based on the preceding branch so every review shows one layer. Do not implement everything on `master` and split it afterward.
 
+Set the stack target once and reuse it for initialization and verification:
+
+```bash
+STACK_BASE=feature/cloudflare-ai-gateway-free-plan-observability__base
+```
+
 | PR | Branch | Base | Outcome |
 | --- | --- | --- | --- |
-| PR1 | `feat/otel-contracts` | `master` | Contract fixtures and test harness |
+| PR1 | `feat/otel-contracts` | `feature/cloudflare-ai-gateway-free-plan-observability__base` | Contract fixtures and test harness |
 | PR2 | `feat/otel-custom-alloy-ingress` | `feat/otel-contracts` | Authenticated OTLP ingress, limits, HMAC identity, ingress queue |
 | PR3 | `feat/otel-redaction-spanlogs` | `feat/otel-custom-alloy-ingress` | Redaction, projection, numeric validation, 256 KiB spanlogs |
 | PR4 | `feat/otel-selection-sampling-metrics` | `feat/otel-redaction-spanlogs` | Request-span election, sampling, fan-out, canonical metrics |
@@ -77,7 +111,7 @@ After G0, implement the work as **eight linear stacked PRs**. Each branch is bas
 | PR8 | `feat/otel-acceptance-docs` | `feat/otel-grafana-dashboard` | CI/Make integration, Cloud acceptance, docs, compatibility checks |
 
 ```bash
-gh stack init feat/otel-contracts
+gh stack init --base "$STACK_BASE" feat/otel-contracts
 gh stack add feat/otel-custom-alloy-ingress
 gh stack add feat/otel-redaction-spanlogs
 gh stack add feat/otel-selection-sampling-metrics
@@ -88,6 +122,10 @@ gh stack add feat/otel-acceptance-docs
 gh stack submit --auto --open
 gh stack view --json
 ```
+
+Verify that the resulting JSON has
+`trunk="feature/cloudflare-ai-gateway-free-plan-observability__base"`; do not
+interpret `branches[].base` as a branch name because it is the saved parent SHA.
 
 Merge in PR1 → PR2 → PR3 → PR4 → PR5 → PR6 → PR7 → PR8 order. After changing a lower branch, run `gh stack rebase --upstack`, then inspect `gh stack view --json`.
 
@@ -114,7 +152,7 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 **Files:**
 
-- Create: `deploy/otel/contracts/encoding.ts`
+- Create: `deploy/otel/contracts/encoding.mjs`
 - Create: `deploy/otel/contracts/contracts.json`
 - Create: `deploy/otel/contracts/sampling-fixtures.json`
 - Create: `deploy/otel/contracts/README.md`
@@ -125,11 +163,17 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 **Interfaces:**
 
 - `resolveOtelEncoding(env): "protobuf" | "json"` rejects missing and unknown values.
-- Fixtures define content types, receiver status/reason pairs, sampling decisions, canonical metrics, labels, queue limits, and retention.
+- Fixtures define content types, receiver status/reason pairs, sampling
+  decisions, canonical metrics, labels, queue limits, and all four fail-closed
+  retention reasons. Retention fixtures enable payload export only for a valid
+  positive Cloud Logs duration no greater than `14d`.
 
 - [ ] **Step 1: Write failing Node contract tests**
 
-  Assert encoding mappings and rejection, every `401/404/400/415/413/408/429/200` reason pair, and all fixed sampling decisions from spec §2.
+  Assert encoding mappings and rejection, every
+  `401/403/404/400/415/413/408/429/200` reason pair, exact decimal-to-ppm floor
+  conversion, and all fixed sampling decisions from spec §2 for rates `0`,
+  `0.000001`, `0.5`, and `1`.
 
 - [ ] **Step 2: Run the focused test**
 
@@ -141,17 +185,25 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - [ ] **Step 3: Implement dependency-free contracts**
 
-  Make JSON fixtures the source shared by later Go tests. Include no real endpoints, credentials, payloads, or absolute machine paths.
+  Implement `encoding.mjs` as dependency-free ESM and make JSON fixtures the
+  source shared by later Go tests. Include no real endpoints, credentials,
+  payloads, native TypeScript syntax, loaders, or absolute machine paths.
 
 - [ ] **Step 4: Connect the test to Make**
 
-  Add the Node test to `make test` and add `make otel-contracts` for the focused run.
+  Add a Node.js `>=22` preflight and the Node test to `make test`, and add
+  `make otel-contracts` for the focused run. Extend `make fmt` so the existing
+  Workers-installed Prettier formats `deploy/otel/contracts/encoding.mjs` and
+  `tests/otel-contracts.test.mjs`; `make typecheck` remains required for the
+  existing strict Workers TypeScript scope.
 
 - [ ] **Step 5: Verify and commit PR1**
 
   ```bash
   make otel-contracts
   make test
+  make typecheck
+  make fmt
   git add deploy/otel/contracts tests/otel-contracts.test.mjs Makefile README.md
   git commit -m "feat(otel): define ingress and sampling contracts"
   gh stack submit --auto --open
@@ -163,20 +215,46 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - Create: `deploy/otel/alloy/go.mod`, `deploy/otel/alloy/go.sum`
 - Create: `deploy/otel/alloy/cmd/alloy-otel/main.go`
-- Create: `deploy/otel/alloy/internal/ingress/{receiver,auth,source_identity,queue,metrics}.go`
+- Create: `deploy/otel/alloy/internal/ingress/{receiver,auth,source_identity,queue,metrics,server}.go`
 - Create: `deploy/otel/alloy/internal/ingress/*_test.go`
+- Create: `deploy/otel/alloy/internal/ingress/server_integration_test.go`
 - Create: `deploy/otel/alloy/Dockerfile`, `deploy/otel/alloy/Makefile`
 - Modify: `deploy/otel/contracts/contracts.json`, `Makefile`
 
 **Interfaces:**
 
-- `Receiver.ServeHTTP(w, r)` validates path, bearer token, content type, identity encoding, body size, timeouts, source bucket, and OTLP decoding.
+- `Receiver.ServeHTTP(w, r)` validates path, bearer token, content type,
+  identity encoding, body size, source bucket, and OTLP decoding. Server-level
+  timeouts are owned only by `NewHTTPServer`.
+- `NewHTTPServer(receiver) *http.Server` returns an `http.Server` with
+  `ReadHeaderTimeout=5s`, `ReadTimeout=30s`, and `WriteTimeout=10s`, with
+  `Receiver.ServeHTTP` as its handler.
 - `IngressQueue.Enqueue(envelope) bool` implements atomic drop-new capacity 1,000 and asynchronous accepted `200` behavior.
-- `SourceIdentity.Hash(canonicalSource) string` uses HMAC-SHA-256 with `otel-ingress-source-v1\0` and never logs raw IP.
+- `SourceIdentity.Resolve(remoteAddr, headers)` rejects peers outside
+  `OTEL_TRUSTED_PROXY_CIDRS`, ignores `X-Forwarded-For`, `True-Client-IP`, and
+  other client forwarding headers, and accepts `CF-Connecting-IP` only from a
+  trusted peer; absent or invalid trusted metadata resolves to `unknown`.
+- `SourceIdentity.Hash(canonicalSource) string` loads its key from a secret
+  file, environment variable, or Secrets Store, then computes
+  `HMAC-SHA-256(key, "otel-ingress-source-v1\0" + canonical_ip)` and never logs
+  raw IP.
 
 - [ ] **Step 1: Write failing Go tests**
 
-  Cover `/v1/traces`, unknown path, auth, JSON/protobuf, mismatch, compression, malformed payload, 8 MiB, timeout, rate limit/`Retry-After`, 100 concurrent requests, source normalization/HMAC, and capacity+1.
+  Cover `/v1/traces`, unknown path, auth, JSON/protobuf, mismatch, compression,
+  malformed payload, 8 MiB, timeout, trusted and untrusted remote peers,
+  direct-origin `403/untrusted_source`, spoofed forwarding headers, missing
+  source metadata and the `unknown` bucket, source rate-limit bucket key, capacity
+  `20`, refill `2` tokens/second, `429`, integer-second `Retry-After`, 100
+  concurrent requests, source normalization/HMAC, and capacity+1. Assert that
+  ingress queue overflow uses drop reason `capacity` and returns `200`, while
+  only source rate-limit overflow returns `429`.
+
+  Add a real `net.Listen`/`http.Server` integration test that sends a slow
+  header, slow request body, and blocked response writer. Assert the configured
+  5s, 30s, and 10s server timeouts and the corresponding `408`/connection
+  termination behavior; handler-only tests are not sufficient for these
+  server-level limits.
 
 - [ ] **Step 2: Run focused tests**
 
@@ -189,7 +267,11 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - [ ] **Step 3: Implement receiver and queue**
 
-  Reuse OTLP codecs, retain validation and queue ownership in custom Alloy, preserve `/v1/traces`, and reject client-supplied forwarding headers as source identity.
+  Reuse OTLP codecs, retain validation and queue ownership in custom Alloy,
+  preserve `/v1/traces`, reject direct origins before source extraction, accept
+  Cloudflare-edge-overwritten `CF-Connecting-IP` only from the configured
+  cloudflared peer, discard all other forwarding headers, and construct the
+  HTTP server through `NewHTTPServer` with the fixed timeout values.
 
 - [ ] **Step 4: Build a pinned custom Alloy binary**
 
@@ -260,13 +342,19 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 **Interfaces:**
 
 - `RequestSelector.Add(span)`, `FlushIdle(now)`, and `Evict()` enforce 10,000 traces/64 MiB, the exact predicate/tie-break, idle 1s, and request flags.
-- `Sampler.Decide(traceID, rate) bool` implements fixed SHA-256 sampling and rejects priority overrides.
+- `Sampler.Decide(traceID string, ratePPM uint32) bool` implements fixed
+  SHA-256 sampling with exact integer arithmetic and rejects values above
+  `1_000_000` and all priority overrides.
 - `FanOut.Trace(trace)` sends request spans to metrics before sampling and sampled branch-local copies to Tempo/Loki.
 - `CanonicalMetrics.Normalize(requestSpan)` emits the three canonical names, permitted labels, and fixed histogram buckets.
 
 - [ ] **Step 1: Write selector and sampling tests**
 
-  Cover predicate candidates, ordering, idle flush, both limits, eviction reason, fixed hashes, precision, and sampled-out absence from both storage branches.
+  Cover predicate candidates, ordering, idle flush, both limits, eviction
+  reason, fixed hashes, decimal-to-ppm floor conversion without floating point,
+  strict boundary comparison, rates `0`, `1`, `500000`, and `1000000` ppm, and
+  sampled-out absence from both storage branches. Use a 128-bit comparison or
+  equivalent checked integer arithmetic so the 64-bit hash is never rounded.
 
 - [ ] **Step 2: Write fan-out and metrics tests**
 
@@ -341,13 +429,33 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 **Interfaces:**
 
-- Compose publishes only cloudflared and Grafana; Alloy and backends are internal except the Tunnel-facing OTLP receiver.
-- `synthetic-otlp-smoke.mjs` sends a redaction-safe OTLP protobuf trace and queries Prometheus, Loki, and Tempo.
-- `compose-smoke.test.sh` starts, health-checks, smokes, and stops without writing secrets or generated state to tracked paths.
+- Compose publishes only Grafana as
+  `127.0.0.1:${GRAFANA_PORT:-3000}:3000`. `cloudflared` opens an outbound Tunnel
+  connection and publishes no host port; it reaches
+  `http://alloy:4318/v1/traces` over the internal network. Alloy, Tempo, Loki,
+  and Prometheus have no host bindings. Grafana disables anonymous access and
+  reads its administrator password from a Compose secret file.
+- `synthetic-otlp-smoke.mjs` runs in a profile-only one-shot `smoke` service,
+  sends a redaction-safe OTLP protobuf trace to internal
+  `http://alloy:4318/v1/traces`, and queries the internal Prometheus, Loki, and
+  Tempo endpoints. It is a test helper, not one of the six production services.
+- `compose-smoke.test.sh` is the only public smoke entrypoint. It creates
+  temporary Grafana password, OTLP bearer token, and HMAC key files plus an
+  ignored/generated `docker-compose.smoke.override.yml`, starts, health-checks,
+  smokes, stops, and removes every generated file without writing secrets or
+  state to tracked paths.
 
 - [ ] **Step 1: Write the failing static Compose test**
 
-  Assert all seven services exist, every image is digest-pinned, volumes and retention are explicit, intended ports only are published, Prometheus OTLP is enabled, and credentials are referenced rather than embedded.
+  Assert exactly six production services exist (`grafana`, `alloy`, `tempo`,
+  `loki`, `prometheus`, and `cloudflared`) plus one profile-only one-shot
+  `smoke` helper, every image is digest-pinned, volumes and
+  retention are explicit, the only host binding is Grafana on `127.0.0.1`,
+  `cloudflared` and Alloy have no host bindings, Tempo/Loki/Prometheus cannot be
+  reached from the host, Prometheus OTLP is enabled, Grafana anonymous access is
+  disabled, and credentials are referenced through secret files rather than
+  embedded. The bounded dispatcher is compiled into the custom Alloy service
+  and is not a seventh Compose service.
 
 - [ ] **Step 2: Write the synthetic smoke driver**
 
@@ -355,21 +463,46 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - [ ] **Step 3: Implement the reference stack**
 
-  Configure custom Alloy, Tempo `14d`, Loki `7d`, Prometheus `14d` with OTLP receiver, Grafana datasources, cloudflared `/v1/traces` passthrough, volumes, and health checks. Resolve actual image digests during implementation and record them in Compose.
+  Configure custom Alloy, Tempo `14d`, Loki `7d`, Prometheus `14d` with OTLP
+  receiver, Grafana datasources, cloudflared `/v1/traces` passthrough, volumes,
+  and health checks. Bind only Grafana to host loopback, set
+  `GF_AUTH_ANONYMOUS_ENABLED=false`, and set
+  `GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password`; keep
+  cloudflared, Alloy, and every backend free of host port bindings. Resolve
+  actual image digests during implementation and record them in Compose.
+  Put cloudflared on a dedicated internal subnet with a fixed service address
+  and configure only that address in `OTEL_TRUSTED_PROXY_CIDRS`; reject
+  `0.0.0.0/0`, `::/0`, the whole Compose subnet, and any host-facing CIDR in the
+  static test. The no-external-credentials smoke profile uses an untracked/generated
+  Compose override that adds only the one-shot smoke service address to the
+  trusted set and must not be used for Tunnel acceptance.
 
 - [ ] **Step 4: Run the empty-environment smoke test**
 
   ```bash
-  docker compose -f deploy/otel/docker-compose.yml up -d
   bash deploy/otel/tests/compose-smoke.test.sh
-  docker compose -f deploy/otel/docker-compose.yml down
   ```
 
-  Expected: all services become healthy, the synthetic trace is queryable in all three backends, and the sequence is repeatable.
+  Expected: the script creates fresh local-only temporary secrets and an
+  ignored override, passes both Compose files to every `up`, `run`, and `down`
+  command, the five core services become healthy, the one-shot
+  smoke service reaches all internal endpoints, the synthetic trace is
+  queryable in all three backends, all temporary files are removed even after
+  failure, and the sequence is repeatable. This flow requires no external
+  credentials, does not start cloudflared, and does not claim Tunnel
+  acceptance.
+
+  Define cloudflared under a separate `tunnel` profile. Starting that profile
+  requires a real Tunnel credential file and public hostname, validates the
+  ingress configuration before connecting, and is used only by G0/PR8 manual
+  acceptance. CI validates `docker compose --profile tunnel config` with
+  placeholder secret-file paths but never opens a Tunnel.
 
 - [ ] **Step 5: Add Make target and verify**
 
-  Add `make otel-smoke` for the exact start/test/stop sequence. Run `make test`, `make typecheck`, and `make fmt`.
+  Add `make otel-smoke` as a wrapper around
+  `bash deploy/otel/tests/compose-smoke.test.sh`. Run `make test`,
+  `make typecheck`, and `make fmt`.
 
 - [ ] **Step 6: Commit and submit PR6**
 
@@ -411,6 +544,8 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
   node --test tests/otel-dashboard.test.mjs
   node scripts/deploy-dashboards.mjs --dry-run grafana/dashboards/graft-ai-otel.json
   make test
+  make typecheck
+  make fmt
   ```
 
   Expected: the new dashboard validates and the existing dashboard is unchanged.
@@ -437,16 +572,29 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 **Interfaces:**
 
 - `scripts/verify-otel-config.mjs` validates encoding, digest-only images, paths, retention, endpoint shape, and absence of inline credentials without production access.
-- `tests/otel-backward-compatibility.test.mjs` verifies existing Worker fixtures, dashboard JSON, and dashboard deployment defaults remain unchanged.
+- `tests/otel-backward-compatibility.test.mjs` verifies existing Logpush/proxy
+  Worker fixtures, `workers/tests/tail-worker.test.ts`, Tail Worker source and
+  Wrangler paths, dashboard JSON, and dashboard deployment defaults remain
+  unchanged. Tail Worker assertions cover its fixed four labels, sorted Loki
+  values, payload fields, empty-input behavior, and Loki push URL.
 - The acceptance record contains sanitized results for all acceptance items, effective Cloud retention, and the custom Alloy image digest.
 
 - [ ] **Step 1: Write failing static validation tests**
 
-  Assert OTel files are isolated from Logpush/proxy paths, the existing dashboard is byte-for-byte unchanged, no secret files are tracked, and the Compose command path is exact.
+  Assert OTel files are isolated from Logpush, proxy, and Tail Worker paths;
+  `workers/src/tail-worker.ts`, `workers/tests/tail-worker.test.ts`, and
+  `workers/wrangler.tail.jsonc` are unchanged; the existing Tail Worker tests
+  still produce the same Loki labels, sorted values, payload fields, empty-input
+  behavior, and push URL; the existing dashboard is byte-for-byte unchanged; no
+  secret files are tracked; and the Compose command path is exact.
 
 - [ ] **Step 2: Implement operator documentation**
 
-  Document secret injection, protobuf encoding, Compose/Tunnel setup, real requests, backend queries, proxy/direct verification, Grafana Cloud endpoint/auth replacement, and the `14d` Logs retention rule.
+  Document secret injection, protobuf encoding, Compose/Tunnel setup, real
+  requests, backend queries, proxy/direct verification, Grafana Cloud
+  endpoint/auth replacement, and fail-closed Cloud Logs retention handling.
+  Retrieval output, tenant URLs, and API response bodies must not appear in the
+  sanitized reason record.
 
 - [ ] **Step 3: Add local Make and CI gates**
 

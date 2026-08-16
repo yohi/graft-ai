@@ -72,6 +72,20 @@ Cloudflare AI Gateway exporter から Alloy までの公開 endpoint は環境�
 形式に固定する。`<tunnel-host>`、`<otlp-gateway-host>`、tenant ID は配置時に
 注入する値であり、秘密値ではないが dashboard JSON に埋め込まない。
 
+Cloudflare AI Gateway exporter の送信形式は、非秘密かつ必須の設定
+`CLOUDFLARE_OTEL_EXPORT_ENCODING` で固定する。許可する値は `protobuf` と
+`json` だけとし、省略またはその他の値は preflight と acceptance を失敗させ、
+exporter や provider の既定値には依存しない。値と Content-Type の対応は
+`protobuf` = `application/x-protobuf`、`json` = `application/json` とする。
+この設計の reference environment では、実アカウントの送信形式を再現可能にする
+ため、self-hosted と Grafana Cloud の両方で `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`
+に固定する。
+
+| 環境 | `CLOUDFLARE_OTEL_EXPORT_ENCODING` | Cloudflare exporter の Content-Type |
+| --- | --- | --- |
+| self-hosted baseline | `protobuf` | `application/x-protobuf` |
+| Grafana Cloud | `protobuf` | `application/x-protobuf` |
+
 | 経路 | 完全な URL 形式 | path の扱い |
 | --- | --- | --- |
 | self-hosted ingress | `https://<tunnel-host>/v1/traces` | cloudflared は `/v1/traces` を Alloy の `http://alloy:4318/v1/traces` へそのまま転送する |
@@ -84,9 +98,10 @@ Cloudflare AI Gateway exporter から Alloy までの公開 endpoint は環境�
 
 Cloudflare exporter と Alloy receiver の ingress contract は OTLP/HTTP とし、
 `application/x-protobuf`（protobuf）と `application/json`（OTLP JSON）の双方を
-明示的に受け付ける。Cloudflare exporter が実際に送る形式は環境設定で一つに固定し、
-Content-Type と一致しない payload は `415` とする。receiver の contract test は
-両形式を検証し、実アカウントの acceptance test は採用した形式を検証する。baseline の
+明示的に受け付ける。reference environment で Cloudflare exporter が実際に送る形式は
+上記設定で `protobuf` に固定し、JSON は receiver の互換性検証用に限る。Content-Type
+と一致しない payload は `415` とする。receiver の contract test は両形式を検証し、
+実アカウントの acceptance test は `application/x-protobuf` を検証する。baseline の
 `Content-Encoding` は `identity` とし、gzip などの圧縮は `415` で拒否する。圧縮を許可する
 場合は展開後の上限を8 MiB、圧縮率を20倍以下に固定し、圧縮爆弾を受け入れない。
 
@@ -235,9 +250,10 @@ baseline をその値に合わせて変更する。
 Tempo exporter の payload projection は `gen_ai.prompt_json`、
 `gen_ai.completion_json`、`cf-aig-metadata` を含めない。Loki exporter は spanlogs
 contract の JSON body と、labels `model`、`status_code`、`env`、`gateway` だけを送る。
-Prometheus exporter は OTLP metrics を `application/x-protobuf` で送ることを baseline
-とし、Grafana Cloud が JSON のみを受ける環境では `application/json` とし、その選択を
-configuration と contract test に記録する。
+Prometheus exporter は self-hosted と Grafana Cloud の両 reference environment で
+OTLP metrics を `application/x-protobuf` で送ることに固定する。将来 `application/json`
+を使う環境を追加する場合は、その環境の選択値、Content-Type、configuration、contract
+test を同じ変更で明記し、backend の既定値に依存しない。
 
 Prometheus に公開する canonical metric names と labels は次のとおりとする。Alloy の
 spanmetrics connector が生成する vendor/default name は dashboard へ出す前にこの名前へ
@@ -468,10 +484,11 @@ baseline として payload 7日、trace metadata と metrics 14日の retention 
 
 ドキュメントの検証手順は次の順序にする。
 
-1. ローカル secret file と環境変数を設定する。
+1. ローカル secret file と環境変数を設定し、非秘密設定
+   `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf` を明示する。
 2. Compose stack を起動する。
-3. cloudflared の公開 URL と受信 token を Cloudflare AI Gateway OTel exporter
-   に登録する。
+3. cloudflared の公開 URL、`CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`、受信 token を
+   Cloudflare AI Gateway OTel exporter に登録する。
 4. 実際の AI Gateway request を送信する。
 5. Tempo で trace が存在することを確認する。
 6. Prometheus の `/api/v1/query` で `ai_gateway_requests_total`、
@@ -630,6 +647,10 @@ status、成功可否に影響させない。
 - OTLP receiver tests: JSON/protobuf の Content-Type、`/v1/traces` path preservation、
   unknown path/404、auth 成功/401、parse error/400、unsupported type/415、非identity
   compression/415、8 MiB超/413
+- OTLP exporter encoding configuration tests: `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`
+  が `application/x-protobuf` を選び、`json` が `application/json` を選ぶこと、省略・
+  未知の値を preflight で拒否すること、reference environment の設定値が `protobuf`
+  であること
 - receiver resource tests: slow header/body の408、rate limit の429/Retry-After、
   同時100 request上限、dispatcher 1,000 item capacity、timeout 後の active request、
   連続する2つの1分窓で queue item 最大値が増加しないこと、capacity+1 の valid OTLP
@@ -673,9 +694,10 @@ status、成功可否に影響させない。
 ### Acceptance gate
 
 1. Cloudflare Free Plan の実アカウントで OTel exporter が利用可能であることを確認する。
-2. `/v1/traces` を維持した Tunnel 経由で実 request に対応する span を受信し、選択した
-   Content-Type と Bearer token 認証の成功/失敗を確認する。未知 path は404、invalid
-   payload は400、unsupported Content-Type は415であることを確認する。
+2. `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf` を設定した Cloudflare exporter から、
+   `/v1/traces` を維持した Tunnel 経由で `Content-Type: application/x-protobuf` の
+   実 request 対応 span を受信する。Bearer token 認証の成功/失敗も確認し、未知 path
+   は404、invalid payload は400、unsupported Content-Type は415であることを確認する。
 3. Tempo で payload を含まない request/trace を確認する。
 4. Prometheus で canonical metric names、model/provider、request、error、latency を
    query し、request span predicate 適用後の spanmetrics が全量であることを確認する。

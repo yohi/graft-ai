@@ -16,6 +16,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	contentTypeProtobuf = "application/x-protobuf"
+	contentTypeJSON     = "application/json"
+)
+
 type ReceiverConfig struct {
 	Authenticator         BearerAuthenticator
 	SourceIdentity        SourceIdentity
@@ -64,6 +69,10 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		r.reject(writer, http.StatusNotFound, "path")
 		return
 	}
+	if request.Method != http.MethodPost {
+		r.reject(writer, http.StatusMethodNotAllowed, "method")
+		return
+	}
 	source, err := r.sourceIdentity.Resolve(request.RemoteAddr, request.Header)
 	if err != nil {
 		r.reject(writer, http.StatusForbidden, "untrusted_source")
@@ -78,15 +87,22 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	contentType, _, _ := strings.Cut(request.Header.Get("Content-Type"), ";")
-	if contentType != "application/x-protobuf" && contentType != "application/json" {
+	contentType = strings.TrimSpace(contentType)
+	if contentType != contentTypeProtobuf && contentType != contentTypeJSON {
 		r.reject(writer, http.StatusUnsupportedMediaType, "content_type")
 		return
 	}
 	select {
 	case r.concurrency <- struct{}{}:
-		defer func() { <-r.concurrency }()
+		defer func() { <- r.concurrency }()
 	case <-request.Context().Done():
 		r.reject(writer, http.StatusRequestTimeout, "timeout")
+		return
+	}
+	if allowed, retryAfter := r.rateLimiter.Allow(r.sourceIdentity.Hash(source)); !allowed {
+		r.metrics.RateLimited()
+		writer.Header().Set("Retry-After", retryAfterString(retryAfter))
+		r.reject(writer, http.StatusTooManyRequests, "rate_limit")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, r.maxBodyBytes))
@@ -97,12 +113,6 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 	envelope, err := decodeEnvelope(body, contentType)
 	if err != nil {
 		r.reject(writer, http.StatusBadRequest, "parse")
-		return
-	}
-	if allowed, retryAfter := r.rateLimiter.Allow(r.sourceIdentity.Hash(source)); !allowed {
-		r.metrics.RateLimited()
-		writer.Header().Set("Retry-After", retryAfterString(retryAfter))
-		r.reject(writer, http.StatusTooManyRequests, "rate_limit")
 		return
 	}
 	if !r.queue.Enqueue(envelope) {
@@ -133,7 +143,7 @@ func decodeEnvelope(body []byte, contentType string) (Envelope, error) {
 		return Envelope{}, errors.New("otel ingress: empty OTLP payload")
 	}
 	payload := &collectortracepb.ExportTraceServiceRequest{}
-	if contentType == "application/json" {
+	if contentType == contentTypeJSON {
 		if err := protojson.Unmarshal(body, payload); err != nil {
 			return Envelope{}, fmt.Errorf("decode OTLP JSON: %w", err)
 		}

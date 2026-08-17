@@ -51,6 +51,7 @@ func TestReceiver_returns_contract_status_reasons(t *testing.T) {
 	tests := []struct {
 		name       string
 		path       string
+		method     string
 		remoteAddr string
 		authority  string
 		content    string
@@ -59,18 +60,19 @@ func TestReceiver_returns_contract_status_reasons(t *testing.T) {
 		wantStatus int
 		wantReason string
 	}{
-		{name: "missing auth", path: "/v1/traces", remoteAddr: "127.0.0.1:4318", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 401, wantReason: "auth"},
-		{name: "untrusted source", path: "/v1/traces", remoteAddr: "198.51.100.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 403, wantReason: "untrusted_source"},
-		{name: "unknown path", path: "/health", remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 404, wantReason: "path"},
-		{name: "malformed payload", path: "/v1/traces", remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 400, wantReason: "parse"},
-		{name: "content type mismatch", path: "/v1/traces", remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "text/plain", body: []byte("bad"), wantStatus: 415, wantReason: "content_type"},
-		{name: "compression", path: "/v1/traces", remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", encoding: "gzip", body: []byte("bad"), wantStatus: 415, wantReason: "compression"},
+		{name: "missing auth", path: "/v1/traces", method: http.MethodPost, remoteAddr: "127.0.0.1:4318", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 401, wantReason: "auth"},
+		{name: "untrusted source", path: "/v1/traces", method: http.MethodPost, remoteAddr: "198.51.100.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 403, wantReason: "untrusted_source"},
+		{name: "unknown path", path: "/health", method: http.MethodPost, remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 404, wantReason: "path"},
+		{name: "wrong method", path: "/v1/traces", method: http.MethodGet, remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 405, wantReason: "method"},
+		{name: "malformed payload", path: "/v1/traces", method: http.MethodPost, remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", body: []byte("bad"), wantStatus: 400, wantReason: "parse"},
+		{name: "content type mismatch", path: "/v1/traces", method: http.MethodPost, remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "text/plain", body: []byte("bad"), wantStatus: 415, wantReason: "content_type"},
+		{name: "compression", path: "/v1/traces", method: http.MethodPost, remoteAddr: "127.0.0.1:4318", authority: "Bearer ingest-token", content: "application/x-protobuf", encoding: "gzip", body: []byte("bad"), wantStatus: 415, wantReason: "compression"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			receiver, _ := newTestReceiver(t, 2)
-			request := httptest.NewRequest(http.MethodPost, "http://example.test"+tt.path, bytes.NewReader(tt.body))
+			request := httptest.NewRequest(tt.method, "http://example.test"+tt.path, bytes.NewReader(tt.body))
 			request.RemoteAddr = tt.remoteAddr
 			request.Header.Set("Authorization", tt.authority)
 			request.Header.Set("Content-Type", tt.content)

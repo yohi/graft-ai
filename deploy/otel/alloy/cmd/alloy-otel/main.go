@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ const (
 	defaultIngressQueueSize = 1000
 	defaultRateCapacity     = 20
 	defaultRateRefill       = 2
+	defaultForwarderCount   = 4
 )
 
 type config struct {
@@ -80,7 +82,23 @@ func run() error {
 	}
 	server := ingress.NewHTTPServer(receiver)
 	server.Addr = cfg.address
-	return serveUntilSignal(server)
+
+	forwarderCtx, stopForwarders := context.WithCancel(context.Background())
+	defer stopForwarders()
+	var forwarderWg sync.WaitGroup
+	for range defaultForwarderCount {
+		forwarderWg.Add(1)
+		go func() {
+			defer forwarderWg.Done()
+			forwardLoop(forwarderCtx, queue)
+		}()
+	}
+
+	err = serveUntilSignal(server)
+	queue.Close()
+	stopForwarders()
+	forwarderWg.Wait()
+	return err
 }
 
 func loadConfig() (config, error) {
@@ -126,6 +144,25 @@ func serveUntilSignal(server *http.Server) error {
 		}
 		return fmt.Errorf("serve HTTP: %w", err)
 	}
+}
+
+func forwardLoop(ctx context.Context, queue *ingress.IngressQueue) {
+	for {
+		envelope, ok := queue.Dequeue(ctx)
+		if !ok {
+			return
+		}
+		if err := forwardEnvelope(ctx, envelope); err != nil {
+			slog.Error("failed to forward envelope", "error", err)
+		}
+	}
+}
+
+func forwardEnvelope(ctx context.Context, envelope ingress.Envelope) error {
+	_ = ctx
+	_ = envelope
+	// TODO: implement actual downstream delivery to Alloy once the transport is defined.
+	return nil
 }
 
 func requiredEnv(name string) (string, error) {

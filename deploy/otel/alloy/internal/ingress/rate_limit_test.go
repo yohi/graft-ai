@@ -53,3 +53,52 @@ func TestRateLimiter_keeps_buckets_independent(t *testing.T) {
 		t.Fatalf("second source shared the first bucket")
 	}
 }
+
+func TestRateLimiter_evicts_idle_full_buckets(t *testing.T) {
+	now := time.Unix(100, 0)
+	limiter, err := NewRateLimiter(RateLimiterConfig{
+		Capacity:        2,
+		RefillPerSecond: 1,
+		Now:             func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("new rate limiter: %v", err)
+	}
+
+	if allowed, _ := limiter.Allow("active-source"); !allowed {
+		t.Fatal("first request should be allowed")
+	}
+	if allowed, _ := limiter.Allow("idle-source"); !allowed {
+		t.Fatal("first request should be allowed")
+	}
+
+	now = now.Add(10 * time.Minute)
+	// active-source keeps its bucket by consuming a token; idle-source is full and idle so it is evicted.
+	if allowed, _ := limiter.Allow("active-source"); !allowed {
+		t.Fatal("active source should still be allowed after refill")
+	}
+	if allowed, _ := limiter.Allow("idle-source"); !allowed {
+		t.Fatal("idle source should be treated as a new source after eviction")
+	}
+}
+
+func TestRateLimiter_does_not_evict_recent_full_buckets(t *testing.T) {
+	now := time.Unix(100, 0)
+	limiter, err := NewRateLimiter(RateLimiterConfig{
+		Capacity:        2,
+		RefillPerSecond: 1,
+		Now:             func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("new rate limiter: %v", err)
+	}
+
+	if allowed, _ := limiter.Allow("recent-source"); !allowed {
+		t.Fatal("first request should be allowed")
+	}
+
+	now = now.Add(10 * time.Second)
+	if allowed, _ := limiter.Allow("recent-source"); !allowed {
+		t.Fatal("recent source should still be allowed before idle TTL")
+	}
+}

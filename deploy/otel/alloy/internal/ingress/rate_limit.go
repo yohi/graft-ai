@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const defaultBucketIdleTTL = 5 * time.Minute
+
 type RateLimiterConfig struct {
 	Capacity        int
 	RefillPerSecond float64
@@ -19,6 +21,7 @@ type RateLimiter struct {
 	refillPerSecond float64
 	now             func() time.Time
 	buckets         map[string]tokenBucket
+	idleTTL         time.Duration
 }
 
 type tokenBucket struct {
@@ -41,6 +44,7 @@ func NewRateLimiter(config RateLimiterConfig) (*RateLimiter, error) {
 		refillPerSecond: config.RefillPerSecond,
 		now:             config.Now,
 		buckets:         make(map[string]tokenBucket),
+		idleTTL:         defaultBucketIdleTTL,
 	}, nil
 }
 
@@ -48,6 +52,7 @@ func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
+	l.evictIdle(now)
 	bucket, exists := l.buckets[key]
 	if !exists {
 		bucket = tokenBucket{tokens: l.capacity, last: now}
@@ -66,4 +71,12 @@ func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
 	retryAfter = max(retryAfter, time.Second)
 	l.buckets[key] = bucket
 	return false, retryAfter
+}
+
+func (l *RateLimiter) evictIdle(now time.Time) {
+	for key, bucket := range l.buckets {
+		if bucket.tokens >= l.capacity && now.Sub(bucket.last) >= l.idleTTL {
+			delete(l.buckets, key)
+		}
+	}
 }

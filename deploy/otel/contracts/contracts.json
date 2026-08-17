@@ -69,13 +69,7 @@
       "ai_gateway_errors_total",
       "ai_gateway_request_duration_seconds"
     ],
-    "allowedLabels": [
-      "model",
-      "provider",
-      "status_code",
-      "env",
-      "gateway"
-    ],
+    "allowedLabels": ["model", "provider", "status_code", "env", "gateway"],
     "durationBucketsSeconds": [
       0.005,
       0.01,

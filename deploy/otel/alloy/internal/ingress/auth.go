@@ -22,10 +22,10 @@ func NewBearerAuthenticator(token string) (BearerAuthenticator, error) {
 
 func (a BearerAuthenticator) Authenticate(headers http.Header) error {
 	value := headers.Get("Authorization")
-	if !strings.HasPrefix(value, "Bearer ") {
+	if !hasBearerScheme(value) {
 		return ErrUnauthorized
 	}
-	provided := strings.TrimPrefix(value, "Bearer ")
+	provided := strings.TrimSpace(value[len("Bearer "):])
 	if provided == "" || strings.ContainsAny(provided, " \t") {
 		return ErrUnauthorized
 	}
@@ -33,4 +33,15 @@ func (a BearerAuthenticator) Authenticate(headers http.Header) error {
 		return ErrUnauthorized
 	}
 	return nil
+}
+
+func hasBearerScheme(value string) bool {
+	const scheme = "Bearer"
+	if len(value) < len(scheme)+1 {
+		return false
+	}
+	if !strings.EqualFold(value[:len(scheme)], scheme) {
+		return false
+	}
+	return value[len(scheme)] == ' ' && !strings.HasPrefix(value[len(scheme)+1:], " ")
 }

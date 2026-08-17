@@ -24,17 +24,34 @@ func TestBearerAuthenticator_rejects_missing_or_malformed_token(t *testing.T) {
 	}
 
 	for name, value := range map[string]string{
-		"missing":      "",
-		"basic":        "Basic ingest-token",
-		"wrong":        "Bearer wrong-token",
-		"extra":        "Bearer ingest-token extra",
-		"lowercase":    "bearer ingest-token",
-		"double-space": "Bearer  ingest-token",
+		"missing":       "",
+		"basic":         "Basic ingest-token",
+		"wrong":         "Bearer wrong-token",
+		"extra":         "Bearer ingest-token extra",
+		"double-space":  "Bearer  ingest-token",
+		"no-space":      "Bearer",
+		"space-at-end":  "Bearer ",
 	} {
 		t.Run(name, func(t *testing.T) {
 			request := httptestRequestWithHeader("Authorization", value)
 			if err := authenticator.Authenticate(request.Header); err == nil {
 				t.Fatalf("expected authentication failure")
+			}
+		})
+	}
+}
+
+func TestBearerAuthenticator_accepts_lowercase_bearer_scheme(t *testing.T) {
+	authenticator, err := NewBearerAuthenticator("ingest-token")
+	if err != nil {
+		t.Fatalf("new authenticator: %v", err)
+	}
+
+	for _, value := range []string{"bearer ingest-token", "Bearer ingest-token", "BEARER ingest-token"} {
+		t.Run(value, func(t *testing.T) {
+			request := httptestRequestWithHeader("Authorization", value)
+			if err := authenticator.Authenticate(request.Header); err != nil {
+				t.Fatalf("authenticate %q: %v", value, err)
 			}
 		})
 	}

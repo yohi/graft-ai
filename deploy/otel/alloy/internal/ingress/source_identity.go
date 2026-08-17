@@ -33,7 +33,10 @@ func LoadHMACKey(ctx context.Context, source SecretSource) ([]byte, error) {
 			return nil, fmt.Errorf("read HMAC key file: %w", err)
 		}
 		key := strings.TrimSpace(string(value))
-		if key != "" {
+		if key == "" {
+			// Empty configured file is treated the same as a missing source so
+			// fallthrough to the next source instead of failing immediately.
+		} else {
 			return []byte(key), nil
 		}
 	}
@@ -93,7 +96,7 @@ func (s SourceIdentity) Resolve(remoteAddr string, headers http.Header) (string,
 	}
 	forwarded := net.ParseIP(strings.TrimSpace(headers.Get("CF-Connecting-IP")))
 	if forwarded == nil {
-		return "unknown", nil
+		return peer.String(), nil
 	}
 	if ipv4 := forwarded.To4(); ipv4 != nil {
 		return ipv4.String(), nil

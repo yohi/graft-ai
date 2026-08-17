@@ -42,15 +42,15 @@ func TestSourceIdentity_rejects_untrusted_peer_before_forwarded_headers(t *testi
 	}
 }
 
-func TestSourceIdentity_ignores_invalid_or_missing_cloudflare_source(t *testing.T) {
+func TestSourceIdentity_fallbacks_to_peer_ip_when_forwarded_header_missing_or_invalid(t *testing.T) {
 	identity, err := NewSourceIdentity([]string{"127.0.0.1/32"}, []byte("hmac-key"))
 	if err != nil {
 		t.Fatalf("new source identity: %v", err)
 	}
 
 	for name, headers := range map[string]http.Header{
-		"missing":    {},
-		"invalid":    {"CF-Connecting-IP": {"not-an-ip"}},
+		"missing": {},
+		"invalid": {"CF-Connecting-IP": {"not-an-ip"}},
 		"spoof-only": {"X-Forwarded-For": {"203.0.113.9"}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -58,8 +58,8 @@ func TestSourceIdentity_ignores_invalid_or_missing_cloudflare_source(t *testing.
 			if err != nil {
 				t.Fatalf("resolve source: %v", err)
 			}
-			if source != "unknown" {
-				t.Fatalf("source = %q, want unknown", source)
+			if source != "127.0.0.1" {
+				t.Fatalf("source = %q, want peer IP fallback", source)
 			}
 		})
 	}
@@ -108,6 +108,35 @@ func TestLoadHMACKey_uses_file_environment_and_store_sources(t *testing.T) {
 	})
 	if err != nil || string(storeKey) != "store-secret" {
 		t.Fatalf("store key = %q, err = %v", storeKey, err)
+	}
+}
+
+func TestLoadHMACKey_empty_file_falls_through_to_next_source(t *testing.T) {
+	emptyFile := filepath.Join(t.TempDir(), "empty-hmac-key")
+	if err := os.WriteFile(emptyFile, []byte("   \n"), 0o600); err != nil {
+		t.Fatalf("write empty key file: %v", err)
+	}
+
+	t.Setenv("TEST_EMPTY_FILE_FALLTHROUGH", "env-from-empty-file")
+	key, err := LoadHMACKey(context.Background(), SecretSource{
+		FilePath:        emptyFile,
+		EnvironmentName: "TEST_EMPTY_FILE_FALLTHROUGH",
+	})
+	if err != nil || string(key) != "env-from-empty-file" {
+		t.Fatalf("key = %q, err = %v", key, err)
+	}
+}
+
+func TestLoadHMACKey_file_read_error_returns_immediately(t *testing.T) {
+	missingFile := filepath.Join(t.TempDir(), "does-not-exist")
+
+	t.Setenv("TEST_FILE_ERROR_FALLTHROUGH", "env-from-error")
+	_, err := LoadHMACKey(context.Background(), SecretSource{
+		FilePath:        missingFile,
+		EnvironmentName: "TEST_FILE_ERROR_FALLTHROUGH",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
 	}
 }
 

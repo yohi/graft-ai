@@ -24,13 +24,13 @@ func TestBearerAuthenticator_rejects_missing_or_malformed_token(t *testing.T) {
 	}
 
 	for name, value := range map[string]string{
-		"missing":       "",
-		"basic":         "Basic ingest-token",
-		"wrong":         "Bearer wrong-token",
-		"extra":         "Bearer ingest-token extra",
-		"double-space":  "Bearer  ingest-token",
-		"no-space":      "Bearer",
-		"space-at-end":  "Bearer ",
+		"missing":      "",
+		"basic":        "Basic ingest-token",
+		"wrong":        "Bearer wrong-token",
+		"extra":        "Bearer ingest-token extra",
+		"double-space": "Bearer  ingest-token",
+		"no-space":     "Bearer",
+		"space-at-end": "Bearer ",
 	} {
 		t.Run(name, func(t *testing.T) {
 			request := httptestRequestWithHeader("Authorization", value)

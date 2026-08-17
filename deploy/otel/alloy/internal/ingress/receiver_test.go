@@ -10,10 +10,7 @@ import (
 func TestReceiver_accepts_protobuf_and_enqueues_asynchronously(t *testing.T) {
 	receiver, queue := newTestReceiver(t, 2)
 	body := validOTLPBody(t, "protobuf")
-	request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
-	request.RemoteAddr = "127.0.0.1:4318"
-	request.Header.Set("Authorization", "Bearer ingest-token")
-	request.Header.Set("Content-Type", "application/x-protobuf")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
 	response := httptest.NewRecorder()
 
 	receiver.ServeHTTP(response, request)
@@ -30,10 +27,7 @@ func TestReceiver_accepts_protobuf_and_enqueues_asynchronously(t *testing.T) {
 func TestReceiver_accepts_json_and_preserves_content_type(t *testing.T) {
 	receiver, queue := newTestReceiver(t, 2)
 	body := validOTLPBody(t, "json")
-	request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
-	request.RemoteAddr = "127.0.0.1:4318"
-	request.Header.Set("Authorization", "Bearer ingest-token")
-	request.Header.Set("Content-Type", "application/json")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/json", "")
 	response := httptest.NewRecorder()
 
 	receiver.ServeHTTP(response, request)
@@ -72,13 +66,7 @@ func TestReceiver_returns_contract_status_reasons(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			receiver, _ := newTestReceiver(t, 2)
-			request := httptest.NewRequest(tt.method, "http://example.test"+tt.path, bytes.NewReader(tt.body))
-			request.RemoteAddr = tt.remoteAddr
-			request.Header.Set("Authorization", tt.authority)
-			request.Header.Set("Content-Type", tt.content)
-			if tt.encoding != "" {
-				request.Header.Set("Content-Encoding", tt.encoding)
-			}
+			request := newIngestRequestForTest(t, "http://example.test"+tt.path, tt.method, tt.body, tt.remoteAddr, tt.authority, tt.content, tt.encoding)
 			response := httptest.NewRecorder()
 
 			receiver.ServeHTTP(response, request)
@@ -99,10 +87,7 @@ func TestReceiver_returns_contract_status_reasons(t *testing.T) {
 func TestReceiver_returns_413_when_body_exceeds_limit(t *testing.T) {
 	receiver, _ := newTestReceiver(t, 2)
 	body := bytes.Repeat([]byte("x"), 8*1024*1024+1)
-	request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
-	request.RemoteAddr = "127.0.0.1:4318"
-	request.Header.Set("Authorization", "Bearer ingest-token")
-	request.Header.Set("Content-Type", "application/x-protobuf")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
 	response := httptest.NewRecorder()
 
 	receiver.ServeHTTP(response, request)
@@ -119,10 +104,7 @@ func TestReceiver_returns_200_capacity_reason_when_queue_is_full(t *testing.T) {
 	var lastResponse *httptest.ResponseRecorder
 
 	for range 2 {
-		request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
-		request.RemoteAddr = "127.0.0.1:4318"
-		request.Header.Set("Authorization", "Bearer ingest-token")
-		request.Header.Set("Content-Type", "application/x-protobuf")
+		request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
 		response := httptest.NewRecorder()
 		receiver.ServeHTTP(response, request)
 		lastResponse = response
@@ -156,10 +138,7 @@ func TestReceiver_returns_429_with_integer_retry_after_when_source_bucket_is_emp
 		}
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
-	request.RemoteAddr = "127.0.0.1:4318"
-	request.Header.Set("Authorization", "Bearer ingest-token")
-	request.Header.Set("Content-Type", "application/x-protobuf")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
 	response := httptest.NewRecorder()
 	receiver.ServeHTTP(response, request)
 
@@ -173,4 +152,21 @@ func TestReceiver_returns_429_with_integer_retry_after_when_source_bucket_is_emp
 	if got := receiver.Metrics().RateLimited; got != 1 {
 		t.Fatalf("rate-limited count = %d, want 1", got)
 	}
+}
+
+func newIngestRequest(t *testing.T, url string, body []byte, contentType string, encoding string) *http.Request {
+	t.Helper()
+	return newIngestRequestForTest(t, url, http.MethodPost, body, "127.0.0.1:4318", "Bearer ingest-token", contentType, encoding)
+}
+
+func newIngestRequestForTest(t *testing.T, url string, method string, body []byte, remoteAddr string, authority string, contentType string, encoding string) *http.Request {
+	t.Helper()
+	request := httptest.NewRequest(method, url, bytes.NewReader(body))
+	request.RemoteAddr = remoteAddr
+	request.Header.Set("Authorization", authority)
+	request.Header.Set("Content-Type", contentType)
+	if encoding != "" {
+		request.Header.Set("Content-Encoding", encoding)
+	}
+	return request
 }

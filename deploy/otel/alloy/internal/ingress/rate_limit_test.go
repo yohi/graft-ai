@@ -7,14 +7,11 @@ import (
 
 func TestRateLimiter_enforces_capacity_and_refill(t *testing.T) {
 	now := time.Unix(100, 0)
-	limiter, err := NewRateLimiter(RateLimiterConfig{
+	limiter := newRateLimiter(t, RateLimiterConfig{
 		Capacity:        20,
 		RefillPerSecond: 2,
 		Now:             func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatalf("new rate limiter: %v", err)
-	}
 
 	for range 20 {
 		allowed, _ := limiter.Allow("source-hash")
@@ -35,14 +32,11 @@ func TestRateLimiter_enforces_capacity_and_refill(t *testing.T) {
 }
 
 func TestRateLimiter_keeps_buckets_independent(t *testing.T) {
-	limiter, err := NewRateLimiter(RateLimiterConfig{
+	limiter := newRateLimiter(t, RateLimiterConfig{
 		Capacity:        1,
 		RefillPerSecond: 1,
 		Now:             time.Now,
 	})
-	if err != nil {
-		t.Fatalf("new rate limiter: %v", err)
-	}
 
 	allowed, _ := limiter.Allow("first-source")
 	if !allowed {
@@ -56,14 +50,11 @@ func TestRateLimiter_keeps_buckets_independent(t *testing.T) {
 
 func TestRateLimiter_evicts_idle_full_buckets(t *testing.T) {
 	now := time.Unix(100, 0)
-	limiter, err := NewRateLimiter(RateLimiterConfig{
+	limiter := newRateLimiter(t, RateLimiterConfig{
 		Capacity:        2,
 		RefillPerSecond: 1,
 		Now:             func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatalf("new rate limiter: %v", err)
-	}
 
 	if allowed, _ := limiter.Allow("active-source"); !allowed {
 		t.Fatal("first request should be allowed")
@@ -86,14 +77,11 @@ func TestRateLimiter_evicts_idle_full_buckets(t *testing.T) {
 }
 func TestRateLimiter_does_not_evict_recent_full_buckets(t *testing.T) {
 	now := time.Unix(100, 0)
-	limiter, err := NewRateLimiter(RateLimiterConfig{
+	limiter := newRateLimiter(t, RateLimiterConfig{
 		Capacity:        2,
 		RefillPerSecond: 1,
 		Now:             func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatalf("new rate limiter: %v", err)
-	}
 
 	if allowed, _ := limiter.Allow("recent-source"); !allowed {
 		t.Fatal("first request should be allowed")
@@ -109,14 +97,11 @@ func TestRateLimiter_does_not_evict_recent_full_buckets(t *testing.T) {
 
 func TestRateLimiter_evicts_idle_partially_used_buckets(t *testing.T) {
 	now := time.Unix(100, 0)
-	limiter, err := NewRateLimiter(RateLimiterConfig{
+	limiter := newRateLimiter(t, RateLimiterConfig{
 		Capacity:        20,
 		RefillPerSecond: 1,
 		Now:             func() time.Time { return now },
 	})
-	if err != nil {
-		t.Fatalf("new rate limiter: %v", err)
-	}
 
 	if allowed, _ := limiter.Allow("idle-partial"); !allowed {
 		t.Fatal("first request should be allowed")
@@ -132,4 +117,13 @@ func TestRateLimiter_evicts_idle_partially_used_buckets(t *testing.T) {
 	if allowed, _ := limiter.Allow("idle-partial"); !allowed {
 		t.Fatal("evicted partial bucket should be recreated as full")
 	}
+}
+
+func newRateLimiter(t *testing.T, cfg RateLimiterConfig) *RateLimiter {
+	t.Helper()
+	limiter, err := NewRateLimiter(cfg)
+	if err != nil {
+		t.Fatalf("new rate limiter: %v", err)
+	}
+	return limiter
 }

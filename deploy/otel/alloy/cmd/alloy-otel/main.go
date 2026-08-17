@@ -1,0 +1,159 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/ingress"
+)
+
+const (
+	defaultAddress          = ":4318"
+	defaultMaxBodyBytes     = 8 * 1024 * 1024
+	defaultMaxConcurrent    = 100
+	defaultIngressQueueSize = 1000
+	defaultRateCapacity     = 20
+	defaultRateRefill       = 2
+)
+
+type config struct {
+	address       string
+	trustedCIDRs  []string
+	proxySecret   string
+	hmacKeySource ingress.SecretSource
+}
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("alloy-otel failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	authenticator, err := ingress.NewBearerAuthenticator(cfg.proxySecret)
+	if err != nil {
+		return fmt.Errorf("configure bearer authenticator: %w", err)
+	}
+	hmacKey, err := ingress.LoadHMACKey(context.Background(), cfg.hmacKeySource)
+	if err != nil {
+		return fmt.Errorf("load source identity HMAC key: %w", err)
+	}
+	sourceIdentity, err := ingress.NewSourceIdentity(cfg.trustedCIDRs, hmacKey)
+	if err != nil {
+		return fmt.Errorf("configure source identity: %w", err)
+	}
+	queue, err := ingress.NewIngressQueue(defaultIngressQueueSize)
+	if err != nil {
+		return fmt.Errorf("configure ingress queue: %w", err)
+	}
+	rateLimiter, err := ingress.NewRateLimiter(ingress.RateLimiterConfig{
+		Capacity:        defaultRateCapacity,
+		RefillPerSecond: defaultRateRefill,
+		Now:             time.Now,
+	})
+	if err != nil {
+		return fmt.Errorf("configure rate limiter: %w", err)
+	}
+	receiver, err := ingress.NewReceiver(ingress.ReceiverConfig{
+		Authenticator:         authenticator,
+		SourceIdentity:        sourceIdentity,
+		Queue:                 queue,
+		RateLimiter:           rateLimiter,
+		MaxBodyBytes:          defaultMaxBodyBytes,
+		MaxConcurrentRequests: defaultMaxConcurrent,
+	})
+	if err != nil {
+		return fmt.Errorf("configure receiver: %w", err)
+	}
+	server := ingress.NewHTTPServer(receiver)
+	server.Addr = cfg.address
+	return serveUntilSignal(server)
+}
+
+func loadConfig() (config, error) {
+	proxySecret, err := requiredEnv("OTEL_INGEST_TOKEN")
+	if err != nil {
+		return config{}, err
+	}
+	trustedCIDRs, err := splitRequiredEnv("OTEL_TRUSTED_PROXY_CIDRS")
+	if err != nil {
+		return config{}, err
+	}
+	hmacKeySource := ingress.SecretSource{
+		FilePath:        os.Getenv("OTEL_RATE_LIMIT_HMAC_KEY_FILE"),
+		EnvironmentName: "OTEL_RATE_LIMIT_HMAC_KEY",
+	}
+	if strings.TrimSpace(hmacKeySource.FilePath) == "" && strings.TrimSpace(os.Getenv(hmacKeySource.EnvironmentName)) == "" {
+		return config{}, errors.New("OTEL_RATE_LIMIT_HMAC_KEY_FILE or OTEL_RATE_LIMIT_HMAC_KEY is required")
+	}
+	return config{
+		address:       envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
+		trustedCIDRs:  trustedCIDRs,
+		proxySecret:   proxySecret,
+		hmacKeySource: hmacKeySource,
+	}, nil
+}
+
+func serveUntilSignal(server *http.Server) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.ListenAndServe() }()
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shutdown HTTP server: %w", err)
+		}
+		return nil
+	case err := <-serverErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve HTTP: %w", err)
+	}
+}
+
+func requiredEnv(name string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	return value, nil
+}
+
+func splitRequiredEnv(name string) ([]string, error) {
+	value, err := requiredEnv(name)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(value, ",")
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+		if parts[index] == "" {
+			return nil, fmt.Errorf("%s contains an empty CIDR", name)
+		}
+	}
+	return parts, nil
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}

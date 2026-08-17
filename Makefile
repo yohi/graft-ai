@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana otel-node-preflight otel-contracts
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test
 
 install:
 	cd workers && npm install
@@ -7,6 +7,7 @@ install:
 fmt:
 	cd workers && npm run fmt
 	cd workers && npx prettier --write "../deploy/otel/contracts/encoding.mjs" "../tests/otel-contracts.test.mjs"
+	$(MAKE) -C deploy/otel/alloy fmt
 	terraform fmt -recursive
 
 validate:
@@ -15,6 +16,7 @@ validate:
 
 test:
 	$(MAKE) otel-contracts
+	$(MAKE) otel-alloy-test
 	cd workers && npx vitest run
 	node --test tests/parse-jsonc.test.mjs
 	node scripts/verify-terraform-logpush-fields.mjs
@@ -28,6 +30,9 @@ otel-node-preflight:
 
 otel-contracts: otel-node-preflight
 	node --test tests/otel-contracts.test.mjs
+
+otel-alloy-test:
+	$(MAKE) -C deploy/otel/alloy test
 
 typecheck:
 	cd workers && npm run typecheck:ci

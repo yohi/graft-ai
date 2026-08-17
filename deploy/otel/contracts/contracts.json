@@ -61,6 +61,17 @@
       "writeTimeoutSeconds": 10,
       "maxConcurrentRequests": 100,
       "ingressQueueItems": 1000
+    },
+    "rateLimit": {
+      "capacity": 20,
+      "refillPerSecond": 2,
+      "retryAfterMinimumSeconds": 1
+    },
+    "sourceIdentity": {
+      "trustedForwardingHeader": "CF-Connecting-IP",
+      "ignoredForwardingHeaders": ["X-Forwarded-For", "True-Client-IP"],
+      "unknownBucket": "unknown",
+      "hmacDomain": "otel-ingress-source-v1\u0000"
     }
   },
   "metrics": {

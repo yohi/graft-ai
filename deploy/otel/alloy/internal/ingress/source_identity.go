@@ -15,7 +15,7 @@ import (
 
 var ErrUntrustedSource = errors.New("otel ingress: untrusted source")
 
-type SecretStore interface {
+type SecretGetter interface {
 	Get(context.Context, string) (string, error)
 }
 
@@ -23,7 +23,7 @@ type SecretSource struct {
 	FilePath        string
 	EnvironmentName string
 	StoreName       string
-	Store           SecretStore
+	Store           SecretGetter
 }
 
 func LoadHMACKey(ctx context.Context, source SecretSource) ([]byte, error) {

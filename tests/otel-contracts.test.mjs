@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveOtelEncoding } from "../deploy/otel/contracts/encoding.mjs";
+import {
+  contentTypeForOtelEncoding,
+  resolveOtelEncoding,
+} from "../deploy/otel/contracts/encoding.mjs";
 
 const contracts = JSON.parse(
   readFileSync(
@@ -43,6 +46,11 @@ test("resolves the two supported OTEL encodings", () => {
     resolveOtelEncoding({ CLOUDFLARE_OTEL_EXPORT_ENCODING: "json" }),
     "json",
   );
+  assert.equal(
+    contentTypeForOtelEncoding("protobuf"),
+    "application/x-protobuf",
+  );
+  assert.equal(contentTypeForOtelEncoding("json"), "application/json");
   assert.equal(
     contracts.encoding.protobuf.contentType,
     "application/x-protobuf",

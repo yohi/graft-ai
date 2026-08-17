@@ -86,6 +86,12 @@ exporter や provider の既定値には依存しない。値と Content-Type �
 この設計の reference environment では、実アカウントの送信形式を再現可能にする
 ため、self-hosted と Grafana Cloud の両方で `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`
 に固定する。
+Cloudflare AI Gateway exporter の管理設定 `content_type` もこの値と連動させ、
+`protobuf` の場合は `content_type: "protobuf"`、`json` の場合は
+`content_type: "json"` とする。exporter の管理設定を適用した後、実 request を送信する
+前に管理 API/UI の read-back で設定値が環境変数と一致することを確認する。reference
+environment では `content_type: "protobuf"` の read-back を必須とし、不一致または
+read-back 不能の場合は acceptance を失敗させる。
 
 | 環境 | `CLOUDFLARE_OTEL_EXPORT_ENCODING` | Cloudflare exporter の Content-Type |
 | --- | --- | --- |
@@ -759,10 +765,12 @@ status、成功可否に影響させない。
 ### Acceptance gate
 
 1. Cloudflare Free Plan の実アカウントで OTel exporter が利用可能であることを確認する。
-2. `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf` を設定した Cloudflare exporter から、
-   `/v1/traces` を維持した Tunnel 経由で `Content-Type: application/x-protobuf` の
-   実 request 対応 span を受信する。Bearer token 認証の成功/失敗も確認し、未知 path
-   は404、invalid payload は400、unsupported Content-Type は415であることを確認する。
+2. Cloudflare exporter の管理設定に `content_type: "protobuf"` を適用し、
+   `content_type: "protobuf"` が read-back できることを確認する。その後、
+   `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf` を設定した exporter から、`/v1/traces` を
+   維持した Tunnel 経由で `Content-Type: application/x-protobuf` の実 request 対応 span
+   を受信する。Bearer token 認証の成功/失敗も確認し、未知 path は404、invalid payload
+   は400、unsupported Content-Type は415であることを確認する。
 3. Tempo で payload を含まない request/trace を確認する。
 4. Prometheus で canonical metric names、model/provider、request、error、latency を
    query し、request span predicate 適用後の spanmetrics が全量であることを確認する。

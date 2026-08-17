@@ -14,7 +14,7 @@
 
 - Existing Logpush Worker, proxy Worker, Tail Worker, and `grafana/dashboards/graft-ai-overview.json` remain unchanged.
 - Free Plan OTel exporter availability and delivery of a real request span are a hard pre-implementation gate. Do not silently switch to paid features or make the proxy mandatory if the gate fails.
-- `CLOUDFLARE_OTEL_EXPORT_ENCODING` is required and accepts only `protobuf` or `json`; reference environments use `protobuf` and `application/x-protobuf`.
+- `CLOUDFLARE_OTEL_EXPORT_ENCODING` is required and accepts only `protobuf` or `json`; the Cloudflare AI Gateway exporter management setting `content_type` must match it (`protobuf` → `content_type: "protobuf"`, `json` → `content_type: "json"`), and reference environments use `protobuf` and `application/x-protobuf`.
 - Public ingress is exactly `/v1/traces`; unknown paths return `404`, content-type mismatch returns `415`, and non-identity compression returns `415`.
 - `Authorization: Bearer ${OTEL_INGEST_TOKEN}` and backend credentials come only from secret files, environment variables, or Secrets Store. Never put credentials in source, dashboards, URLs, logs, or `*.tfvars`.
 - Source metadata is trusted only when the TCP peer is in the explicit
@@ -72,11 +72,11 @@ This is a prerequisite gate, not a PR. No implementation PR starts until it pass
 
 - [ ] **Step 1: Configure a non-secret test environment**
 
-  Set `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`, a temporary `OTEL_INGEST_TOKEN`, and a Tunnel endpoint outside tracked files. Record only status codes, endpoint shape, and safe identifiers.
+  Set `CLOUDFLARE_OTEL_EXPORT_ENCODING=protobuf`, apply the Cloudflare AI Gateway exporter management setting `content_type: "protobuf"`, and configure a temporary `OTEL_INGEST_TOKEN` and Tunnel endpoint outside tracked files. Record only status codes, endpoint shape, and safe identifiers.
 
-- [ ] **Step 2: Verify both request paths**
+- [ ] **Step 2: Read back the exporter setting and verify both request paths**
 
-  Send one request through the proxy Worker and one directly to AI Gateway. Confirm the exporter sends `application/x-protobuf`, the path remains `/v1/traces`, and a request-associated span arrives.
+  Before sending telemetry, read back the exporter management setting and stop if `content_type` is not exactly `"protobuf"` or cannot be read back. Then send one request through the proxy Worker and one directly to AI Gateway. Confirm the exporter sends `application/x-protobuf`, the path remains `/v1/traces`, and a request-associated span arrives.
 
 - [ ] **Step 3: Apply the hard stop rule**
 

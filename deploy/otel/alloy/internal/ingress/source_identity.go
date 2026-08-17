@@ -96,6 +96,9 @@ func (s SourceIdentity) Resolve(remoteAddr string, headers http.Header) (string,
 	}
 	forwarded := net.ParseIP(strings.TrimSpace(headers.Get("CF-Connecting-IP")))
 	if forwarded == nil {
+		if ipv4 := peer.To4(); ipv4 != nil {
+			return ipv4.String(), nil
+		}
 		return peer.String(), nil
 	}
 	if ipv4 := forwarded.To4(); ipv4 != nil {

@@ -93,17 +93,17 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		r.reject(writer, http.StatusUnsupportedMediaType, "content_type")
 		return
 	}
+	if allowed, retryAfter := r.rateLimiter.Allow(r.sourceIdentity.Hash(source)); !allowed {
+		r.metrics.RateLimited()
+		writer.Header().Set("Retry-After", retryAfterString(retryAfter))
+		r.reject(writer, http.StatusTooManyRequests, "rate_limit")
+		return
+	}
 	select {
 	case r.concurrency <- struct{}{}:
 		defer func() { <-r.concurrency }()
 	case <-request.Context().Done():
 		r.reject(writer, http.StatusRequestTimeout, "timeout")
-		return
-	}
-	if allowed, retryAfter := r.rateLimiter.Allow(r.sourceIdentity.Hash(source)); !allowed {
-		r.metrics.RateLimited()
-		writer.Header().Set("Retry-After", retryAfterString(retryAfter))
-		r.reject(writer, http.StatusTooManyRequests, "rate_limit")
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, r.maxBodyBytes))

@@ -62,9 +62,9 @@ func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
 		bucket.tokens = math.Min(l.capacity, bucket.tokens+elapsed*l.refillPerSecond)
 		bucket.last = now
 	}
+	bucket.lastAccess = now
 	if bucket.tokens >= 1 {
 		bucket.tokens--
-		bucket.lastAccess = now
 		l.buckets[key] = bucket
 		return true, 0
 	}

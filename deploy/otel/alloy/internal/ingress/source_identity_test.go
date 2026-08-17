@@ -42,7 +42,7 @@ func TestSourceIdentity_rejects_untrusted_peer_before_forwarded_headers(t *testi
 	}
 }
 
-func TestSourceIdentity_fallbacks_to_peer_ip_when_forwarded_header_missing_or_invalid(t *testing.T) {
+func TestSourceIdentity_fallbacks_to_unknown_when_forwarded_header_missing_or_invalid(t *testing.T) {
 	identity, err := NewSourceIdentity([]string{"127.0.0.1/32"}, []byte("hmac-key"))
 	if err != nil {
 		t.Fatalf("new source identity: %v", err)
@@ -58,20 +58,22 @@ func TestSourceIdentity_fallbacks_to_peer_ip_when_forwarded_header_missing_or_in
 			if err != nil {
 				t.Fatalf("resolve source: %v", err)
 			}
-			if source != "127.0.0.1" {
-				t.Fatalf("source = %q, want peer IP fallback", source)
+			if source != "unknown" {
+				t.Fatalf("source = %q, want %q", source, "unknown")
 			}
 		})
 	}
 }
 
-func TestSourceIdentity_normalizes_ipv4_mapped_ipv6_peer_to_ipv4(t *testing.T) {
+func TestSourceIdentity_normalizes_forwarded_ipv4_mapped_ipv6_to_ipv4(t *testing.T) {
 	identity, err := NewSourceIdentity([]string{"127.0.0.1/32", "::1/128"}, []byte("hmac-key"))
 	if err != nil {
 		t.Fatalf("new source identity: %v", err)
 	}
 
-	source, err := identity.Resolve("[::ffff:127.0.0.1]:4318", http.Header{})
+	headers := make(http.Header)
+	headers.Set("CF-Connecting-IP", "::ffff:127.0.0.1")
+	source, err := identity.Resolve("[::ffff:127.0.0.1]:4318", headers)
 	if err != nil {
 		t.Fatalf("resolve trusted source: %v", err)
 	}
@@ -80,29 +82,32 @@ func TestSourceIdentity_normalizes_ipv4_mapped_ipv6_peer_to_ipv4(t *testing.T) {
 	}
 }
 
-func TestSourceIdentity_ipv4_mapped_ipv6_peer_matches_ipv4_forwarded_hash(t *testing.T) {
+func TestSourceIdentity_forwarded_ipv4_and_ipv4_mapped_ipv6_produce_same_hash(t *testing.T) {
 	identity, err := NewSourceIdentity([]string{"127.0.0.1/32", "::1/128"}, []byte("hmac-key"))
 	if err != nil {
 		t.Fatalf("new source identity: %v", err)
 	}
 
-	peerSource, err := identity.Resolve("[::ffff:127.0.0.1]:4318", http.Header{})
+	headersV4 := make(http.Header)
+	headersV4.Set("CF-Connecting-IP", "127.0.0.1")
+	forwardedV4, err := identity.Resolve("[::ffff:127.0.0.1]:4318", headersV4)
 	if err != nil {
-		t.Fatalf("resolve peer source: %v", err)
+		t.Fatalf("resolve forwarded v4 source: %v", err)
 	}
-	headers := make(http.Header)
-	headers.Set("CF-Connecting-IP", "127.0.0.1")
-	forwardedSource, err := identity.Resolve("[::ffff:127.0.0.1]:4318", headers)
+	headersMapped := make(http.Header)
+	headersMapped.Set("CF-Connecting-IP", "::ffff:127.0.0.1")
+	forwardedMapped, err := identity.Resolve("[::ffff:127.0.0.1]:4318", headersMapped)
 	if err != nil {
-		t.Fatalf("resolve forwarded source: %v", err)
+		t.Fatalf("resolve forwarded mapped source: %v", err)
 	}
-	if peerSource != forwardedSource {
-		t.Fatalf("peer source %q and forwarded source %q produce different identity", peerSource, forwardedSource)
+	if forwardedV4 != forwardedMapped {
+		t.Fatalf("forwarded v4 %q and forwarded mapped %q produce different identity", forwardedV4, forwardedMapped)
 	}
-	if got := identity.Hash(peerSource); got != identity.Hash(forwardedSource) {
-		t.Fatalf("hash mismatch: peer %q vs forwarded %q", got, identity.Hash(forwardedSource))
+	if got := identity.Hash(forwardedV4); got != identity.Hash(forwardedMapped) {
+		t.Fatalf("hash mismatch: forwarded v4 %q vs forwarded mapped %q", got, identity.Hash(forwardedMapped))
 	}
 }
+
 
 func TestSourceIdentity_hash_matches_domain_separated_hmac(t *testing.T) {
 	key := []byte("hmac-key")

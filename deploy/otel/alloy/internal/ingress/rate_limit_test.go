@@ -119,6 +119,30 @@ func TestRateLimiter_evicts_idle_partially_used_buckets(t *testing.T) {
 	}
 }
 
+func TestRateLimiter_rejection_keeps_bucket_alive(t *testing.T) {
+	now := time.Unix(100, 0)
+	limiter := newRateLimiter(t, RateLimiterConfig{
+		Capacity:        1,
+		RefillPerSecond: 1,
+		Now:             func() time.Time { return now },
+	})
+
+	if allowed, _ := limiter.Allow("client"); !allowed {
+		t.Fatal("first request should be allowed")
+	}
+	if allowed, _ := limiter.Allow("client"); allowed {
+		t.Fatal("second request should be rate limited")
+	}
+
+	now = now.Add(3 * time.Minute)
+	// The bucket must still exist because the rejection above updated lastAccess.
+	_, _ = limiter.Allow("client")
+	if got := len(limiter.buckets); got != 1 {
+		t.Fatalf("bucket count = %d, want 1 after rejection keeps bucket alive", got)
+	}
+}
+
+
 func newRateLimiter(t *testing.T, cfg RateLimiterConfig) *RateLimiter {
 	t.Helper()
 	limiter, err := NewRateLimiter(cfg)

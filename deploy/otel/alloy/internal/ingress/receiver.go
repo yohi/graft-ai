@@ -25,19 +25,21 @@ type ReceiverConfig struct {
 	RateLimiter           *RateLimiter
 	MaxBodyBytes          int64
 	MaxConcurrentRequests int
+	SamplingRatePPM       uint32
 }
 
 type Receiver struct {
-	authenticator  BearerAuthenticator
-	sourceIdentity SourceIdentity
-	queue          *IngressQueue
-	rateLimiter    *RateLimiter
-	maxBodyBytes   int64
-	concurrency    chan struct{}
-	metrics        *IngressMetrics
-	redactor       redaction.Redactor
-	projector      spanlogs.Projector
-	sizer          spanlogs.Sizer
+	authenticator   BearerAuthenticator
+	sourceIdentity  SourceIdentity
+	queue           *IngressQueue
+	rateLimiter     *RateLimiter
+	maxBodyBytes    int64
+	samplingRatePPM uint32
+	concurrency     chan struct{}
+	metrics         *IngressMetrics
+	redactor        redaction.Redactor
+	projector       spanlogs.Projector
+	sizer           spanlogs.Sizer
 }
 
 func NewReceiver(config ReceiverConfig) (*Receiver, error) {
@@ -54,16 +56,17 @@ func NewReceiver(config ReceiverConfig) (*Receiver, error) {
 		return nil, errors.New("otel ingress: max concurrent requests must be positive")
 	}
 	return &Receiver{
-		authenticator:  config.Authenticator,
-		sourceIdentity: config.SourceIdentity,
-		queue:          config.Queue,
-		rateLimiter:    config.RateLimiter,
-		maxBodyBytes:   config.MaxBodyBytes,
-		concurrency:    make(chan struct{}, config.MaxConcurrentRequests),
-		metrics:        NewIngressMetrics(),
-		redactor:       redaction.NewRedactor(),
-		projector:      spanlogs.NewProjector(),
-		sizer:          spanlogs.NewSizer(spanlogs.MaxLineBytes),
+		authenticator:   config.Authenticator,
+		sourceIdentity:  config.SourceIdentity,
+		queue:           config.Queue,
+		rateLimiter:     config.RateLimiter,
+		maxBodyBytes:    config.MaxBodyBytes,
+		samplingRatePPM: config.SamplingRatePPM,
+		concurrency:     make(chan struct{}, config.MaxConcurrentRequests),
+		metrics:         NewIngressMetrics(),
+		redactor:        redaction.NewRedactor(),
+		projector:       spanlogs.NewProjector(),
+		sizer:           spanlogs.NewSizer(spanlogs.MaxLineBytes),
 	}, nil
 }
 
@@ -130,10 +133,11 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 			continue
 		}
 		envelope := Envelope{
-			TraceID:     redacted.TraceID,
-			Payload:     record.Serialized,
-			ContentType: "application/json",
-			Span:        redacted,
+			TraceID:         redacted.TraceID,
+			Payload:         record.Serialized,
+			ContentType:     "application/json",
+			SamplingRatePPM: r.samplingRatePPM,
+			Span:            redacted,
 		}
 		if !r.queue.Enqueue(envelope) {
 			r.metrics.CapacityDrop()

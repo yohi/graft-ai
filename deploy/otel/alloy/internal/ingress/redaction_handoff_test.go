@@ -35,6 +35,9 @@ func TestReceiver_redacts_and_serializes_before_queue_handoff(t *testing.T) {
 	if envelope.ContentType != "application/json" {
 		t.Fatalf("queued content type = %q, want application/json", envelope.ContentType)
 	}
+	if envelope.SamplingRatePPM != 500_000 {
+		t.Fatalf("queued sampling rate ppm = %d, want 500000", envelope.SamplingRatePPM)
+	}
 	if envelope.Span.TraceID != "00112233445566778899aabbccddeeff" {
 		t.Fatalf("queued redacted span trace ID = %q", envelope.Span.TraceID)
 	}

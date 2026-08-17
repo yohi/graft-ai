@@ -18,6 +18,8 @@
       "ratePpm": 1000000
     }
   ],
+  "invalidRates": ["-0.1", "1.000001", "2"],
+  "priorityOverridesRejected": true,
   "traceIds": [
     {
       "traceId": "00000000000000000000000000000001",

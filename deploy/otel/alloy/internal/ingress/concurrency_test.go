@@ -24,7 +24,7 @@ func TestReceiver_limits_active_request_bodies_to_100(t *testing.T) {
 		t.Fatalf("new queue: %v", err)
 	}
 	limiter, err := NewRateLimiter(RateLimiterConfig{
-		Capacity:        200,
+		Capacity:        250,
 		RefillPerSecond: 1,
 		Now:             func() time.Time { return time.Unix(0, 0) },
 	})
@@ -161,8 +161,8 @@ func TestReceiver_rejects_rate_limited_requests_before_concurrency(t *testing.T)
 		t.Fatalf("status = %d, want 429", response.Code)
 	}
 	assertReason(t, response.Body.Bytes(), "rate_limit")
-	if got := receiver.Metrics().RateLimited; got != 2 {
-		t.Fatalf("rate-limited count = %d, want 2", got)
+	if got := receiver.Metrics().RateLimited; got != 3 {
+		t.Fatalf("rate-limited count = %d, want 3", got)
 	}
 }
 

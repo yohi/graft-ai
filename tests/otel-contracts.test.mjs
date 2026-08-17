@@ -170,6 +170,41 @@ test("pins canonical metrics, labels, and duration buckets", () => {
   ]);
 });
 
+test("pins spanlogs redaction and serialized-size contracts", () => {
+  assert.deepEqual(contracts.spanlogs, {
+    maxLineBytes: 262144,
+    allowlistedFields: [
+      "trace_id",
+      "span_id",
+      "request_id",
+      "model",
+      "provider",
+      "status",
+      "status_code",
+      "gateway",
+      "env",
+      "input_tokens",
+      "output_tokens",
+      "total_tokens",
+      "cost_usd",
+      "duration_ms",
+      "prompt",
+      "completion",
+      "payload_truncated",
+      "payload_dropped",
+      "payload_drop_reason",
+    ],
+    lokiLabels: ["model", "status_code", "env", "gateway"],
+    payloadDropReasons: [
+      "redaction_failure",
+      "numeric_field_invalid",
+      "line_size",
+      "line_size_metadata",
+    ],
+    truncatedSuffix: "[TRUNCATED]",
+  });
+});
+
 test("keeps retention payload export fail-closed", () => {
   assert.deepEqual(contracts.retention.reasons, [
     "retention_unavailable",

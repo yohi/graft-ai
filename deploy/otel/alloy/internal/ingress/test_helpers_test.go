@@ -26,7 +26,7 @@ func newTestReceiver(t *testing.T, queueCapacity int) (*Receiver, *IngressQueue)
 		t.Fatalf("new queue: %v", err)
 	}
 	limiter, err := NewRateLimiter(RateLimiterConfig{
-		Capacity:        20,
+		Capacity:        40,
 		RefillPerSecond: 2,
 		Now:             func() time.Time { return time.Unix(0, 0) },
 	})

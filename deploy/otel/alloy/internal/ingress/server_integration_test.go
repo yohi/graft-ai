@@ -3,6 +3,7 @@ package ingress
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -124,7 +125,7 @@ func startIntegrationServer(t *testing.T, handler http.Handler, configure func(*
 		if err := server.Shutdown(shutdownContext); err != nil {
 			t.Errorf("shutdown server: %v", err)
 		}
-		if err := <-serveDone; err != nil && err != http.ErrServerClosed {
+		if err := <-serveDone; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Errorf("serve server: %v", err)
 		}
 	})

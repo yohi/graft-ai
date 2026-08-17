@@ -1,0 +1,53 @@
+{
+  "seed": "graft-ai-otel-v1",
+  "rates": [
+    {
+      "decimal": "0",
+      "ratePpm": 0
+    },
+    {
+      "decimal": "0.000001",
+      "ratePpm": 1
+    },
+    {
+      "decimal": "0.5",
+      "ratePpm": 500000
+    },
+    {
+      "decimal": "1",
+      "ratePpm": 1000000
+    }
+  ],
+  "traceIds": [
+    {
+      "traceId": "00000000000000000000000000000001",
+      "sha256Prefix": "f75a2b34049e94d6",
+      "decisions": {
+        "0": false,
+        "0.000001": false,
+        "0.5": false,
+        "1": true
+      }
+    },
+    {
+      "traceId": "ffffffffffffffffffffffffffffffff",
+      "sha256Prefix": "1d4e75600b429028",
+      "decisions": {
+        "0": false,
+        "0.000001": false,
+        "0.5": true,
+        "1": true
+      }
+    },
+    {
+      "traceId": "11111111111111111111111111111111",
+      "sha256Prefix": "db81a30e59fe0b64",
+      "decisions": {
+        "0": false,
+        "0.000001": false,
+        "0.5": false,
+        "1": true
+      }
+    }
+  ]
+}

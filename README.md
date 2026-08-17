@@ -159,7 +159,9 @@ graft-ai/
 │   ├── outputs.tf
 │   ├── grafana/          # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
+├── deploy/otel/       # OTel contracts and the custom Alloy distribution
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
+├── tests/otel-contracts.test.mjs # Node.js OTel contract regression tests
 ├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, setup-free-tier, setup-grafana
 └── README.md         # this file
 ```
@@ -244,6 +246,7 @@ This subsystem supports two modes:
 ```bash
 make typecheck        # TypeScript type check
 make test             # run Vitest suite
+make otel-contracts   # run Node.js OTel contract tests
 make fmt              # format Terraform and Workers sources
 make validate         # terraform validate (Logpush mode only)
 make deploy           # wrangler deploy + terraform apply (Logpush mode only)

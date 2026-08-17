@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana otel-node-preflight otel-contracts
 
 install:
 	cd workers && npm install
@@ -6,6 +6,7 @@ install:
 
 fmt:
 	cd workers && npm run fmt
+	cd workers && npx prettier --write "../deploy/otel/contracts/encoding.mjs" "../tests/otel-contracts.test.mjs"
 	terraform fmt -recursive
 
 validate:
@@ -13,6 +14,7 @@ validate:
 	terraform -chdir=terraform validate
 
 test:
+	$(MAKE) otel-contracts
 	cd workers && npx vitest run
 	node --test tests/parse-jsonc.test.mjs
 	node scripts/verify-terraform-logpush-fields.mjs
@@ -20,6 +22,12 @@ test:
 	node --test tests/deploy-dashboards.test.mjs
 	bash tests/setup-free-tier.test.sh
 	bash tests/manage-cloudflare-logpush-job.test.sh
+
+otel-node-preflight:
+	@node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 22) { console.error("Node.js >= 22 is required for OTel contract tests"); process.exit(1); }'
+
+otel-contracts: otel-node-preflight
+	node --test tests/otel-contracts.test.mjs
 
 typecheck:
 	cd workers && npm run typecheck:ci

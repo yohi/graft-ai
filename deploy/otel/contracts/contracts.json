@@ -1,0 +1,129 @@
+{
+  "encoding": {
+    "protobuf": {
+      "contentType": "application/x-protobuf"
+    },
+    "json": {
+      "contentType": "application/json"
+    }
+  },
+  "receiver": {
+    "contentTypes": {
+      "protobuf": "application/x-protobuf",
+      "json": "application/json"
+    },
+    "statusReasonPairs": [
+      {
+        "status": 401,
+        "reason": "auth"
+      },
+      {
+        "status": 403,
+        "reason": "untrusted_source"
+      },
+      {
+        "status": 404,
+        "reason": "path"
+      },
+      {
+        "status": 400,
+        "reason": "parse"
+      },
+      {
+        "status": 415,
+        "reason": "content_type"
+      },
+      {
+        "status": 415,
+        "reason": "compression"
+      },
+      {
+        "status": 413,
+        "reason": "body_size"
+      },
+      {
+        "status": 408,
+        "reason": "timeout"
+      },
+      {
+        "status": 429,
+        "reason": "rate_limit"
+      },
+      {
+        "status": 200,
+        "reason": "accepted"
+      }
+    ],
+    "limits": {
+      "maxBodyBytes": 8388608,
+      "readHeaderTimeoutSeconds": 5,
+      "readTimeoutSeconds": 30,
+      "writeTimeoutSeconds": 10,
+      "maxConcurrentRequests": 100,
+      "ingressQueueItems": 1000
+    }
+  },
+  "metrics": {
+    "canonicalNames": [
+      "ai_gateway_requests_total",
+      "ai_gateway_errors_total",
+      "ai_gateway_request_duration_seconds"
+    ],
+    "allowedLabels": ["model", "provider", "status_code", "env", "gateway"],
+    "durationBucketsSeconds": [
+      0.005,
+      0.01,
+      0.025,
+      0.05,
+      0.1,
+      0.25,
+      0.5,
+      1,
+      2.5,
+      5,
+      10,
+      "+Inf"
+    ]
+  },
+  "retention": {
+    "maxPayloadRetentionDays": 14,
+    "reasons": [
+      "retention_unavailable",
+      "retention_lookup_failed",
+      "retention_invalid",
+      "retention_exceeds_14d"
+    ],
+    "fixtures": {
+      "valid1d": {
+        "cloudLogsRetention": "1d",
+        "enabled": true,
+        "reason": null
+      },
+      "valid14d": {
+        "cloudLogsRetention": "14d",
+        "enabled": true,
+        "reason": null
+      },
+      "unavailable": {
+        "cloudLogsRetention": null,
+        "enabled": false,
+        "reason": "retention_unavailable"
+      },
+      "lookupFailed": {
+        "cloudLogsRetention": null,
+        "enabled": false,
+        "reason": "retention_lookup_failed"
+      },
+      "invalid": {
+        "cloudLogsRetention": "not-a-duration",
+        "enabled": false,
+        "reason": "retention_invalid"
+      },
+      "exceeds14d": {
+        "cloudLogsRetention": "15d",
+        "enabled": false,
+        "reason": "retention_exceeds_14d"
+      }
+    }
+  }
+}

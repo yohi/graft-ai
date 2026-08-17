@@ -86,6 +86,11 @@ func TestReceiver_returns_contract_status_reasons(t *testing.T) {
 			if response.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", response.Code, tt.wantStatus)
 			}
+			if tt.wantStatus == http.StatusMethodNotAllowed {
+				if got := response.Header().Get("Allow"); got != http.MethodPost {
+					t.Fatalf("Allow header = %q, want %q", got, http.MethodPost)
+				}
+			}
 			assertReason(t, response.Body.Bytes(), tt.wantReason)
 		})
 	}

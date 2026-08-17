@@ -25,8 +25,9 @@ type RateLimiter struct {
 }
 
 type tokenBucket struct {
-	tokens float64
-	last   time.Time
+	tokens     float64
+	last       time.Time
+	lastAccess time.Time
 }
 
 func NewRateLimiter(config RateLimiterConfig) (*RateLimiter, error) {
@@ -55,7 +56,7 @@ func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
 	l.evictIdle(now)
 	bucket, exists := l.buckets[key]
 	if !exists {
-		bucket = tokenBucket{tokens: l.capacity, last: now}
+		bucket = tokenBucket{tokens: l.capacity, last: now, lastAccess: now}
 	}
 	if elapsed := now.Sub(bucket.last).Seconds(); elapsed > 0 {
 		bucket.tokens = math.Min(l.capacity, bucket.tokens+elapsed*l.refillPerSecond)
@@ -63,6 +64,7 @@ func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
 	}
 	if bucket.tokens >= 1 {
 		bucket.tokens--
+		bucket.lastAccess = now
 		l.buckets[key] = bucket
 		return true, 0
 	}
@@ -75,7 +77,7 @@ func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
 
 func (l *RateLimiter) evictIdle(now time.Time) {
 	for key, bucket := range l.buckets {
-		if bucket.tokens >= l.capacity && now.Sub(bucket.last) >= l.idleTTL {
+		if now.Sub(bucket.lastAccess) >= l.idleTTL {
 			delete(l.buckets, key)
 		}
 	}

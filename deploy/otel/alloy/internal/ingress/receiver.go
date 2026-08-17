@@ -70,6 +70,7 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
 		r.reject(writer, http.StatusMethodNotAllowed, "method")
 		return
 	}
@@ -94,7 +95,7 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 	}
 	select {
 	case r.concurrency <- struct{}{}:
-		defer func() { <- r.concurrency }()
+		defer func() { <-r.concurrency }()
 	case <-request.Context().Done():
 		r.reject(writer, http.StatusRequestTimeout, "timeout")
 		return

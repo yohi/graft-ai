@@ -77,11 +77,13 @@ func TestRateLimiter_evicts_idle_full_buckets(t *testing.T) {
 	if allowed, _ := limiter.Allow("active-source"); !allowed {
 		t.Fatal("active source should still be allowed after refill")
 	}
+	if got := len(limiter.buckets); got != 1 {
+		t.Fatalf("bucket count = %d, want 1 after evicting idle full bucket", got)
+	}
 	if allowed, _ := limiter.Allow("idle-source"); !allowed {
 		t.Fatal("idle source should be treated as a new source after eviction")
 	}
 }
-
 func TestRateLimiter_does_not_evict_recent_full_buckets(t *testing.T) {
 	now := time.Unix(100, 0)
 	limiter, err := NewRateLimiter(RateLimiterConfig{
@@ -96,9 +98,38 @@ func TestRateLimiter_does_not_evict_recent_full_buckets(t *testing.T) {
 	if allowed, _ := limiter.Allow("recent-source"); !allowed {
 		t.Fatal("first request should be allowed")
 	}
-
 	now = now.Add(10 * time.Second)
 	if allowed, _ := limiter.Allow("recent-source"); !allowed {
 		t.Fatal("recent source should still be allowed before idle TTL")
+	}
+	if got := len(limiter.buckets); got != 1 {
+		t.Fatalf("bucket count = %d, want 1 while source remains active", got)
+	}
+}
+
+func TestRateLimiter_evicts_idle_partially_used_buckets(t *testing.T) {
+	now := time.Unix(100, 0)
+	limiter, err := NewRateLimiter(RateLimiterConfig{
+		Capacity:        20,
+		RefillPerSecond: 1,
+		Now:             func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("new rate limiter: %v", err)
+	}
+
+	if allowed, _ := limiter.Allow("idle-partial"); !allowed {
+		t.Fatal("first request should be allowed")
+	}
+	// Leave the bucket partially drained so the old evictIdle would never remove it.
+	now = now.Add(10 * time.Minute)
+	if allowed, _ := limiter.Allow("other-source"); !allowed {
+		t.Fatal("other request should be allowed")
+	}
+	if got := len(limiter.buckets); got != 1 {
+		t.Fatalf("bucket count = %d, want 1 after idle partial bucket is evicted", got)
+	}
+	if allowed, _ := limiter.Allow("idle-partial"); !allowed {
+		t.Fatal("evicted partial bucket should be recreated as full")
 	}
 }

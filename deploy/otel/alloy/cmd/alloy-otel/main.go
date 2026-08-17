@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,6 +26,8 @@ const (
 	defaultRateCapacity     = 20
 	defaultRateRefill       = 2
 	defaultForwarderCount   = 4
+	defaultForwardTimeout   = 10 * time.Second
+	defaultForwardURL       = "http://localhost:12345/v1/traces"
 )
 
 type config struct {
@@ -31,6 +35,7 @@ type config struct {
 	trustedCIDRs  []string
 	proxySecret   string
 	hmacKeySource ingress.SecretSource
+	forwardURL    string
 }
 
 func main() {
@@ -85,19 +90,20 @@ func run() error {
 
 	forwarderCtx, stopForwarders := context.WithCancel(context.Background())
 	defer stopForwarders()
+	forwarderClient := &http.Client{Timeout: defaultForwardTimeout}
 	var forwarderWg sync.WaitGroup
 	for range defaultForwarderCount {
 		forwarderWg.Add(1)
 		go func() {
 			defer forwarderWg.Done()
-			forwardLoop(forwarderCtx, queue)
+			forwardLoop(forwarderCtx, forwarderClient, cfg.forwardURL, queue)
 		}()
 	}
 
 	err = serveUntilSignal(server)
 	queue.Close()
-	stopForwarders()
 	forwarderWg.Wait()
+	stopForwarders()
 	return err
 }
 
@@ -122,6 +128,7 @@ func loadConfig() (config, error) {
 		trustedCIDRs:  trustedCIDRs,
 		proxySecret:   proxySecret,
 		hmacKeySource: hmacKeySource,
+		forwardURL:    envOrDefault("OTEL_ALLOY_FORWARD_URL", defaultForwardURL),
 	}, nil
 }
 
@@ -146,22 +153,35 @@ func serveUntilSignal(server *http.Server) error {
 	}
 }
 
-func forwardLoop(ctx context.Context, queue *ingress.IngressQueue) {
+func forwardLoop(ctx context.Context, client *http.Client, url string, queue *ingress.IngressQueue) {
 	for {
 		envelope, ok := queue.Dequeue(ctx)
 		if !ok {
 			return
 		}
-		if err := forwardEnvelope(ctx, envelope); err != nil {
+		if err := forwardEnvelope(ctx, client, url, envelope); err != nil {
 			slog.Error("failed to forward envelope", "error", err)
 		}
 	}
 }
 
-func forwardEnvelope(ctx context.Context, envelope ingress.Envelope) error {
-	_ = ctx
-	_ = envelope
-	// TODO: implement actual downstream delivery to Alloy once the transport is defined.
+func forwardEnvelope(ctx context.Context, client *http.Client, url string, envelope ingress.Envelope) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(envelope.Payload))
+	if err != nil {
+		return fmt.Errorf("build forward request: %w", err)
+	}
+	request.Header.Set("Content-Type", envelope.ContentType)
+
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("forward envelope: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode >= http.StatusBadRequest {
+		body, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("forward envelope: downstream returned %d: %s", response.StatusCode, string(body))
+	}
 	return nil
 }
 

@@ -23,5 +23,11 @@ terraform/**/terraform.tfvars
 oss/
 
 # Local secrets / logs (never commit)
-.env
+*.env
+.env*
 *.log
+
+# Tooling and build artifacts
+.codegraph/
+deploy/otel/alloy/bin/
+deploy/otel/alloy/alloy-otel

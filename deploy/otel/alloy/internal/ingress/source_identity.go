@@ -104,7 +104,6 @@ func (s SourceIdentity) Resolve(remoteAddr string, headers http.Header) (string,
 	return forwarded.String(), nil
 }
 
-
 func (s SourceIdentity) Hash(canonicalSource string) string {
 	mac := hmac.New(sha256.New, s.hmacKey)
 	_, _ = mac.Write([]byte("otel-ingress-source-v1\x00"))

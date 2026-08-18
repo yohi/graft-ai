@@ -161,8 +161,14 @@ export async function fetchCodexMetrics(
   });
 
   if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error(`Codex API error: HTTP ${response.status}`);
+    let bodySnippet = "";
+    try {
+      const text = await response.text();
+      bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
+    } catch {
+      await response.body?.cancel().catch(() => undefined);
+    }
+    throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
   }
 
   const body: unknown = await response.json();

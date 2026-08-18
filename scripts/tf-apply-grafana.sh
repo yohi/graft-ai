@@ -78,8 +78,8 @@ terraform init -input=false
 
 info "Running terraform apply (Grafana Access Policy + Token)..."
 terraform apply \
-  -target=grafana_cloud_access_policy.loki_write \
-  -target=grafana_cloud_access_policy_token.loki_write \
+  -target=grafana_cloud_access_policy.telemetry_write \
+  -target=grafana_cloud_access_policy_token.telemetry_write \
   -auto-approve
 
 ###############################################################################
@@ -89,23 +89,29 @@ info "Reading Terraform outputs..."
 
 LOKI_URL=$(terraform output -raw grafana_loki_url       2>/dev/null || echo "")
 LOKI_USER=$(terraform output -raw grafana_loki_username  2>/dev/null || echo "")
-LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
+LOKI_TOKEN=$(terraform output -raw grafana_access_policy_token 2>/dev/null || echo "")
+PROM_URL=$(terraform output -raw grafana_prometheus_url 2>/dev/null || echo "")
+PROM_USER=$(terraform output -raw grafana_prometheus_username 2>/dev/null || echo "")
+OTLP_URL=$(terraform output -raw grafana_otlp_url 2>/dev/null || echo "")
 
 printf '::add-mask::%s\n' "$LOKI_URL"
 printf '::add-mask::%s\n' "$LOKI_USER"
 printf '::add-mask::%s\n' "$LOKI_TOKEN"
+printf '::add-mask::%s\n' "$PROM_URL"
+printf '::add-mask::%s\n' "$PROM_USER"
+printf '::add-mask::%s\n' "$OTLP_URL"
 
 [[ -z "$LOKI_URL"   ]] && die "Could not read grafana_loki_url from Terraform output."
 [[ -z "$LOKI_USER"  ]] && die "Could not read grafana_loki_username from Terraform output."
-[[ -z "$LOKI_TOKEN" ]] && die "Could not read grafana_loki_write_token from Terraform output."
+[[ -z "$LOKI_TOKEN" ]] && die "Could not read grafana_access_policy_token from Terraform output."
 
-success "Loki output retrieved."
+success "Grafana output retrieved."
 
 ###############################################################################
 # 4. Re-register Wrangler secrets with the newly created token
 ###############################################################################
 cd "$REPO_ROOT/workers"
-info "Updating Wrangler secrets on Tail Worker..."
+info "Updating Wrangler secrets across Workers..."
 
 echo "$LOKI_URL"   | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_URL             --config wrangler.tail.jsonc
 echo "$LOKI_USER"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME        --config wrangler.tail.jsonc
@@ -114,7 +120,14 @@ echo "$LOKI_URL"   | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA
 echo "$LOKI_USER"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME        --config wrangler.jsonc
 echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN  --config wrangler.jsonc
 
-success "Loki secrets updated on graft-ai-aig-tail and graft-ai-aig-logpush."
+if [[ -f wrangler.ollama.jsonc ]]; then
+  echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
+fi
+if [[ -f wrangler.provider-metrics.jsonc ]]; then
+  echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+fi
+
+success "Secrets updated on Workers."
 
 ###############################################################################
 # 5. Redeploy Tail Worker to pick up new secrets

@@ -17,18 +17,20 @@ import (
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
 )
 
-func decodeSpan(body []byte, contentType string) (redaction.Span, error) {
+func decodeSpans(body []byte, contentType string) ([]redaction.Span, error) {
 	if len(body) == 0 {
-		return redaction.Span{}, errors.New("otel ingress: empty OTLP payload")
+		return nil, errors.New("otel ingress: empty OTLP payload")
 	}
 	payload := &collectortracepb.ExportTraceServiceRequest{}
 	if contentType == "application/json" {
 		if err := protojson.Unmarshal(body, payload); err != nil {
-			return redaction.Span{}, fmt.Errorf("decode OTLP JSON: %w", err)
+			return nil, fmt.Errorf("decode OTLP JSON: %w", err)
 		}
 	} else if err := proto.Unmarshal(body, payload); err != nil {
-		return redaction.Span{}, fmt.Errorf("decode OTLP protobuf: %w", err)
+		return nil, fmt.Errorf("decode OTLP protobuf: %w", err)
 	}
+
+	var spans []redaction.Span
 	for _, resource := range payload.GetResourceSpans() {
 		resourceAttributes := attributeMap(resource.GetResource().GetAttributes())
 		for _, scope := range resource.GetScopeSpans() {
@@ -36,18 +38,21 @@ func decodeSpan(body []byte, contentType string) (redaction.Span, error) {
 				if len(span.GetTraceId()) != 16 {
 					continue
 				}
-				return redaction.Span{
+				spans = append(spans, redaction.Span{
 					TraceID:            hex.EncodeToString(span.GetTraceId()),
 					SpanID:             hex.EncodeToString(span.GetSpanId()),
 					StartUnixNano:      span.GetStartTimeUnixNano(),
 					EndUnixNano:        span.GetEndTimeUnixNano(),
 					Attributes:         attributeMap(span.GetAttributes()),
 					ResourceAttributes: resourceAttributes,
-				}, nil
+				})
 			}
 		}
 	}
-	return redaction.Span{}, errors.New("otel ingress: OTLP payload has no trace ID")
+	if len(spans) == 0 {
+		return nil, errors.New("otel ingress: OTLP payload has no trace ID")
+	}
+	return spans, nil
 }
 
 func attributeMap(attributes []*commonpb.KeyValue) map[string]json.RawMessage {
@@ -73,10 +78,11 @@ func anyValueJSON(value *commonpb.AnyValue) json.RawMessage {
 	case *commonpb.AnyValue_IntValue:
 		return json.RawMessage(strconv.FormatInt(typed.IntValue, 10))
 	case *commonpb.AnyValue_DoubleValue:
-		if math.IsNaN(typed.DoubleValue) || math.IsInf(typed.DoubleValue, 0) {
+		v := typed.DoubleValue
+		if math.IsNaN(v) || math.IsInf(v, 0) {
 			return json.RawMessage("null")
 		}
-		return json.RawMessage(strconv.FormatFloat(typed.DoubleValue, 'g', -1, 64))
+		return json.RawMessage(strconv.FormatFloat(v, 'g', -1, 64))
 	case *commonpb.AnyValue_BytesValue:
 		return marshalJSONString(base64.StdEncoding.EncodeToString(typed.BytesValue))
 	case *commonpb.AnyValue_ArrayValue:

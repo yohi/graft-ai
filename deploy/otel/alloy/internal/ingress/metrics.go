@@ -25,8 +25,12 @@ func NewIngressMetrics() *IngressMetrics {
 }
 
 func (m *IngressMetrics) Accepted() {
+	m.AcceptedN(1)
+}
+
+func (m *IngressMetrics) AcceptedN(n int) {
 	m.mu.Lock()
-	m.accepted++
+	m.accepted += uint64(n)
 	m.mu.Unlock()
 }
 

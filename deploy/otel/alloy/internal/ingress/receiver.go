@@ -114,31 +114,39 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		r.reject(writer, http.StatusRequestEntityTooLarge, "body_size")
 		return
 	}
-	span, err := decodeSpan(body, contentType)
+	spans, err := decodeSpans(body, contentType)
 	if err != nil {
 		r.reject(writer, http.StatusBadRequest, "parse")
 		return
 	}
-	redacted, _ := r.redactor.Redact(span)
-	record, _ := r.projector.ProjectRequestSpan(redacted)
-	record, sizeReason := r.sizer.Finalize(record)
-	if sizeReason == spanlogs.DropReasonLineSizeMetadata {
+
+	var accepted int
+	for _, span := range spans {
+		redacted, _ := r.redactor.Redact(span)
+		record, _ := r.projector.ProjectRequestSpan(redacted)
+		record, sizeReason := r.sizer.Finalize(record)
+		if sizeReason == spanlogs.DropReasonLineSizeMetadata {
+			continue
+		}
+		envelope := Envelope{
+			TraceID:     redacted.TraceID,
+			Payload:     record.Serialized,
+			ContentType: "application/json",
+			Span:        redacted,
+		}
+		if !r.queue.Enqueue(envelope) {
+			r.metrics.CapacityDrop()
+			writer.Header().Set("X-OTel-Drop-Reason", "capacity")
+			r.accept(writer, "capacity")
+			return
+		}
+		accepted++
+	}
+	if accepted == 0 {
 		r.accept(writer, "accepted")
 		return
 	}
-	envelope := Envelope{
-		TraceID:     redacted.TraceID,
-		Payload:     record.Serialized,
-		ContentType: "application/json",
-		Span:        redacted,
-	}
-	if !r.queue.Enqueue(envelope) {
-		r.metrics.CapacityDrop()
-		writer.Header().Set("X-OTel-Drop-Reason", "capacity")
-		r.accept(writer, "capacity")
-		return
-	}
-	r.metrics.Accepted()
+	r.metrics.AcceptedN(accepted)
 	r.accept(writer, "accepted")
 }
 

@@ -170,3 +170,43 @@ func newIngestRequestForTest(t *testing.T, url string, method string, body []byt
 	}
 	return request
 }
+
+func TestReceiver_enqueues_multiple_spans_from_one_request(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 4)
+	body := validMultiSpanOTLPBody(t, "protobuf")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	wantTraceIDs := []string{"00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100"}
+	for _, want := range wantTraceIDs {
+		envelope, ok := queue.Dequeue(request.Context())
+		if !ok || envelope.TraceID != want {
+			t.Fatalf("envelope = %#v, ok = %v, want %q", envelope, ok, want)
+		}
+	}
+}
+
+func TestReceiver_records_partial_acceptance_when_some_spans_are_dropped(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 4)
+	body := mixedTraceOTLPBody(t)
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	envelope, ok := queue.Dequeue(request.Context())
+	if !ok || envelope.TraceID != "00112233445566778899aabbccddeeff" {
+		t.Fatalf("valid envelope = %#v, ok = %v", envelope, ok)
+	}
+	if got := receiver.Metrics().Accepted; got != 1 {
+		t.Fatalf("accepted = %d, want 1", got)
+	}
+}

@@ -108,7 +108,6 @@ func TestSourceIdentity_forwarded_ipv4_and_ipv4_mapped_ipv6_produce_same_hash(t 
 	}
 }
 
-
 func TestSourceIdentity_hash_matches_domain_separated_hmac(t *testing.T) {
 	key := []byte("hmac-key")
 	identity, err := NewSourceIdentity([]string{"127.0.0.1/32"}, key)

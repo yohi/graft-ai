@@ -142,7 +142,6 @@ func TestRateLimiter_rejection_keeps_bucket_alive(t *testing.T) {
 	}
 }
 
-
 func newRateLimiter(t *testing.T, cfg RateLimiterConfig) *RateLimiter {
 	t.Helper()
 	limiter, err := NewRateLimiter(cfg)

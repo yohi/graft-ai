@@ -38,6 +38,13 @@ self.__next_f.push(["weeklyUsage", {"weeklyUsagePercent": 25, "weeklyResetInSec"
 self.__next_f.push(["monthlyUsage", {"monthlyUsagePercent": 65, "monthlyResetInSec": 3600}])
 </script>`;
 
+const MOCK_USAGE_SOLIDSTART_HTML = `<script>
+window._$HY||(e=>{});
+self.$R=self.$R||[];
+_$HY.r["userEmail[\"wrk_01KCS72BF56XAPBNN6A0HFKECP\"]"]=$R[0];
+self.$R[0].resolve({"usagePercent": 45, "weeklyUsagePercent": 20, "monthlyUsagePercent": 50, "resetInSec": 1200, "weeklyResetInSec": 7200, "monthlyResetInSec": 86400});
+</script>`;
+
 const MOCK_USAGE_TEXT_BODY = `page content "usagePercent": 72, "resetInSec": 600 more content`;
 
 describe("fetchOpenCodeGoMetrics", () => {
@@ -223,6 +230,25 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(result.weeklyResetSeconds).toBe(1800);
     expect(result.monthlyUsageRatio).toBeCloseTo(0.65);
     expect(result.monthlyResetSeconds).toBe(3600);
+  });
+
+  it("parses usage from SolidStart resource streaming", async () => {
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      call++;
+      if (call === 1) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      if (call === 2) return new Response(MOCK_USAGE_SOLIDSTART_HTML, { status: 200 });
+      return new Response("{}", { status: 200 });
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+
+    expect(result.rollingUsageRatio).toBeCloseTo(0.45);
+    expect(result.rollingResetSeconds).toBe(1200);
+    expect(result.weeklyUsageRatio).toBeCloseTo(0.2);
+    expect(result.weeklyResetSeconds).toBe(7200);
+    expect(result.monthlyUsageRatio).toBeCloseTo(0.5);
+    expect(result.monthlyResetSeconds).toBe(86400);
   });
 
   it("parses usage via regex text fallback when no JSON structure found", async () => {

@@ -60,14 +60,51 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 		return dropPayload(finalized, metadata, maxBytes)
 	}
 	remaining := maxBytes - len(baseSerialized)
-	target := remaining / payloadCount
+
+	var promptRoot, completionRoot *jsonNode
+	var promptOriginalSize, completionOriginalSize int
+	if hasPrompt {
+		promptRoot, err = decodeNode(originalPrompt)
+		if err != nil {
+			return dropPayload(finalized, metadata, maxBytes)
+		}
+		promptRoot.prepareForTruncation()
+		promptOriginalSize = promptRoot.encodedSize
+	}
+	if hasCompletion {
+		completionRoot, err = decodeNode(originalCompletion)
+		if err != nil {
+			return dropPayload(finalized, metadata, maxBytes)
+		}
+		completionRoot.prepareForTruncation()
+		completionOriginalSize = completionRoot.encodedSize
+	}
+
+	var target int
+	switch payloadCount {
+	case 1:
+		target = remaining
+	case 2:
+		total := promptOriginalSize + completionOriginalSize
+		if total == 0 {
+			target = remaining / 2
+		} else if hasPrompt {
+			target = remaining * promptOriginalSize / total
+		} else {
+			target = remaining * completionOriginalSize / total
+		}
+	}
+	if target < 0 {
+		target = 0
+	}
+
 	for step := 0; step < 3; step++ {
 		candidate := cloneFields(metadata)
 		if hasPrompt {
-			candidate["prompt"], _ = truncateJSON(originalPrompt, target)
+			candidate["prompt"], _ = promptRoot.truncate(target)
 		}
 		if hasCompletion {
-			candidate["completion"], _ = truncateJSON(originalCompletion, target)
+			candidate["completion"], _ = completionRoot.truncate(target)
 		}
 		serialized, err = marshalFields(candidate)
 		if err == nil && len(serialized) <= maxBytes {
@@ -128,11 +165,14 @@ func marshalFields(fields map[string]json.RawMessage) ([]byte, error) {
 }
 
 type jsonNode struct {
-	kind   byte
-	object map[string]*jsonNode
-	array  []*jsonNode
-	text   string
-	scalar json.RawMessage
+	kind        byte
+	object      map[string]*jsonNode
+	array       []*jsonNode
+	text        string
+	scalar      json.RawMessage
+	encodedSize int
+	strings     []*jsonNode
+	parent      *jsonNode
 }
 
 const truncatedSuffix = "[TRUNCATED]"
@@ -146,30 +186,74 @@ func truncateJSON(value json.RawMessage, maxBytes int) (json.RawMessage, bool) {
 	if err != nil {
 		return cloneRaw(value), false
 	}
+	node.prepareForTruncation()
 	return node.truncate(maxBytes)
 }
 
+func (n *jsonNode) prepareForTruncation() {
+	n.strings = n.stringNodes()
+	if len(n.strings) > 1 {
+		sort.Slice(n.strings, func(i, j int) bool {
+			return utf8.RuneCountInString(n.strings[i].text) > utf8.RuneCountInString(n.strings[j].text)
+		})
+	}
+	n.refreshEncodedSize()
+}
+
+func (n *jsonNode) refreshEncodedSize() {
+	switch n.kind {
+	case '{':
+		size := 2 // {}
+		first := true
+		for key, child := range n.object {
+			child.refreshEncodedSize()
+			if !first {
+				size++ // comma
+			}
+			first = false
+			size += jsonStringByteSize(key) + 1 + child.encodedSize
+		}
+		n.encodedSize = size
+	case '[':
+		size := 2 // []
+		first := true
+		for _, child := range n.array {
+			child.refreshEncodedSize()
+			if !first {
+				size++ // comma
+			}
+			first = false
+			size += child.encodedSize
+		}
+		n.encodedSize = size
+	case '"':
+		n.encodedSize = jsonStringByteSize(n.text)
+	default:
+		n.encodedSize = len(n.scalar)
+	}
+}
+
+func (n *jsonNode) applySizeDelta(delta int) {
+	for node := n; node != nil; node = node.parent {
+		node.encodedSize += delta
+	}
+}
+
 func (n *jsonNode) truncate(maxBytes int) (json.RawMessage, bool) {
-	encoded := n.marshal()
-	if len(encoded) <= maxBytes {
-		return encoded, false
+	if n.encodedSize <= maxBytes {
+		return n.marshal(), false
 	}
-	stringsNodes := n.stringNodes()
-	if len(stringsNodes) == 0 {
-		return encoded, false
+	if len(n.strings) == 0 {
+		return n.marshal(), false
 	}
-	sort.Slice(stringsNodes, func(i, j int) bool {
-		return utf8.RuneCountInString(stringsNodes[i].text) > utf8.RuneCountInString(stringsNodes[j].text)
-	})
 	truncated := false
-	suffixBytes := len(marshalString(truncatedSuffix))
-	for _, node := range stringsNodes {
-		encoded = n.marshal()
-		if len(encoded) <= maxBytes {
+	suffixBytes := jsonStringByteSize(truncatedSuffix)
+	for _, node := range n.strings {
+		if n.encodedSize <= maxBytes {
 			break
 		}
-		over := len(encoded) - maxBytes
-		currentBytes := len(marshalString(node.text))
+		over := n.encodedSize - maxBytes
+		currentBytes := node.encodedSize
 		targetBytes := currentBytes - over - 1
 		if targetBytes < suffixBytes {
 			targetBytes = suffixBytes
@@ -178,6 +262,9 @@ func (n *jsonNode) truncate(maxBytes int) (json.RawMessage, bool) {
 		if !changed {
 			continue
 		}
+		newSize := jsonStringByteSize(clean)
+		node.applySizeDelta(newSize - node.encodedSize)
+		node.encodedSize = newSize
 		node.text = clean
 		truncated = true
 	}
@@ -210,6 +297,7 @@ func decodeNodeAtDepth(value []byte, depth int) (*jsonNode, error) {
 			if err != nil {
 				return nil, err
 			}
+			decoded.parent = node
 			node.object[key] = decoded
 		}
 		return node, nil
@@ -224,6 +312,7 @@ func decodeNodeAtDepth(value []byte, depth int) (*jsonNode, error) {
 			if err != nil {
 				return nil, err
 			}
+			decoded.parent = node
 			node.array[index] = decoded
 		}
 		return node, nil
@@ -286,7 +375,7 @@ func (n *jsonNode) stringNodes() []*jsonNode {
 }
 
 func truncateString(value string, maxBytes int) (string, bool) {
-	if len(marshalString(value)) <= maxBytes {
+	if jsonStringByteSize(value) <= maxBytes {
 		return value, false
 	}
 	runes := []rune(value)
@@ -295,7 +384,7 @@ func truncateString(value string, maxBytes int) (string, bool) {
 	for low <= high {
 		middle := low + (high-low)/2
 		candidate := string(runes[:middle]) + truncatedSuffix
-		if len(marshalString(candidate)) <= maxBytes {
+		if jsonStringByteSize(candidate) <= maxBytes {
 			best = candidate
 			low = middle + 1
 		} else {
@@ -303,6 +392,23 @@ func truncateString(value string, maxBytes int) (string, bool) {
 		}
 	}
 	return best, true
+}
+
+func jsonStringByteSize(value string) int {
+	size := 2 // surrounding quotes
+	for _, r := range value {
+		switch r {
+		case '"', '\\', '\b', '\f', '\n', '\r', '\t':
+			size += 2
+		default:
+			if r < 0x20 {
+				size += 6 // \u00XX
+			} else {
+				size += utf8.RuneLen(r)
+			}
+		}
+	}
+	return size
 }
 
 func marshalString(value string) []byte {

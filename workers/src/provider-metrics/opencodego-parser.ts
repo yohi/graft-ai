@@ -164,7 +164,7 @@ function extractFromSolidStart(html: string): UsageRecords | null {
 
   // 2. SolidStart resource streaming: $R[0](data) or $R[0].resolve(data) or $R[0] = data
   for (const match of html.matchAll(
-    /(?:\.resolve|\$R\[\d+\]\s*=?|_\$HY\.r\[[^\]]+\]\s*=?)\s*(?:\(|\=)\s*(\{[^{}]+\}|\[[^\[\]]+\]|"(\\"|[^"])*")/gi,
+    /(?:\.resolve|\$R\[\d+\]\s*=?|_\$HY\.r\[[^\]]+\]\s*=?)\s*[(=]\s*(\{[^{}]+\}|\[[^\[\]]+\]|"(\\"|[^"])*")/gi,
   )) {
     const raw = match[1];
     if (raw === undefined) continue;

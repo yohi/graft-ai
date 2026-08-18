@@ -113,3 +113,20 @@ func boolJSON(value bool) string {
 	}
 	return "false"
 }
+
+func TestRequestSelector_Evict_defends_against_empty_trace_map_with_positive_bytes(t *testing.T) {
+	selector, err := NewRequestSelector(2, 100, time.Second)
+	if err != nil {
+		t.Fatalf("new selector: %v", err)
+	}
+	// Simulate an inconsistent state: bytes accounting is positive but no traces remain.
+	selector.bytes = 200
+
+	evictions := selector.Evict()
+	if len(evictions) != 0 {
+		t.Fatalf("evictions = %d, want 0 when trace map is empty", len(evictions))
+	}
+	if selector.bytes != 200 {
+		t.Fatalf("selector.bytes = %d, want unchanged 200 after defensive break", selector.bytes)
+	}
+}

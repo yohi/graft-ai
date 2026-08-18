@@ -115,6 +115,9 @@ func (s *RequestSelector) Evict() []Eviction {
 			}
 		}
 		state := s.traces[oldestID]
+		if oldestID == "" || state == nil {
+			break
+		}
 		delete(s.traces, oldestID)
 		s.bytes -= state.bytes
 		evictions = append(evictions, Eviction{TraceID: oldestID, Reason: "trace_state_evicted"})

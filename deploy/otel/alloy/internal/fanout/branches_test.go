@@ -90,3 +90,37 @@ func requestSpan(spanID string, request bool) redaction.RedactedSpan {
 		},
 	}}
 }
+
+func TestTempoCopy_strips_prompt_completion_and_metadata_case_insensitively(t *testing.T) {
+	span := redaction.RedactedSpan{Span: redaction.Span{
+		TraceID: "trace",
+		SpanID:  "span",
+		Attributes: map[string]json.RawMessage{
+			"prompt":                      json.RawMessage(`"secret"`),
+			"Prompt":                      json.RawMessage(`"secret"`),
+			"completion":                  json.RawMessage(`"secret"`),
+			"COMPLETION":                  json.RawMessage(`"secret"`),
+			"metadata":                    json.RawMessage(`"secret"`),
+			"Metadata":                    json.RawMessage(`"secret"`),
+			redaction.PromptAttribute:     json.RawMessage(`"secret"`),
+			redaction.CompletionAttribute: json.RawMessage(`"secret"`),
+			redaction.MetadataAttribute:   json.RawMessage(`"secret"`),
+			"model":                       json.RawMessage(`"llama"`),
+		},
+	}}
+
+	copied := tempoCopy(span)
+	for _, key := range []string{
+		"prompt", "Prompt",
+		"completion", "COMPLETION",
+		"metadata", "Metadata",
+		redaction.PromptAttribute, redaction.CompletionAttribute, redaction.MetadataAttribute,
+	} {
+		if _, ok := copied.Attributes[key]; ok {
+			t.Fatalf("tempoCopy retained sensitive attribute %q", key)
+		}
+	}
+	if _, ok := copied.Attributes["model"]; !ok {
+		t.Fatalf("tempoCopy removed non-sensitive attribute %q", "model")
+	}
+}

@@ -3,6 +3,7 @@ package fanout
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/metrics"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
@@ -63,7 +64,7 @@ func tempoCopy(span redaction.RedactedSpan) redaction.RedactedSpan {
 	copy := span
 	copy.Attributes = make(map[string]json.RawMessage, len(span.Attributes))
 	for key, value := range span.Attributes {
-		if key == redaction.PromptAttribute || key == redaction.CompletionAttribute || key == redaction.MetadataAttribute || key == "prompt" || key == "completion" {
+		if isSensitiveAttribute(key) {
 			continue
 		}
 		copy.Attributes[key] = append(json.RawMessage(nil), value...)
@@ -73,4 +74,13 @@ func tempoCopy(span redaction.RedactedSpan) redaction.RedactedSpan {
 		copy.ResourceAttributes[key] = append(json.RawMessage(nil), value...)
 	}
 	return copy
+}
+
+func isSensitiveAttribute(key string) bool {
+	return strings.EqualFold(key, redaction.PromptAttribute) ||
+		strings.EqualFold(key, redaction.CompletionAttribute) ||
+		strings.EqualFold(key, redaction.MetadataAttribute) ||
+		strings.EqualFold(key, "prompt") ||
+		strings.EqualFold(key, "completion") ||
+		strings.EqualFold(key, "metadata")
 }

@@ -61,7 +61,7 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 	}
 	remaining := maxBytes - len(baseSerialized)
 	target := remaining / payloadCount
-	for range 32 {
+	for step := 0; step < 3; step++ {
 		candidate := cloneFields(metadata)
 		if hasPrompt {
 			candidate["prompt"], _ = truncateJSON(originalPrompt, target)
@@ -75,19 +75,20 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 			finalized.Serialized = serialized
 			return finalized, DropReasonNone
 		}
-		over := 1
-		if err == nil {
-			over = len(serialized) - maxBytes + 1
-		}
-		if target <= over {
+		if err != nil {
 			break
 		}
-		target -= over
+		over := len(serialized) - maxBytes
+		if target <= over+1 {
+			break
+		}
+		target -= over + 1
 	}
 	return dropPayload(finalized, metadata, maxBytes)
 }
 
 func dropPayload(record JSONLogRecord, metadata map[string]json.RawMessage, maxBytes int) (JSONLogRecord, DropReason) {
+	delete(metadata, "payload_truncated")
 	metadata["payload_dropped"] = json.RawMessage("true")
 	metadata["payload_drop_reason"] = json.RawMessage(`"line_size"`)
 	serialized, err := marshalFields(metadata)
@@ -134,43 +135,65 @@ type jsonNode struct {
 	scalar json.RawMessage
 }
 
+const truncatedSuffix = "[TRUNCATED]"
+
+func TruncatedSuffix() string {
+	return truncatedSuffix
+}
+
 func truncateJSON(value json.RawMessage, maxBytes int) (json.RawMessage, bool) {
 	node, err := decodeNode(value)
 	if err != nil {
 		return cloneRaw(value), false
 	}
-	encoded := node.marshal()
+	return node.truncate(maxBytes)
+}
+
+func (n *jsonNode) truncate(maxBytes int) (json.RawMessage, bool) {
+	encoded := n.marshal()
 	if len(encoded) <= maxBytes {
 		return encoded, false
 	}
-	truncated := false
-	for len(encoded) > maxBytes {
-		stringsNodes := node.stringNodes()
-		if len(stringsNodes) == 0 {
-			break
-		}
-		sort.Slice(stringsNodes, func(i, j int) bool {
-			return utf8.RuneCountInString(stringsNodes[i].text) > utf8.RuneCountInString(stringsNodes[j].text)
-		})
-		longest := stringsNodes[0]
-		over := len(encoded) - maxBytes
-		currentBytes := len(marshalString(longest.text))
-		targetBytes := currentBytes - over - 1
-		if targetBytes < len(marshalString("[TRUNCATED]")) {
-			targetBytes = len(marshalString("[TRUNCATED]"))
-		}
-		clean, changed := truncateString(longest.text, targetBytes)
-		if !changed {
-			break
-		}
-		longest.text = clean
-		truncated = true
-		encoded = node.marshal()
+	stringsNodes := n.stringNodes()
+	if len(stringsNodes) == 0 {
+		return encoded, false
 	}
-	return encoded, truncated
+	sort.Slice(stringsNodes, func(i, j int) bool {
+		return utf8.RuneCountInString(stringsNodes[i].text) > utf8.RuneCountInString(stringsNodes[j].text)
+	})
+	truncated := false
+	suffixBytes := len(marshalString(truncatedSuffix))
+	for _, node := range stringsNodes {
+		encoded = n.marshal()
+		if len(encoded) <= maxBytes {
+			break
+		}
+		over := len(encoded) - maxBytes
+		currentBytes := len(marshalString(node.text))
+		targetBytes := currentBytes - over - 1
+		if targetBytes < suffixBytes {
+			targetBytes = suffixBytes
+		}
+		clean, changed := truncateString(node.text, targetBytes)
+		if !changed {
+			continue
+		}
+		node.text = clean
+		truncated = true
+	}
+	return n.marshal(), truncated
 }
 
+const maxJSONDepth = 64
+
 func decodeNode(value []byte) (*jsonNode, error) {
+	return decodeNodeAtDepth(value, 0)
+}
+
+func decodeNodeAtDepth(value []byte, depth int) (*jsonNode, error) {
+	if depth > maxJSONDepth {
+		return nil, errInvalidNode
+	}
 	trimmed := bytes.TrimSpace(value)
 	if !json.Valid(trimmed) || len(trimmed) == 0 {
 		return nil, errInvalidNode
@@ -183,7 +206,7 @@ func decodeNode(value []byte) (*jsonNode, error) {
 		}
 		node := &jsonNode{kind: '{', object: make(map[string]*jsonNode, len(object))}
 		for key, child := range object {
-			decoded, err := decodeNode(child)
+			decoded, err := decodeNodeAtDepth(child, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -197,7 +220,7 @@ func decodeNode(value []byte) (*jsonNode, error) {
 		}
 		node := &jsonNode{kind: '[', array: make([]*jsonNode, len(array))}
 		for index, child := range array {
-			decoded, err := decodeNode(child)
+			decoded, err := decodeNodeAtDepth(child, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -266,13 +289,12 @@ func truncateString(value string, maxBytes int) (string, bool) {
 	if len(marshalString(value)) <= maxBytes {
 		return value, false
 	}
-	suffix := "[TRUNCATED]"
 	runes := []rune(value)
 	best := ""
 	low, high := 0, len(runes)
 	for low <= high {
 		middle := low + (high-low)/2
-		candidate := string(runes[:middle]) + suffix
+		candidate := string(runes[:middle]) + truncatedSuffix
 		if len(marshalString(candidate)) <= maxBytes {
 			best = candidate
 			low = middle + 1

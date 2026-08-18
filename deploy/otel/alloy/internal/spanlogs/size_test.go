@@ -97,3 +97,47 @@ func TestSizer_drops_record_when_metadata_alone_exceeds_limit(t *testing.T) {
 		t.Fatalf("metadata overflow produced serialized output")
 	}
 }
+
+func TestSizer_dropped_record_removes_truncated_marker(t *testing.T) {
+	// Use a record where metadata fits but base with empty payloads does not,
+	// so dropPayload is reached via the line_size path.
+	record := JSONLogRecord{Fields: map[string]json.RawMessage{
+		"trace_id":   raw(`"00112233445566778899aabbccddeeff"`),
+		"prompt":     raw(`"` + strings.Repeat("x", 1024) + `"`),
+		"completion": raw(`"` + strings.Repeat("y", 1024) + `"`),
+	}}
+	finalized, reason := NewSizer(104).Finalize(record)
+	if reason != DropReasonLineSize {
+		t.Fatalf("drop reason = %q, want line_size", reason)
+	}
+	if string(finalized.Fields["payload_truncated"]) == "true" {
+		t.Fatalf("dropped record still has payload_truncated")
+	}
+	if string(finalized.Fields["payload_dropped"]) != "true" {
+		t.Fatalf("payload_dropped = %s, want true", finalized.Fields["payload_dropped"])
+	}
+}
+
+func TestSizer_decodeNode_rejects_deeply_nested_json(t *testing.T) {
+	deep := []byte(`{"a":` + strings.Repeat(`{"b":`, maxJSONDepth+1) + `null` + strings.Repeat(`}`, maxJSONDepth+1) + `}`)
+	if _, err := decodeNode(deep); err == nil {
+		t.Fatal("expected error for deeply nested JSON")
+	}
+}
+
+func BenchmarkFinalize_worst_case_payload(b *testing.B) {
+	prompt := json.RawMessage(strconv.Quote(strings.Repeat("あ", MaxLineBytes)))
+	completion := json.RawMessage(strconv.Quote(strings.Repeat("い", MaxLineBytes)))
+	record := JSONLogRecord{Fields: map[string]json.RawMessage{
+		"trace_id":     raw(`"00112233445566778899aabbccddeeff"`),
+		"input_tokens": raw(`12`),
+		"prompt":       prompt,
+		"completion":   completion,
+	}}
+	sizer := NewSizer(MaxLineBytes)
+	b.ReportAllocs()
+	for b.Loop() {
+		finalized, _ := sizer.Finalize(record)
+		_ = finalized.Serialized
+	}
+}

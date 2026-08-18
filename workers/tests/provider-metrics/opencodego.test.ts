@@ -326,4 +326,73 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(result.monthlyUsageRatio).toBeCloseTo(0.25);
     expect(result.zenBalanceUSD).toBeCloseTo(15.0);
   });
+
+  it("clamps ratio to 0 when billing monthlyUsage is negative", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("7abeebee")) {
+        return new Response("null", { status: 200 });
+      }
+      if (url.includes("c83b78a6")) {
+        return new Response(
+          '{"customerID":"cust_123","monthlyUsage":-500000000,"monthlyLimit":20,"balance":1500000000}',
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+
+    expect(result.rollingUsageRatio).toBe(0);
+    expect(result.monthlyUsageRatio).toBe(0);
+  });
+
+  it("throws OpenCodeGoFetchError explaining unresolved usage when subscription is null and billing fails", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("7abeebee")) {
+        return new Response("null", { status: 200 });
+      }
+      if (url.includes("c83b78a6")) {
+        return new Response("{}", { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    await expect(fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch)).rejects.toThrow(
+      /Could not resolve subscription or billing usage for workspace/i,
+    );
+  });
+
+  it("extracts billing from array structures and nested objects in billing response", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("7abeebee")) {
+        return new Response("null", { status: 200 });
+      }
+      if (url.includes("c83b78a6")) {
+        return new Response(
+          JSON.stringify([
+            { dummy: true },
+            { nested: { monthlyUsage: 200000000, monthlyLimit: 10, balance: 500000000 } },
+          ]),
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+
+    expect(result.rollingUsageRatio).toBeCloseTo(0.2);
+    expect(result.monthlyUsageRatio).toBeCloseTo(0.2);
+    expect(result.zenBalanceUSD).toBeCloseTo(5.0);
+  });
 });

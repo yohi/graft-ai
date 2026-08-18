@@ -138,8 +138,12 @@ async function fetchViaBrowserRendering(
   accessToken: string,
   accountId?: string,
 ): Promise<CodexUsageResponse> {
-  const puppeteer = await import("@cloudflare/puppeteer");
-  const browser = await puppeteer.default.launch(browserBinding);
+  const puppeteerModule = await import("@cloudflare/puppeteer");
+  const launcher =
+    "launch" in puppeteerModule && typeof puppeteerModule.launch === "function"
+      ? puppeteerModule
+      : (puppeteerModule.default ?? puppeteerModule);
+  const browser = await launcher.launch(browserBinding);
   try {
     const page = await browser.newPage();
     await page.setExtraHTTPHeaders({
@@ -168,7 +172,15 @@ async function fetchViaBrowserRendering(
       rawText = typeof evalResult === "string" ? evalResult : "";
     }
 
-    const body: unknown = JSON.parse(rawText);
+    let body: unknown;
+    try {
+      body = JSON.parse(rawText);
+    } catch {
+      const snippet = rawText.replace(/\s+/g, " ").trim().slice(0, 200);
+      throw new CodexResponseError(
+        `Browser rendering returned non-JSON response (snippet: ${snippet || "<empty>"})`,
+      );
+    }
     return parseUsageResponse(body);
   } finally {
     await browser.close().catch(() => undefined);
@@ -200,41 +212,33 @@ export async function fetchCodexMetrics(
   let data: CodexUsageResponse;
   let resetCredits: CodexFetchResult["resetCredits"];
 
-  try {
-    const response = await getWithRetry({
-      url: `${baseUrl}/backend-api/wham/usage`,
-      headers,
-      fetchFn,
-      logLabel: "Codex usage fetch",
-      isRetryableStatus: (status) => status === 429 || status >= 500,
-      perAttemptTimeoutMs: TIMEOUT_MS,
-    });
+  const response = await getWithRetry({
+    url: `${baseUrl}/backend-api/wham/usage`,
+    headers,
+    fetchFn,
+    logLabel: "Codex usage fetch",
+    isRetryableStatus: (status) => status === 429 || status >= 500,
+    perAttemptTimeoutMs: TIMEOUT_MS,
+  });
 
-    if (!response.ok) {
-      if (response.status === 403 && browserBinding !== undefined) {
-        // Fallback to Cloudflare Browser Rendering to solve interactive JS challenge
-        data = await fetchViaBrowserRendering(browserBinding, baseUrl, accessToken, accountId);
-      } else {
-        let bodySnippet = "";
-        try {
-          const text = await response.text();
-          bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
-        } catch {
-          await response.body?.cancel().catch(() => undefined);
-        }
-        throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
-      }
-    } else {
-      const body: unknown = await response.json();
-      data = parseUsageResponse(body);
-      resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
-    }
-  } catch (error) {
-    if (browserBinding !== undefined && error instanceof Error && error.message.includes("403")) {
+  if (!response.ok) {
+    if (response.status === 403 && browserBinding !== undefined) {
+      // Fallback to Cloudflare Browser Rendering to solve interactive JS challenge
       data = await fetchViaBrowserRendering(browserBinding, baseUrl, accessToken, accountId);
     } else {
-      throw error;
+      let bodySnippet = "";
+      try {
+        const text = await response.text();
+        bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
+      } catch {
+        await response.body?.cancel().catch(() => undefined);
+      }
+      throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
     }
+  } else {
+    const body: unknown = await response.json();
+    data = parseUsageResponse(body);
+    resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
   }
 
   return {

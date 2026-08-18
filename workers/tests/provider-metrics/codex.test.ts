@@ -190,4 +190,96 @@ describe("fetchCodexMetrics", () => {
     );
     expect(result.sessionUsageRatio).toBeCloseTo(0.45);
   });
+
+  it("falls back to browser rendering on 403 when browserBinding is provided", async () => {
+    const mockPage = {
+      setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue({
+        text: vi.fn().mockResolvedValue(JSON.stringify(MOCK_USAGE_RESPONSE)),
+      }),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const mockBrowser = {
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockLaunch = vi.fn().mockResolvedValue(mockBrowser);
+
+    vi.doMock("@cloudflare/puppeteer", () => ({
+      default: { launch: mockLaunch },
+    }));
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    const mockBrowserBinding = {} as Fetcher;
+
+    const result = await fetchCodexMetrics(
+      "token",
+      "acct-123",
+      mockFetch,
+      undefined,
+      mockBrowserBinding,
+    );
+
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+    expect(mockLaunch).toHaveBeenCalledWith(mockBrowserBinding);
+    expect(mockBrowser.close).toHaveBeenCalled();
+  });
+
+  it("handles puppeteer without default export on 403", async () => {
+    const mockPage = {
+      setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue({
+        text: vi.fn().mockResolvedValue(JSON.stringify(MOCK_USAGE_RESPONSE)),
+      }),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const mockBrowser = {
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockLaunch = vi.fn().mockResolvedValue(mockBrowser);
+
+    vi.doMock("@cloudflare/puppeteer", () => ({
+      launch: mockLaunch,
+    }));
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    const mockBrowserBinding = {} as Fetcher;
+
+    const result = await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      undefined,
+      mockBrowserBinding,
+    );
+
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+    expect(mockLaunch).toHaveBeenCalledWith(mockBrowserBinding);
+  });
+
+  it("throws descriptive error when browser rendering returns non-JSON HTML", async () => {
+    const mockPage = {
+      setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue({
+        text: vi.fn().mockResolvedValue("<html><body>Just a moment...</body></html>"),
+      }),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const mockBrowser = {
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.doMock("@cloudflare/puppeteer", () => ({
+      launch: vi.fn().mockResolvedValue(mockBrowser),
+    }));
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    const mockBrowserBinding = {} as Fetcher;
+
+    await expect(
+      fetchCodexMetrics("token", undefined, mockFetch, undefined, mockBrowserBinding),
+    ).rejects.toThrow(/Browser rendering returned non-JSON response/);
+  });
 });

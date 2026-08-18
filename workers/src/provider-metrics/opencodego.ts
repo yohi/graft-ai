@@ -160,7 +160,7 @@ export async function fetchOpenCodeGoMetrics(
     if (billing !== null) {
       const limit = billing.monthlyLimitUSD;
       const usage = billing.monthlyUsageUSD;
-      const ratio = limit !== null && limit > 0 ? Math.min(1.0, usage / limit) : 0;
+      const ratio = limit !== null && limit > 0 ? Math.max(0, Math.min(1.0, usage / limit)) : 0;
       return {
         rollingUsageRatio: ratio,
         monthlyUsageRatio: ratio,
@@ -173,8 +173,8 @@ export async function fetchOpenCodeGoMetrics(
     // Both failed
   }
 
-  if (subscriptionText.length > 0) {
-    // If we have subscriptionText, parse it to throw the detailed error with snippet
+  if (subscriptionText.length > 0 && !isNullPayload(subscriptionText)) {
+    // If we have non-null subscriptionText, parse it to throw the detailed error with snippet
     parseOpenCodeGoUsage(subscriptionText);
   }
 

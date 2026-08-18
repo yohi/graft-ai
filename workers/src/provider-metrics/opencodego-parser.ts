@@ -366,6 +366,13 @@ export function extractZenBilling(text: string): OpenCodeZenBilling | null {
 }
 
 function findBillingInObject(value: unknown): OpenCodeZenBilling | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findBillingInObject(item);
+      if (found !== null) return found;
+    }
+    return null;
+  }
   if (!isRecord(value)) return null;
 
   if (typeof value["monthlyUsage"] === "number") {
@@ -382,9 +389,11 @@ function findBillingInObject(value: unknown): OpenCodeZenBilling | null {
     };
   }
 
-  for (const child of Object.values(value)) {
-    const found = findBillingInObject(child);
-    if (found !== null) return found;
+  for (const [key, child] of Object.entries(value)) {
+    if (!UNSAFE_TRAVERSAL_KEYS.has(key)) {
+      const found = findBillingInObject(child);
+      if (found !== null) return found;
+    }
   }
 
   return null;

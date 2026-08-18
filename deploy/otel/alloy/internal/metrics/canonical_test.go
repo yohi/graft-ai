@@ -62,4 +62,38 @@ func TestCanonicalMetrics_ignores_non_request_child_span(t *testing.T) {
 	}
 }
 
+func TestCanonicalMetrics_preserves_explicit_zero_duration_with_valid_timestamps(t *testing.T) {
+	span := redaction.RedactedSpan{Span: redaction.Span{
+		StartUnixNano: 1_000_000_000,
+		EndUnixNano:   3_000_000_000,
+		Attributes: map[string]json.RawMessage{
+			"graft_ai.request_span": raw(`true`),
+			"duration_ms":           raw(`0`),
+		},
+	}}
+
+	normalized := NewCanonicalMetrics().Normalize(span)
+	if len(normalized.Samples) != 2 {
+		t.Fatalf("samples = %d, want request/duration", len(normalized.Samples))
+	}
+	if normalized.Samples[1].Name != DurationMetric || normalized.Samples[1].Value != 0 {
+		t.Fatalf("duration sample = %#v, want zero duration", normalized.Samples[1])
+	}
+}
+
+func TestCanonicalMetrics_uses_non_empty_string_fallback(t *testing.T) {
+	span := redaction.RedactedSpan{Span: redaction.Span{
+		Attributes: map[string]json.RawMessage{
+			"graft_ai.request_span": raw(`true`),
+			"model":                 raw(`""`),
+			"gen_ai.request.model":  raw(`"fallback-model"`),
+		},
+	}}
+
+	normalized := NewCanonicalMetrics().Normalize(span)
+	if got := normalized.Samples[0].Labels["model"]; got != "fallback-model" {
+		t.Fatalf("model label = %q, want fallback-model", got)
+	}
+}
+
 func raw(value string) json.RawMessage { return json.RawMessage(value) }

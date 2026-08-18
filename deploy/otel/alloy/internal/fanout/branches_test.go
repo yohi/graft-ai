@@ -71,6 +71,29 @@ func TestFanOut_excludes_sampled_out_trace_from_tempo_and_loki_but_keeps_metrics
 	}
 }
 
+func TestFanOut_returns_projector_drop_reason_without_finalizing(t *testing.T) {
+	span := requestSpan("root", true)
+	span.Attributes["duration_ms"] = json.RawMessage(`"not-a-number"`)
+	trace := selector.Trace{
+		TraceID:        "00000000000000000000000000000001",
+		Spans:          []redaction.RedactedSpan{span},
+		RequestSpan:    span,
+		HasRequestSpan: true,
+	}
+	sampler, err := sampling.NewSampler("graft-ai-otel-v1")
+	if err != nil {
+		t.Fatalf("new sampler: %v", err)
+	}
+
+	result, err := NewFanOut(sampler).Trace(trace, 1_000_000)
+	if err == nil {
+		t.Fatal("Trace returned nil error for an invalid projected numeric field")
+	}
+	if len(result.Loki) != 0 {
+		t.Fatalf("Loki records = %d, want none when projection fails", len(result.Loki))
+	}
+}
+
 func requestSpan(spanID string, request bool) redaction.RedactedSpan {
 	flag := "false"
 	if request {

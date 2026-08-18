@@ -52,7 +52,10 @@ func (f FanOut) Trace(trace selector.Trace, ratePPM uint32) (TraceResult, error)
 	for index, span := range trace.Spans {
 		result.Tempo[index] = tempoCopy(span)
 	}
-	projected, _ := f.projector.ProjectRequestSpan(trace.RequestSpan)
+	projected, dropReason := f.projector.ProjectRequestSpan(trace.RequestSpan)
+	if dropReason != spanlogs.DropReasonNone {
+		return result, errors.New("fanout: project request span: " + string(dropReason))
+	}
 	finalized, reason := f.sizer.Finalize(projected)
 	if reason != spanlogs.DropReasonLineSizeMetadata && finalized.Serialized != nil {
 		result.Loki = []spanlogs.JSONLogRecord{finalized}

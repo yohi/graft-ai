@@ -51,8 +51,10 @@ func (CanonicalMetrics) Normalize(span redaction.RedactedSpan) NormalizedMetrics
 			labels[key] = "unknown"
 		}
 	}
-	duration := firstNumber(span, "duration_ms") / 1000
-	if duration == 0 && span.EndUnixNano >= span.StartUnixNano && span.EndUnixNano > 0 {
+	duration, hasDuration := firstNumber(span, "duration_ms")
+	if hasDuration {
+		duration /= 1000
+	} else if span.EndUnixNano >= span.StartUnixNano && span.EndUnixNano > 0 {
 		duration = float64(span.EndUnixNano-span.StartUnixNano) / 1_000_000_000
 	}
 	samples := []MetricSample{{Name: RequestsMetric, Value: 1, Labels: cloneLabels(labels)}}
@@ -82,7 +84,8 @@ func isError(span redaction.RedactedSpan) bool {
 	if status == "ERROR" {
 		return true
 	}
-	return firstNumber(span, "status_code", "http.response.status_code") >= 400
+	statusCode, ok := firstNumber(span, "status_code", "http.response.status_code")
+	return ok && statusCode >= 400
 }
 
 func firstString(span redaction.RedactedSpan, keys ...string) string {
@@ -93,6 +96,9 @@ func firstString(span redaction.RedactedSpan, keys ...string) string {
 		}
 		var text string
 		if json.Unmarshal(value, &text) == nil {
+			if text == "" {
+				continue
+			}
 			return text
 		}
 		if number, err := strconv.ParseInt(string(value), 10, 64); err == nil {
@@ -102,7 +108,7 @@ func firstString(span redaction.RedactedSpan, keys ...string) string {
 	return ""
 }
 
-func firstNumber(span redaction.RedactedSpan, keys ...string) float64 {
+func firstNumber(span redaction.RedactedSpan, keys ...string) (float64, bool) {
 	for _, key := range keys {
 		value, ok := span.Attributes[key]
 		if !ok {
@@ -110,10 +116,10 @@ func firstNumber(span redaction.RedactedSpan, keys ...string) float64 {
 		}
 		var number float64
 		if json.Unmarshal(value, &number) == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
-			return number
+			return number, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 func cloneLabels(labels map[string]string) map[string]string {

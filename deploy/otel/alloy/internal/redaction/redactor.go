@@ -151,7 +151,11 @@ func redactPayload(value json.RawMessage) (json.RawMessage, error) {
 		if err := json.Unmarshal(trimmed, &encoded); err != nil {
 			return nil, err
 		}
-		clean, err := redactJSON([]byte(encoded))
+		encodedBytes := []byte(encoded)
+		if !json.Valid(bytes.TrimSpace(encodedBytes)) {
+			return json.Marshal(redactString(encoded))
+		}
+		clean, err := redactJSON(encodedBytes)
 		if err != nil {
 			return nil, err
 		}

@@ -88,6 +88,23 @@ func TestRedactor_drops_only_malformed_payload_attributes(t *testing.T) {
 	}
 }
 
+func TestRedactor_preserves_plain_text_payload_encoded_as_json_string(t *testing.T) {
+	span := Span{
+		Attributes: map[string]json.RawMessage{
+			"gen_ai.prompt_json": rawJSON(t, `"Authorization: Bearer plain-text-secret"`),
+		},
+	}
+
+	redacted, status := NewRedactor().Redact(span)
+	if status.PayloadDropped {
+		t.Fatalf("plain-text payload was dropped: %#v", status)
+	}
+	value := string(redacted.Attributes["gen_ai.prompt_json"])
+	if strings.Contains(value, "plain-text-secret") || !strings.Contains(value, "[REDACTED]") {
+		t.Fatalf("plain-text payload was not redacted: %s", value)
+	}
+}
+
 func TestRedactor_preserves_safe_numeric_usage_metadata(t *testing.T) {
 	span := Span{Attributes: map[string]json.RawMessage{
 		"gen_ai.usage.input_tokens":  rawJSON(t, `12`),

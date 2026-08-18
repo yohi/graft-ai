@@ -146,6 +146,40 @@ function extractFromRscHydration(html: string): UsageRecords | null {
   return records.length === 0 ? null : records;
 }
 
+function extractFromSolidStart(html: string): UsageRecords | null {
+  const records: Record<string, unknown>[] = [];
+
+  // 1. JSON.parse("...") calls inside scripts
+  for (const match of html.matchAll(/JSON\.parse\(\s*(["'])([\s\S]*?)\1\s*\)/gi)) {
+    const raw = match[2];
+    if (raw === undefined) continue;
+    try {
+      const parsed: unknown = JSON.parse(JSON.parse(`"${raw.replace(/"/g, '\\"')}"`));
+      const found = findUsageRecords(parsed);
+      if (found !== null) records.push(...found);
+    } catch {
+      continue;
+    }
+  }
+
+  // 2. SolidStart resource streaming / assignments
+  for (const match of html.matchAll(
+    /(?:\.resolve|\$R\[\d+\]\s*=|_\$HY\.r\[[^\]]+\]\s*=)\s*(\{[^{}]+\}|\[[^\[\]]+\])/gi,
+  )) {
+    const raw = match[1];
+    if (raw === undefined) continue;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      const found = findUsageRecords(parsed);
+      if (found !== null) records.push(...found);
+    } catch {
+      continue;
+    }
+  }
+
+  return records.length === 0 ? null : records;
+}
+
 function extractFromTextFallback(html: string): UsageRecords | null {
   const usageText = html.match(
     /"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/i,
@@ -161,6 +195,7 @@ function extractUsageRecords(html: string): UsageRecords | null {
   return (
     extractFromNextData(html) ??
     parseJsonUsage(html.trim()) ??
+    extractFromSolidStart(html) ??
     extractFromScriptTags(html) ??
     extractFromRscHydration(html) ??
     extractFromTextFallback(html)
@@ -279,7 +314,7 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
 }
 
 export function extractWorkspaceId(html: string): string | null {
-  return html.match(/"(wrk_[a-zA-Z0-9]+)"/)?.[1] ?? null;
+  return html.match(/(wrk_[a-zA-Z0-9]+)/)?.[1] ?? null;
 }
 
 export function extractZenBalance(html: string): number | null {

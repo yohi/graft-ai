@@ -138,6 +138,37 @@ jobs:
         working-directory: workers
         run: npm ci --ignore-scripts
 
+      - name: Sync Worker Secrets
+        working-directory: workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GRAFANA_CLOUD_PROMETHEUS_URL: ${{ secrets.GRAFANA_CLOUD_PROMETHEUS_URL || vars.GRAFANA_CLOUD_PROMETHEUS_URL }}
+          GRAFANA_CLOUD_PROMETHEUS_USERNAME: ${{ secrets.GRAFANA_CLOUD_PROMETHEUS_USERNAME || vars.GRAFANA_CLOUD_PROMETHEUS_USERNAME }}
+          GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN || secrets.GRAFANA_CLOUD_API_KEY }}
+          OPENAI_ADMIN_API_KEY: ${{ secrets.OPENAI_ADMIN_API_KEY || secrets.OPENAI_API_KEY }}
+          CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
+          CODEX_ACCOUNT_ID: ${{ secrets.CODEX_ACCOUNT_ID || vars.CODEX_ACCOUNT_ID }}
+          OPENCODEGO_SESSION_COOKIE: ${{ secrets.OPENCODEGO_SESSION_COOKIE }}
+          OPENCODEGO_WORKSPACE_ID: ${{ secrets.OPENCODEGO_WORKSPACE_ID || vars.OPENCODEGO_WORKSPACE_ID }}
+        run: |
+          set -e
+          sync_secret() {
+            local name="$1"
+            local val="$2"
+            if [[ -n "$val" ]]; then
+              printf '%s' "$val" | npx wrangler secret put "$name" --config wrangler.provider-metrics.jsonc >/dev/null 2>&1 || true
+            fi
+          }
+          sync_secret "GRAFANA_CLOUD_PROMETHEUS_URL" "$GRAFANA_CLOUD_PROMETHEUS_URL"
+          sync_secret "GRAFANA_CLOUD_PROMETHEUS_USERNAME" "$GRAFANA_CLOUD_PROMETHEUS_USERNAME"
+          sync_secret "GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN"
+          sync_secret "OPENAI_ADMIN_API_KEY" "$OPENAI_ADMIN_API_KEY"
+          sync_secret "CODEX_ACCESS_TOKEN" "$CODEX_ACCESS_TOKEN"
+          sync_secret "CODEX_ACCOUNT_ID" "$CODEX_ACCOUNT_ID"
+          sync_secret "OPENCODEGO_SESSION_COOKIE" "$OPENCODEGO_SESSION_COOKIE"
+          sync_secret "OPENCODEGO_WORKSPACE_ID" "$OPENCODEGO_WORKSPACE_ID"
+
       - name: Deploy with Wrangler
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
         with:

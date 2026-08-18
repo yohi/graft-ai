@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -21,6 +24,15 @@ const sampling = JSON.parse(
 );
 
 const dayMs = 24 * 60 * 60 * 1000;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const goContracts = JSON.parse(
+  execFileSync("go", ["run", "./cmd/export-contracts"], {
+    cwd: join(__dirname, "../deploy/otel/alloy"),
+    encoding: "utf8",
+  }),
+);
 
 function decimalRateToPpm(rate) {
   assert.match(rate, /^(?:0|1|0\.\d+|1\.0+)$/);
@@ -173,36 +185,25 @@ test("pins canonical metrics, labels, and duration buckets", () => {
 test("pins spanlogs redaction and serialized-size contracts", () => {
   assert.deepEqual(contracts.spanlogs, {
     maxLineBytes: 262144,
-    allowlistedFields: [
-      "trace_id",
-      "span_id",
-      "request_id",
-      "model",
-      "provider",
-      "status",
-      "status_code",
-      "gateway",
-      "env",
-      "input_tokens",
-      "output_tokens",
-      "total_tokens",
-      "cost_usd",
-      "duration_ms",
-      "prompt",
-      "completion",
-      "payload_truncated",
-      "payload_dropped",
-      "payload_drop_reason",
-    ],
-    lokiLabels: ["model", "status_code", "env", "gateway"],
-    payloadDropReasons: [
-      "redaction_failure",
-      "numeric_field_invalid",
-      "line_size",
-      "line_size_metadata",
-    ],
-    truncatedSuffix: "[TRUNCATED]",
+    allowlistedFields: goContracts.allowlistedFields,
+    lokiLabels: goContracts.lokiLabels,
+    payloadDropReasons: goContracts.payloadDropReasons,
+    truncatedSuffix: goContracts.truncatedSuffix,
   });
+});
+
+test("spanlogs contract matches Go implementation", () => {
+  assert.equal(contracts.spanlogs.maxLineBytes, goContracts.maxLineBytes);
+  assert.deepEqual(
+    contracts.spanlogs.allowlistedFields,
+    goContracts.allowlistedFields,
+  );
+  assert.deepEqual(contracts.spanlogs.lokiLabels, goContracts.lokiLabels);
+  assert.deepEqual(
+    contracts.spanlogs.payloadDropReasons,
+    goContracts.payloadDropReasons,
+  );
+  assert.equal(contracts.spanlogs.truncatedSuffix, goContracts.truncatedSuffix);
 });
 
 test("keeps retention payload export fail-closed", () => {

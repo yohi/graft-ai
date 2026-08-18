@@ -19,6 +19,9 @@ export interface ProviderMetricsEnv {
   // OpenCodeGo
   OPENCODEGO_SESSION_COOKIE?: string;
   OPENCODEGO_WORKSPACE_ID?: string; // optional override, fetched if missing
+
+  // Cloudflare Browser Rendering (Headless Chromium)
+  MYBROWSER?: Fetcher;
 }
 
 /** OpenAI API fetcher の結果 */

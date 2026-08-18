@@ -8,6 +8,9 @@
   "observability": {
     "enabled": true
   },
+  "browser": {
+    "binding": "MYBROWSER"
+  },
   "triggers": {
     "crons": ["*/5 * * * *"]
   },

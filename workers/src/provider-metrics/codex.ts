@@ -132,11 +132,55 @@ async function fetchResetCredits(
   }
 }
 
+async function fetchViaBrowserRendering(
+  browserBinding: Fetcher,
+  baseUrl: string,
+  accessToken: string,
+  accountId?: string,
+): Promise<CodexUsageResponse> {
+  const puppeteer = await import("@cloudflare/puppeteer");
+  const browser = await puppeteer.default.launch(browserBinding);
+  try {
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({
+      Authorization: `Bearer ${accessToken}`,
+      ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+      "OpenAI-Beta": "codex-1",
+      originator: "Codex Desktop",
+      Accept: "application/json",
+    });
+
+    const response = await page.goto(`${baseUrl}/backend-api/wham/usage`, {
+      waitUntil: "networkidle0",
+      timeout: 30000,
+    });
+
+    let rawText = "";
+    if (response !== null) {
+      try {
+        rawText = await response.text();
+      } catch {
+        rawText = "";
+      }
+    }
+    if (rawText.length === 0) {
+      const evalResult = await page.evaluate("document.body.innerText");
+      rawText = typeof evalResult === "string" ? evalResult : "";
+    }
+
+    const body: unknown = JSON.parse(rawText);
+    return parseUsageResponse(body);
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 export async function fetchCodexMetrics(
   accessToken: string,
   accountId?: string,
   fetchFn: typeof fetch = fetch,
   proxyUrlOrBaseUrl?: string,
+  browserBinding?: Fetcher,
 ): Promise<CodexFetchResult> {
   const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
@@ -153,29 +197,45 @@ export async function fetchCodexMetrics(
     headers["ChatGPT-Account-Id"] = accountId;
   }
 
-  const response = await getWithRetry({
-    url: `${baseUrl}/backend-api/wham/usage`,
-    headers,
-    fetchFn,
-    logLabel: "Codex usage fetch",
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    perAttemptTimeoutMs: TIMEOUT_MS,
-  });
+  let data: CodexUsageResponse;
+  let resetCredits: CodexFetchResult["resetCredits"];
 
-  if (!response.ok) {
-    let bodySnippet = "";
-    try {
-      const text = await response.text();
-      bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
-    } catch {
-      await response.body?.cancel().catch(() => undefined);
+  try {
+    const response = await getWithRetry({
+      url: `${baseUrl}/backend-api/wham/usage`,
+      headers,
+      fetchFn,
+      logLabel: "Codex usage fetch",
+      isRetryableStatus: (status) => status === 429 || status >= 500,
+      perAttemptTimeoutMs: TIMEOUT_MS,
+    });
+
+    if (!response.ok) {
+      if (response.status === 403 && browserBinding !== undefined) {
+        // Fallback to Cloudflare Browser Rendering to solve interactive JS challenge
+        data = await fetchViaBrowserRendering(browserBinding, baseUrl, accessToken, accountId);
+      } else {
+        let bodySnippet = "";
+        try {
+          const text = await response.text();
+          bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
+        } catch {
+          await response.body?.cancel().catch(() => undefined);
+        }
+        throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
+      }
+    } else {
+      const body: unknown = await response.json();
+      data = parseUsageResponse(body);
+      resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
     }
-    throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
+  } catch (error) {
+    if (browserBinding !== undefined && error instanceof Error && error.message.includes("403")) {
+      data = await fetchViaBrowserRendering(browserBinding, baseUrl, accessToken, accountId);
+    } else {
+      throw error;
+    }
   }
-
-  const body: unknown = await response.json();
-  const data = parseUsageResponse(body);
-  const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
 
   return {
     sessionUsageRatio: data.primaryWindow.usedPercent / 100,

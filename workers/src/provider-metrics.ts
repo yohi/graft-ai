@@ -75,6 +75,7 @@ export async function collectAndPushProviderMetrics(
           env.CODEX_ACCOUNT_ID,
           fetch,
           env.CODEX_PROXY_URL || env.CODEX_API_BASE_URL,
+          env.MYBROWSER,
         )
       : Promise.resolve(null),
     openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""

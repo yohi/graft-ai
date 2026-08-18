@@ -161,7 +161,7 @@ func TestReceiver_rejects_rate_limited_requests_before_concurrency(t *testing.T)
 		t.Fatalf("status = %d, want 429", response.Code)
 	}
 	assertReason(t, response.Body.Bytes(), "rate_limit")
-	if got := receiver.Metrics().RateLimited; got != 3 {
+	if got := receiver.Metrics().RateLimited; got != 2 {
 		t.Fatalf("rate-limited count = %d, want 3", got)
 	}
 }

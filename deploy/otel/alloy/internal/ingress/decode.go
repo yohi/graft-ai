@@ -74,7 +74,7 @@ func anyValueJSON(value *commonpb.AnyValue) json.RawMessage {
 		return json.RawMessage(strconv.FormatInt(typed.IntValue, 10))
 	case *commonpb.AnyValue_DoubleValue:
 		if math.IsNaN(typed.DoubleValue) || math.IsInf(typed.DoubleValue, 0) {
-			return json.RawMessage(strconv.FormatFloat(typed.DoubleValue, 'g', -1, 64))
+			return json.RawMessage("null")
 		}
 		return json.RawMessage(strconv.FormatFloat(typed.DoubleValue, 'g', -1, 64))
 	case *commonpb.AnyValue_BytesValue:

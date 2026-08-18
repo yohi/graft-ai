@@ -126,12 +126,6 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		r.accept(writer, "accepted")
 		return
 	}
-	if allowed, retryAfter := r.rateLimiter.Allow(r.sourceIdentity.Hash(source)); !allowed {
-		r.metrics.RateLimited()
-		writer.Header().Set("Retry-After", retryAfterString(retryAfter))
-		r.reject(writer, http.StatusTooManyRequests, "rate_limit")
-		return
-	}
 	envelope := Envelope{
 		TraceID:     redacted.TraceID,
 		Payload:     record.Serialized,

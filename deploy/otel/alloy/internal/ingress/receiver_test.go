@@ -126,7 +126,7 @@ func TestReceiver_returns_200_capacity_reason_when_queue_is_full(t *testing.T) {
 func TestReceiver_returns_429_with_integer_retry_after_when_source_bucket_is_empty(t *testing.T) {
 	receiver, _ := newTestReceiver(t, 64)
 	body := validOTLPBody(t, "protobuf")
-	for index := range 20 {
+	for index := range 40 {
 		request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
 		request.RemoteAddr = "127.0.0.1:4318"
 		request.Header.Set("Authorization", "Bearer ingest-token")

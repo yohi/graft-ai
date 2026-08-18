@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
 )
 
 var ErrInvalidQueueCapacity = errors.New("otel ingress: invalid queue capacity")
@@ -12,6 +14,7 @@ type Envelope struct {
 	TraceID     string
 	Payload     []byte
 	ContentType string
+	Span        redaction.RedactedSpan
 }
 
 type IngressQueue struct {

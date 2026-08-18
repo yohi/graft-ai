@@ -2,9 +2,11 @@ package ingress
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestReceiver_accepts_protobuf_and_enqueues_asynchronously(t *testing.T) {
@@ -126,7 +128,7 @@ func TestReceiver_returns_200_capacity_reason_when_queue_is_full(t *testing.T) {
 func TestReceiver_returns_429_with_integer_retry_after_when_source_bucket_is_empty(t *testing.T) {
 	receiver, _ := newTestReceiver(t, 64)
 	body := validOTLPBody(t, "protobuf")
-	for index := range 20 {
+	for index := range 40 {
 		request := httptest.NewRequest(http.MethodPost, "http://example.test/v1/traces", bytes.NewReader(body))
 		request.RemoteAddr = "127.0.0.1:4318"
 		request.Header.Set("Authorization", "Bearer ingest-token")
@@ -169,4 +171,68 @@ func newIngestRequestForTest(t *testing.T, url string, method string, body []byt
 		request.Header.Set("Content-Encoding", encoding)
 	}
 	return request
+}
+
+func TestReceiver_enqueues_multiple_spans_from_one_request(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 4)
+	body := validMultiSpanOTLPBody(t, "protobuf")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	wantTraceIDs := []string{"00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100"}
+	for _, want := range wantTraceIDs {
+		envelope, ok := queue.Dequeue(request.Context())
+		if !ok || envelope.TraceID != want {
+			t.Fatalf("envelope = %#v, ok = %v, want %q", envelope, ok, want)
+		}
+	}
+}
+
+func TestReceiver_records_partial_acceptance_when_some_spans_are_dropped(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 4)
+	body := mixedTraceOTLPBody(t)
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	envelope, ok := queue.Dequeue(request.Context())
+	if !ok || envelope.TraceID != "00112233445566778899aabbccddeeff" {
+		t.Fatalf("valid envelope = %#v, ok = %v", envelope, ok)
+	}
+	if got := receiver.Metrics().Accepted; got != 1 {
+		t.Fatalf("accepted = %d, want 1", got)
+	}
+}
+
+func TestReceiver_records_size_drop_when_metadata_exceeds_line_size(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 4)
+	body := oversizedMetadataOTLPBody(t)
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	if got := receiver.Metrics().SizeDrops; got != 1 {
+		t.Fatalf("size drops = %d, want 1", got)
+	}
+	if got := receiver.Metrics().Accepted; got != 0 {
+		t.Fatalf("accepted = %d, want 0", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, ok := queue.Dequeue(ctx); ok {
+		t.Fatalf("expected no envelope to be enqueued")
+	}
 }

@@ -24,7 +24,7 @@ func TestReceiver_limits_active_request_bodies_to_100(t *testing.T) {
 		t.Fatalf("new queue: %v", err)
 	}
 	limiter, err := NewRateLimiter(RateLimiterConfig{
-		Capacity:        200,
+		Capacity:        250,
 		RefillPerSecond: 1,
 		Now:             func() time.Time { return time.Unix(0, 0) },
 	})

@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -21,6 +24,15 @@ const sampling = JSON.parse(
 );
 
 const dayMs = 24 * 60 * 60 * 1000;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const goContracts = JSON.parse(
+  execFileSync("go", ["run", "./cmd/export-contracts"], {
+    cwd: join(__dirname, "../deploy/otel/alloy"),
+    encoding: "utf8",
+  }),
+);
 
 function decimalRateToPpm(rate) {
   assert.match(rate, /^(?:0|1|0\.\d+|1\.0+)$/);
@@ -168,6 +180,30 @@ test("pins canonical metrics, labels, and duration buckets", () => {
     10,
     "+Inf",
   ]);
+});
+
+test("pins spanlogs redaction and serialized-size contracts", () => {
+  assert.deepEqual(contracts.spanlogs, {
+    maxLineBytes: 262144,
+    allowlistedFields: goContracts.allowlistedFields,
+    lokiLabels: goContracts.lokiLabels,
+    payloadDropReasons: goContracts.payloadDropReasons,
+    truncatedSuffix: goContracts.truncatedSuffix,
+  });
+});
+
+test("spanlogs contract matches Go implementation", () => {
+  assert.equal(contracts.spanlogs.maxLineBytes, goContracts.maxLineBytes);
+  assert.deepEqual(
+    contracts.spanlogs.allowlistedFields,
+    goContracts.allowlistedFields,
+  );
+  assert.deepEqual(contracts.spanlogs.lokiLabels, goContracts.lokiLabels);
+  assert.deepEqual(
+    contracts.spanlogs.payloadDropReasons,
+    goContracts.payloadDropReasons,
+  );
+  assert.equal(contracts.spanlogs.truncatedSuffix, goContracts.truncatedSuffix);
 });
 
 test("keeps retention payload export fail-closed", () => {

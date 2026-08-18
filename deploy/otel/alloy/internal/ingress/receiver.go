@@ -1,19 +1,16 @@
 package ingress
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/spanlogs"
 )
 
 const (
@@ -38,6 +35,9 @@ type Receiver struct {
 	maxBodyBytes   int64
 	concurrency    chan struct{}
 	metrics        *IngressMetrics
+	redactor       redaction.Redactor
+	projector      spanlogs.Projector
+	sizer          spanlogs.Sizer
 }
 
 func NewReceiver(config ReceiverConfig) (*Receiver, error) {
@@ -61,6 +61,9 @@ func NewReceiver(config ReceiverConfig) (*Receiver, error) {
 		maxBodyBytes:   config.MaxBodyBytes,
 		concurrency:    make(chan struct{}, config.MaxConcurrentRequests),
 		metrics:        NewIngressMetrics(),
+		redactor:       redaction.NewRedactor(),
+		projector:      spanlogs.NewProjector(),
+		sizer:          spanlogs.NewSizer(spanlogs.MaxLineBytes),
 	}, nil
 }
 
@@ -111,18 +114,43 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		r.reject(writer, http.StatusRequestEntityTooLarge, "body_size")
 		return
 	}
-	envelope, err := decodeEnvelope(body, contentType)
+	spans, err := decodeSpans(body, contentType)
 	if err != nil {
 		r.reject(writer, http.StatusBadRequest, "parse")
 		return
 	}
-	if !r.queue.Enqueue(envelope) {
-		r.metrics.CapacityDrop()
-		writer.Header().Set("X-OTel-Drop-Reason", "capacity")
-		r.accept(writer, "capacity")
+
+	var accepted int
+	for _, span := range spans {
+		redacted, _ := r.redactor.Redact(span)
+		record, _ := r.projector.ProjectRequestSpan(redacted)
+		record, sizeReason := r.sizer.Finalize(record)
+		if sizeReason == spanlogs.DropReasonLineSizeMetadata {
+			r.metrics.SizeDrop()
+			continue
+		}
+		envelope := Envelope{
+			TraceID:     redacted.TraceID,
+			Payload:     record.Serialized,
+			ContentType: "application/json",
+			Span:        redacted,
+		}
+		if !r.queue.Enqueue(envelope) {
+			r.metrics.CapacityDrop()
+			if accepted > 0 {
+				r.metrics.AcceptedN(accepted)
+			}
+			writer.Header().Set("X-OTel-Drop-Reason", "capacity")
+			r.accept(writer, "capacity")
+			return
+		}
+		accepted++
+	}
+	if accepted == 0 {
+		r.accept(writer, "accepted")
 		return
 	}
-	r.metrics.Accepted()
+	r.metrics.AcceptedN(accepted)
 	r.accept(writer, "accepted")
 }
 
@@ -137,34 +165,6 @@ func (r *Receiver) reject(writer http.ResponseWriter, status int, reason string)
 
 func (r *Receiver) accept(writer http.ResponseWriter, reason string) {
 	writeReason(writer, http.StatusOK, reason)
-}
-
-func decodeEnvelope(body []byte, contentType string) (Envelope, error) {
-	if len(body) == 0 {
-		return Envelope{}, errors.New("otel ingress: empty OTLP payload")
-	}
-	payload := &collectortracepb.ExportTraceServiceRequest{}
-	if contentType == contentTypeJSON {
-		if err := protojson.Unmarshal(body, payload); err != nil {
-			return Envelope{}, fmt.Errorf("decode OTLP JSON: %w", err)
-		}
-	} else if err := proto.Unmarshal(body, payload); err != nil {
-		return Envelope{}, fmt.Errorf("decode OTLP protobuf: %w", err)
-	}
-	for _, resource := range payload.GetResourceSpans() {
-		for _, scope := range resource.GetScopeSpans() {
-			for _, span := range scope.GetSpans() {
-				if len(span.GetTraceId()) == 16 {
-					return Envelope{
-						TraceID:     hex.EncodeToString(span.GetTraceId()),
-						Payload:     append([]byte(nil), body...),
-						ContentType: contentType,
-					}, nil
-				}
-			}
-		}
-	}
-	return Envelope{}, errors.New("otel ingress: OTLP payload has no trace ID")
 }
 
 func writeReason(writer http.ResponseWriter, status int, reason string) {

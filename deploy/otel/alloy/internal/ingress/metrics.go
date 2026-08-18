@@ -10,6 +10,7 @@ type IngressMetrics struct {
 	accepted      uint64
 	rateLimited   uint64
 	capacityDrops uint64
+	sizeDrops     uint64
 	rejections    map[string]uint64
 }
 
@@ -17,6 +18,7 @@ type MetricsSnapshot struct {
 	Accepted      uint64
 	RateLimited   uint64
 	CapacityDrops uint64
+	SizeDrops     uint64
 	Rejections    map[string]uint64
 }
 
@@ -25,8 +27,12 @@ func NewIngressMetrics() *IngressMetrics {
 }
 
 func (m *IngressMetrics) Accepted() {
+	m.AcceptedN(1)
+}
+
+func (m *IngressMetrics) AcceptedN(n int) {
 	m.mu.Lock()
-	m.accepted++
+	m.accepted += uint64(n)
 	m.mu.Unlock()
 }
 
@@ -39,6 +45,12 @@ func (m *IngressMetrics) RateLimited() {
 func (m *IngressMetrics) CapacityDrop() {
 	m.mu.Lock()
 	m.capacityDrops++
+	m.mu.Unlock()
+}
+
+func (m *IngressMetrics) SizeDrop() {
+	m.mu.Lock()
+	m.sizeDrops++
 	m.mu.Unlock()
 }
 
@@ -57,6 +69,7 @@ func (m *IngressMetrics) Snapshot() MetricsSnapshot {
 		Accepted:      m.accepted,
 		RateLimited:   m.rateLimited,
 		CapacityDrops: m.capacityDrops,
+		SizeDrops:     m.sizeDrops,
 		Rejections:    rejections,
 	}
 }

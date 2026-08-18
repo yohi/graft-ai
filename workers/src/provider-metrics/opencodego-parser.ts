@@ -118,7 +118,7 @@ function extractFromScriptTags(html: string): UsageRecords | null {
 function extractFromRscHydration(html: string): UsageRecords | null {
   const records: Record<string, unknown>[] = [];
   for (const match of html.matchAll(
-    /"(?:rollingUsage|weeklyUsage|monthlyUsage)"\s*,\s*(\{[^{}]+\})/g,
+    /"(?:rollingUsage|weeklyUsage|monthlyUsage|usage|rateLimit|quota|limits)"\s*[,:]\s*(\{[^{}]+\})/gi,
   )) {
     const source = match[1];
     if (source === undefined) continue;
@@ -129,15 +129,29 @@ function extractFromRscHydration(html: string): UsageRecords | null {
       continue;
     }
   }
+
+  // Also search for unescaped / escaped JSON chunks containing usage percent
+  for (const match of html.matchAll(
+    /\{(?:[^{}]*"(?:usagePercent|rollingUsagePercent|usedPercent)"[^{}]*)\}/gi,
+  )) {
+    const source = match[0];
+    try {
+      const value: unknown = JSON.parse(source);
+      if (isRecord(value) && hasUsageKey(value)) records.push(value);
+    } catch {
+      continue;
+    }
+  }
+
   return records.length === 0 ? null : records;
 }
 
 function extractFromTextFallback(html: string): UsageRecords | null {
   const usageText = html.match(
-    /"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/,
+    /"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/i,
   )?.[1];
   if (usageText === undefined) return null;
-  const resetText = html.match(/"resetInSec(?:onds)?"\s*:\s*(\d+)/)?.[1];
+  const resetText = html.match(/"resetInSec(?:onds)?"\s*:\s*(\d+)/i)?.[1];
   const record: Record<string, unknown> = { usagePercent: Number(usageText) };
   if (resetText !== undefined) record["resetInSec"] = Number(resetText);
   return [record];
@@ -238,7 +252,15 @@ function parseResetSeconds(
 export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   const records = extractUsageRecords(html);
   if (records === null) {
-    throw new OpenCodeGoResponseError("OpenCodeGo: Could not parse usage data from page HTML");
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim();
+    const cleanSnippet = html
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    throw new OpenCodeGoResponseError(
+      `OpenCodeGo: Could not parse usage data from page HTML (title: "${titleMatch ?? "none"}", length: ${html.length}, text: "${cleanSnippet}")`,
+    );
   }
   return {
     rollingUsageRatio: parsePercentage(records, PERCENT_KEYS, true),

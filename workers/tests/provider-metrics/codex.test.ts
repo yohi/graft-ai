@@ -85,10 +85,14 @@ describe("fetchCodexMetrics", () => {
     );
     expect(usageHeaders.get("Authorization")).toBe("Bearer test-token");
     expect(usageHeaders.get("Accept")).toBe("application/json");
-    expect(usageHeaders.get("User-Agent")).toBe("graft-ai");
+    expect(usageHeaders.get("User-Agent")).toContain("Mozilla/5.0");
+    expect(usageHeaders.get("Origin")).toBe("https://chatgpt.com");
+    expect(usageHeaders.get("Referer")).toBe("https://chatgpt.com/");
+    expect(usageHeaders.get("OpenAI-Beta")).toBe("codex-1");
+    expect(usageHeaders.get("originator")).toBe("Codex Desktop");
     expect(resetCreditsHeaders.get("Authorization")).toBe("Bearer test-token");
     expect(resetCreditsHeaders.get("Accept")).toBe("application/json");
-    expect(resetCreditsHeaders.get("User-Agent")).toBe("graft-ai");
+    expect(resetCreditsHeaders.get("User-Agent")).toContain("Mozilla/5.0");
     expect(resetCreditsHeaders.get("OpenAI-Beta")).toBe("codex-1");
     expect(resetCreditsHeaders.get("originator")).toBe("Codex Desktop");
   });

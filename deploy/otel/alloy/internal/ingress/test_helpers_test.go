@@ -2,13 +2,17 @@ package ingress
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/spanlogs"
 )
 
 func newTestReceiver(t *testing.T, queueCapacity int) (*Receiver, *IngressQueue) {
@@ -125,6 +129,30 @@ func mixedTraceOTLPBody(t *testing.T) []byte {
 						Name:    "invalid-trace-id",
 					},
 				},
+			}},
+		}},
+	}
+	body, err := proto.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal OTLP protobuf: %v", err)
+	}
+	return body
+}
+
+func oversizedMetadataOTLPBody(t *testing.T) []byte {
+	t.Helper()
+	payload := &collectortracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{
+					TraceId: []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
+					SpanId:  []byte{0x01, 0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78},
+					Name:    "oversized-metadata",
+					Attributes: []*commonpb.KeyValue{{
+						Key:   "request_id",
+						Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: strings.Repeat("x", spanlogs.MaxLineBytes+1)}},
+					}},
+				}},
 			}},
 		}},
 	}

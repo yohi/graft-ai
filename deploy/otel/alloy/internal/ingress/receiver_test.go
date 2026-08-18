@@ -2,9 +2,11 @@ package ingress
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestReceiver_accepts_protobuf_and_enqueues_asynchronously(t *testing.T) {
@@ -208,5 +210,29 @@ func TestReceiver_records_partial_acceptance_when_some_spans_are_dropped(t *test
 	}
 	if got := receiver.Metrics().Accepted; got != 1 {
 		t.Fatalf("accepted = %d, want 1", got)
+	}
+}
+
+func TestReceiver_records_size_drop_when_metadata_exceeds_line_size(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 4)
+	body := oversizedMetadataOTLPBody(t)
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	if got := receiver.Metrics().SizeDrops; got != 1 {
+		t.Fatalf("size drops = %d, want 1", got)
+	}
+	if got := receiver.Metrics().Accepted; got != 0 {
+		t.Fatalf("accepted = %d, want 0", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, ok := queue.Dequeue(ctx); ok {
+		t.Fatalf("expected no envelope to be enqueued")
 	}
 }

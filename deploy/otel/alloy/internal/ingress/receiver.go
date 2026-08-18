@@ -126,6 +126,7 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		record, _ := r.projector.ProjectRequestSpan(redacted)
 		record, sizeReason := r.sizer.Finalize(record)
 		if sizeReason == spanlogs.DropReasonLineSizeMetadata {
+			r.metrics.SizeDrop()
 			continue
 		}
 		envelope := Envelope{

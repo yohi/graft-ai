@@ -97,6 +97,17 @@ test("pins receiver limits and accepted content types", () => {
     maxConcurrentRequests: 100,
     ingressQueueItems: 1_000,
   });
+  assert.deepEqual(contracts.receiver.rateLimit, {
+    capacity: 20,
+    refillPerSecond: 2,
+    retryAfterMinimumSeconds: 1,
+  });
+  assert.deepEqual(contracts.receiver.sourceIdentity, {
+    trustedForwardingHeader: "CF-Connecting-IP",
+    ignoredForwardingHeaders: ["X-Forwarded-For", "True-Client-IP"],
+    unknownBucket: "unknown",
+    hmacDomain: "otel-ingress-source-v1\u0000",
+  });
 });
 
 test("converts decimal rates to integer ppm without floating point", () => {

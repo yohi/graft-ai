@@ -149,36 +149,36 @@ function extractFromRscHydration(html: string): UsageRecords | null {
 function extractFromSolidStart(html: string): UsageRecords | null {
   const records: Record<string, unknown>[] = [];
 
-  // 1. JSON.parse("...") calls inside scripts
-  for (const match of html.matchAll(/JSON\.parse\(\s*(["'])([\s\S]*?)\1\s*\)/gi)) {
-    const raw = match[2];
-    if (raw === undefined) continue;
-    try {
-      const parsed: unknown = JSON.parse(JSON.parse(`"${raw.replace(/"/g, '\\"')}"`));
-      const found = findUsageRecords(parsed);
-      if (found !== null) records.push(...found);
-    } catch {
-      continue;
-    }
-  }
+  for (const scriptMatch of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const script = scriptMatch[1];
+    if (script === undefined || script.length === 0) continue;
 
-  // 2. SolidStart resource streaming: $R[0](data) or $R[0].resolve(data) or $R[0] = data
-  for (const match of html.matchAll(
-    /(?:\.resolve|\$R\[\d+\]\s*=?|_\$HY\.r\[[^\]]+\]\s*=?)\s*[(=]\s*(\{[^{}]+\}|\[[^\[\]]+\]|"(\\"|[^"])*")/gi,
-  )) {
-    const raw = match[1];
-    if (raw === undefined) continue;
-    try {
-      let parsed: unknown;
-      if (raw.startsWith('"')) {
-        parsed = JSON.parse(JSON.parse(raw));
-      } else {
-        parsed = JSON.parse(raw);
+    // 1. JSON.parse calls inside scripts
+    for (const match of script.matchAll(/JSON\.parse\(\s*("(?:[^"\\]|\\.)*")\s*\)/g)) {
+      const raw = match[1];
+      if (raw === undefined) continue;
+      try {
+        const parsed: unknown = JSON.parse(JSON.parse(raw));
+        const found = findUsageRecords(parsed);
+        if (found !== null) records.push(...found);
+      } catch {
+        continue;
       }
-      const found = findUsageRecords(parsed);
-      if (found !== null) records.push(...found);
-    } catch {
-      continue;
+    }
+
+    // 2. SolidStart resource streaming: $R[0](data) or $R[0].resolve(data) or $R[0] = data
+    for (const match of script.matchAll(
+      /(?:\$R\[\d+\]|_\$HY\.r\[[^\]]+\]|\.resolve)\s*(?:\.resolve)?\s*[(=]\s*(\{[^{}]+\}|\[[^\[\]]+\])/gi,
+    )) {
+      const raw = match[1];
+      if (raw === undefined) continue;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const found = findUsageRecords(parsed);
+        if (found !== null) records.push(...found);
+      } catch {
+        continue;
+      }
     }
   }
 

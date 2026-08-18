@@ -253,13 +253,19 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   const records = extractUsageRecords(html);
   if (records === null) {
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim();
+    const scripts = Array.from(html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi))
+      .map((m) => m[1]?.replace(/\s+/g, " ").trim().slice(0, 100))
+      .filter((s): s is string => typeof s === "string" && s.length > 0)
+      .slice(0, 3);
+    const scriptsSummary =
+      scripts.length > 0 ? ` [scripts: ${scripts.join(" | ")}]` : " [no inline scripts]";
     const cleanSnippet = html
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 120);
     throw new OpenCodeGoResponseError(
-      `OpenCodeGo: Could not parse usage data from page HTML (title: "${titleMatch ?? "none"}", length: ${html.length}, text: "${cleanSnippet}")`,
+      `OpenCodeGo: Could not parse usage data from page HTML (title: "${titleMatch ?? "none"}", length: ${html.length}, text: "${cleanSnippet}"${scriptsSummary})`,
     );
   }
   return {

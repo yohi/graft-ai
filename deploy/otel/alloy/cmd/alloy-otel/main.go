@@ -131,14 +131,14 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("parse OTEL_SAMPLING_RATE: %w", err)
 	}
-return config{
-	address:         envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
-	trustedCIDRs:    trustedCIDRs,
-	proxySecret:     proxySecret,
-	hmacKeySource:   hmacKeySource,
-	forwardURL:      envOrDefault("OTEL_ALLOY_FORWARD_URL", defaultForwardURL),
-	samplingRatePPM: samplingRatePPM,
-}, nil
+	return config{
+		address:         envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
+		trustedCIDRs:    trustedCIDRs,
+		proxySecret:     proxySecret,
+		hmacKeySource:   hmacKeySource,
+		forwardURL:      envOrDefault("OTEL_ALLOY_FORWARD_URL", defaultForwardURL),
+		samplingRatePPM: samplingRatePPM,
+	}, nil
 }
 
 func serveUntilSignal(server *http.Server) error {

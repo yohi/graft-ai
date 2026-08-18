@@ -70,7 +70,7 @@ describe("fetchOpenCodeGoMetrics", () => {
 
   it("uses workspaceIdOverride when provided", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("/workspace/wrk_override/go")) {
+      if (url.includes("7abeebee")) {
         return new Response(MOCK_USAGE_HTML, { status: 200 });
       }
       return new Response(MOCK_ZEN_HTML, { status: 200 });
@@ -80,7 +80,7 @@ describe("fetchOpenCodeGoMetrics", () => {
 
     const urls = (mockFetch.mock.calls as [string, RequestInit][]).map(([url]) => url);
     expect(urls.some((url) => url.includes("_server") && url.includes("def399"))).toBe(false);
-    expect(urls.some((url) => url.includes("/workspace/wrk_override/go"))).toBe(true);
+    expect(urls.some((url) => url.includes("7abeebee") && url.includes("wrk_override"))).toBe(true);
   });
 
   it("discovers the workspace when workspaceIdOverride is blank", async () => {
@@ -88,7 +88,7 @@ describe("fetchOpenCodeGoMetrics", () => {
       if (url.includes("_server") && url.includes("def399")) {
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
       }
-      if (url.includes("/workspace/wrk_abc123/go")) {
+      if (url.includes("7abeebee")) {
         return new Response(MOCK_USAGE_HTML, { status: 200 });
       }
       return new Response(MOCK_ZEN_HTML, { status: 200 });
@@ -98,15 +98,15 @@ describe("fetchOpenCodeGoMetrics", () => {
 
     const urls = (mockFetch.mock.calls as [string, RequestInit][]).map(([url]) => url);
     expect(urls.some((url) => url.includes("def399"))).toBe(true);
-    expect(urls.some((url) => url.includes("/workspace/wrk_abc123/go"))).toBe(true);
+    expect(urls.some((url) => url.includes("7abeebee") && url.includes("wrk_abc123"))).toBe(true);
   });
 
-  it("sends Cookie header", async () => {
+  it("sends Cookie header and normalizes raw tokens", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       if (url.includes("_server") && url.includes("def399")) {
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
       }
-      if (url.includes("/go")) return new Response(MOCK_USAGE_HTML, { status: 200 });
+      if (url.includes("7abeebee")) return new Response(MOCK_USAGE_HTML, { status: 200 });
       return new Response(MOCK_ZEN_HTML, { status: 200 });
     });
 
@@ -120,15 +120,13 @@ describe("fetchOpenCodeGoMetrics", () => {
 
   it("does not follow redirects for Cookie-authenticated requests", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      expect(init.redirect).toBe("manual");
       if (url.includes("_server") && url.includes("def399")) {
-        expect(init.redirect).toBe("manual");
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
       }
-      if (url.includes("/go")) {
-        expect(init.redirect).toBe("manual");
+      if (url.includes("7abeebee")) {
         return new Response(MOCK_USAGE_HTML, { status: 200 });
       }
-      expect(init.redirect).toBe("manual");
       return new Response(MOCK_ZEN_HTML, { status: 200 });
     });
 
@@ -140,7 +138,7 @@ describe("fetchOpenCodeGoMetrics", () => {
       if (url.includes("_server") && url.includes("def399")) {
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
       }
-      if (url.includes("/go")) return new Response(MOCK_USAGE_HTML, { status: 200 });
+      if (url.includes("7abeebee")) return new Response(MOCK_USAGE_HTML, { status: 200 });
       return new Response(MOCK_ZEN_HTML, { status: 200 });
     });
 
@@ -175,7 +173,7 @@ describe("fetchOpenCodeGoMetrics", () => {
         if (attempts === 1) return new Response("Unavailable", { status: 503 });
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
       }
-      if (url.includes("/go")) return new Response(MOCK_USAGE_HTML, { status: 200 });
+      if (url.includes("7abeebee")) return new Response(MOCK_USAGE_HTML, { status: 200 });
       return new Response(MOCK_ZEN_HTML, { status: 200 });
     });
 
@@ -270,8 +268,10 @@ describe("fetchOpenCodeGoMetrics", () => {
     ["rolling reset", `page content "usagePercent": 72 more content`],
   ])("throws when required %s is absent", async (_field, body) => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server")) return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      if (url.includes("/go")) return new Response(body, { status: 200 });
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("7abeebee")) return new Response(body, { status: 200 });
       return new Response("{}", { status: 200 });
     });
 

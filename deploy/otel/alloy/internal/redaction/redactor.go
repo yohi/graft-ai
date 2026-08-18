@@ -92,10 +92,15 @@ func isPayloadKey(key string) bool {
 
 func isSecretKey(key string) bool {
 	lower := strings.ToLower(key)
-	switch lower {
-	case "input_tokens", "output_tokens", "total_tokens", "cost_usd", "duration_ms",
-		"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.total_tokens", "gen_ai.usage.cost_usd":
-		return false
+	for target, aliases := range NumericAliases {
+		if lower == target {
+			return false
+		}
+		for _, alias := range aliases {
+			if lower == alias {
+				return false
+			}
+		}
 	}
 	for _, marker := range []string{"authorization", "api_key", "api-key", "apikey", "secret", "token", "password", "credential"} {
 		if strings.Contains(lower, marker) {
@@ -103,6 +108,17 @@ func isSecretKey(key string) bool {
 		}
 	}
 	return false
+}
+
+// NumericAliases maps canonical span-log numeric field names to the attribute
+// keys that may carry their values. These keys are excluded from secret
+// redaction and are projected as numbers by the span-log projector.
+var NumericAliases = map[string][]string{
+	"input_tokens":  {"input_tokens", "gen_ai.usage.input_tokens"},
+	"output_tokens": {"output_tokens", "gen_ai.usage.output_tokens"},
+	"total_tokens":  {"total_tokens", "gen_ai.usage.total_tokens"},
+	"cost_usd":      {"cost_usd", "gen_ai.usage.cost_usd"},
+	"duration_ms":   {"duration_ms", "gen_ai.duration_ms"},
 }
 
 func redactAttribute(key string, value json.RawMessage) json.RawMessage {
@@ -150,7 +166,16 @@ type invalidJSONError struct{}
 
 func (*invalidJSONError) Error() string { return "redaction: invalid JSON" }
 
+const maxJSONDepth = 64
+
 func redactJSON(value []byte) (json.RawMessage, error) {
+	return redactJSONAtDepth(value, 0)
+}
+
+func redactJSONAtDepth(value []byte, depth int) (json.RawMessage, error) {
+	if depth > maxJSONDepth {
+		return nil, errInvalidJSON
+	}
 	trimmed := bytes.TrimSpace(value)
 	if len(trimmed) == 0 || !json.Valid(trimmed) {
 		return nil, errInvalidJSON
@@ -167,7 +192,7 @@ func redactJSON(value []byte) (json.RawMessage, error) {
 				clean[key] = json.RawMessage(`"[REDACTED]"`)
 				continue
 			}
-			redacted, err := redactJSON(child)
+			redacted, err := redactJSONAtDepth(child, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +206,7 @@ func redactJSON(value []byte) (json.RawMessage, error) {
 		}
 		clean := make([]json.RawMessage, len(array))
 		for index, child := range array {
-			redacted, err := redactJSON(child)
+			redacted, err := redactJSONAtDepth(child, depth+1)
 			if err != nil {
 				return nil, err
 			}

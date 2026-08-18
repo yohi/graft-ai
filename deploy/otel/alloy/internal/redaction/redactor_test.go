@@ -117,3 +117,18 @@ func rawJSON(t *testing.T, value string) json.RawMessage {
 	}
 	return json.RawMessage(value)
 }
+
+func TestRedactor_rejects_deeply_nested_payload(t *testing.T) {
+	deep := []byte(`{"a":` + strings.Repeat(`{"b":`, maxJSONDepth+1) + `null` + strings.Repeat(`}`, maxJSONDepth+1) + `}`)
+	span := Span{Attributes: map[string]json.RawMessage{
+		"gen_ai.prompt_json": deep,
+	}}
+
+	redacted, status := NewRedactor().Redact(span)
+	if !status.PayloadDropped || status.PayloadDropReason != "redaction_failure" {
+		t.Fatalf("status = %#v, want redaction_failure", status)
+	}
+	if _, ok := redacted.Attributes["gen_ai.prompt_json"]; ok {
+		t.Fatalf("deeply nested payload was preserved")
+	}
+}

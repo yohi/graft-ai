@@ -2,18 +2,19 @@
   "dashboard": {
     "id": null,
     "uid": "graft-ai-provider-metrics",
-    "title": "graft-ai — AI Provider Usage & Costs",
-    "description": "Usage, costs, and rate limit resets for OpenAI API, Codex, and OpenCodeGo via graft-ai",
+    "title": "graft-ai — AI Provider Usage & Rate Limits",
+    "description": "Unified dashboard for Ollama Cloud, Codex, OpenCodeGo, and OpenAI API usage, costs, and rate limit resets via graft-ai",
     "tags": [
       "graft-ai",
-      "openai",
+      "ollama-cloud",
       "codex",
       "opencodego",
+      "openai",
       "prometheus"
     ],
     "timezone": "browser",
     "schemaVersion": 39,
-    "version": 1,
+    "version": 2,
     "refresh": "5m",
     "time": {
       "from": "now-24h",
@@ -27,7 +28,7 @@
       {
         "id": 100,
         "type": "row",
-        "title": "OpenAI API (Platform)",
+        "title": "Ollama Cloud (Rate Limits)",
         "gridPos": {
           "x": 0,
           "y": 0,
@@ -40,7 +41,7 @@
       {
         "id": 1,
         "type": "stat",
-        "title": "OpenAI Today Cost",
+        "title": "Ollama Session Reset In",
         "gridPos": {
           "x": 0,
           "y": 1,
@@ -71,20 +72,20 @@
               "mode": "absolute",
               "steps": [
                 {
-                  "color": "green",
+                  "color": "red",
                   "value": null
                 },
                 {
                   "color": "yellow",
-                  "value": 5
+                  "value": 3600
                 },
                 {
-                  "color": "red",
-                  "value": 20
+                  "color": "green",
+                  "value": 14400
                 }
               ]
             },
-            "unit": "currencyUSD"
+            "unit": "dthms"
           }
         },
         "targets": [
@@ -93,8 +94,8 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "sum(openai_api_cost_usd)",
-            "legendFormat": "Total Cost",
+            "expr": "ollama_cloud_reset_seconds_remaining{period=\"session\"}",
+            "legendFormat": "Session",
             "refId": "A"
           }
         ]
@@ -102,7 +103,7 @@
       {
         "id": 2,
         "type": "stat",
-        "title": "OpenAI Requests (24h)",
+        "title": "Ollama Weekly Reset In",
         "gridPos": {
           "x": 6,
           "y": 1,
@@ -127,9 +128,26 @@
         "fieldConfig": {
           "defaults": {
             "color": {
-              "mode": "palette-classic"
+              "mode": "thresholds"
             },
-            "unit": "short"
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 86400
+                },
+                {
+                  "color": "green",
+                  "value": 172800
+                }
+              ]
+            },
+            "unit": "dtdhms"
           }
         },
         "targets": [
@@ -138,16 +156,16 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "sum(openai_api_requests)",
-            "legendFormat": "Requests",
+            "expr": "ollama_cloud_reset_seconds_remaining{period=\"weekly\"}",
+            "legendFormat": "Weekly",
             "refId": "A"
           }
         ]
       },
       {
         "id": 3,
-        "type": "stat",
-        "title": "OpenAI Input / Output Tokens",
+        "type": "gauge",
+        "title": "Ollama Session Progress",
         "gridPos": {
           "x": 12,
           "y": 1,
@@ -165,16 +183,34 @@
             ]
           },
           "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
             "color": {
-              "mode": "palette-classic"
+              "mode": "thresholds"
             },
-            "unit": "short"
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.75
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
+              ]
+            },
+            "unit": "percentunit"
           }
         },
         "targets": [
@@ -183,25 +219,16 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "sum(openai_api_input_tokens)",
-            "legendFormat": "Input Tokens",
+            "expr": "ollama_cloud_reset_progress_ratio{period=\"session\"}",
+            "legendFormat": "Session",
             "refId": "A"
-          },
-          {
-            "datasource": {
-              "type": "prometheus",
-              "uid": "grafanacloud-prom"
-            },
-            "expr": "sum(openai_api_output_tokens)",
-            "legendFormat": "Output Tokens",
-            "refId": "B"
           }
         ]
       },
       {
         "id": 4,
-        "type": "stat",
-        "title": "OpenAI Cached Tokens",
+        "type": "gauge",
+        "title": "Ollama Weekly Progress",
         "gridPos": {
           "x": 18,
           "y": 1,
@@ -219,16 +246,34 @@
             ]
           },
           "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
             "color": {
-              "mode": "palette-classic"
+              "mode": "thresholds"
             },
-            "unit": "short"
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.75
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
+              ]
+            },
+            "unit": "percentunit"
           }
         },
         "targets": [
@@ -237,8 +282,8 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "sum(openai_api_cached_tokens)",
-            "legendFormat": "Cached Tokens",
+            "expr": "ollama_cloud_reset_progress_ratio{period=\"weekly\"}",
+            "legendFormat": "Weekly",
             "refId": "A"
           }
         ]
@@ -702,6 +747,225 @@
             },
             "expr": "opencodego_zen_balance_usd",
             "legendFormat": "Zen Balance",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 400,
+        "type": "row",
+        "title": "OpenAI API (Platform & Costs)",
+        "gridPos": {
+          "x": 0,
+          "y": 15,
+          "w": 24,
+          "h": 1
+        },
+        "collapsed": false,
+        "panels": []
+      },
+      {
+        "id": 13,
+        "type": "stat",
+        "title": "OpenAI Today Cost",
+        "gridPos": {
+          "x": 0,
+          "y": 16,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 5
+                },
+                {
+                  "color": "red",
+                  "value": 20
+                }
+              ]
+            },
+            "unit": "currencyUSD"
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum(openai_api_cost_usd)",
+            "legendFormat": "Total Cost",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "type": "stat",
+        "title": "OpenAI Requests (24h)",
+        "gridPos": {
+          "x": 6,
+          "y": 16,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "short"
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum(openai_api_requests)",
+            "legendFormat": "Requests",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "type": "stat",
+        "title": "OpenAI Input / Output Tokens",
+        "gridPos": {
+          "x": 12,
+          "y": 16,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "short"
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum(openai_api_input_tokens)",
+            "legendFormat": "Input Tokens",
+            "refId": "A"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum(openai_api_output_tokens)",
+            "legendFormat": "Output Tokens",
+            "refId": "B"
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "type": "stat",
+        "title": "OpenAI Cached Tokens",
+        "gridPos": {
+          "x": 18,
+          "y": 16,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "short"
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "sum(openai_api_cached_tokens)",
+            "legendFormat": "Cached Tokens",
             "refId": "A"
           }
         ]

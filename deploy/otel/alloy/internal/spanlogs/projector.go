@@ -43,7 +43,7 @@ func (Projector) ProjectRequestSpan(span redaction.RedactedSpan) (JSONLogRecord,
 	for _, field := range []string{"model", "provider", "status", "status_code", "gateway", "env"} {
 		copyAttribute(record.Fields, span.Attributes, field, field)
 	}
-	for label := range map[string]struct{}{"model": {}, "status_code": {}, "env": {}, "gateway": {}} {
+	for _, label := range []string{"model", "status_code", "env", "gateway"} {
 		if value, ok := attributeString(span.Attributes, label); ok && value != "" {
 			record.Labels[label] = value
 		}
@@ -62,7 +62,7 @@ func (Projector) ProjectRequestSpan(span redaction.RedactedSpan) (JSONLogRecord,
 		}
 		record.Fields[target] = number
 	}
-	if _, ok := record.Fields["duration_ms"]; !ok && span.EndUnixNano >= span.StartUnixNano && span.EndUnixNano > 0 {
+	if _, ok := record.Fields["duration_ms"]; !ok && span.StartUnixNano > 0 && span.EndUnixNano >= span.StartUnixNano && span.EndUnixNano > 0 {
 		duration := float64(span.EndUnixNano-span.StartUnixNano) / float64(1_000_000)
 		record.Fields["duration_ms"] = rawNumber(duration)
 	}
@@ -72,20 +72,41 @@ func (Projector) ProjectRequestSpan(span redaction.RedactedSpan) (JSONLogRecord,
 		record.Fields["payload_dropped"] = json.RawMessage("true")
 		record.Fields["payload_drop_reason"] = rawString(span.Status.PayloadDropReason)
 	}
-	if dropReason != DropReasonNone {
+	if dropReason != DropReasonNone && record.Fields["payload_drop_reason"] == nil {
 		record.Fields["payload_dropped"] = json.RawMessage("true")
 		record.Fields["payload_drop_reason"] = rawString(string(dropReason))
 	}
 	return record, dropReason
 }
-
-var numericAliases = map[string][]string{
-	"input_tokens":  {"input_tokens", "gen_ai.usage.input_tokens"},
-	"output_tokens": {"output_tokens", "gen_ai.usage.output_tokens"},
-	"total_tokens":  {"total_tokens", "gen_ai.usage.total_tokens"},
-	"cost_usd":      {"cost_usd", "gen_ai.usage.cost_usd"},
-	"duration_ms":   {"duration_ms", "gen_ai.duration_ms"},
+func (Projector) AllowlistedFields() []string {
+	return []string{
+		"trace_id",
+		"span_id",
+		"request_id",
+		"model",
+		"provider",
+		"status",
+		"status_code",
+		"gateway",
+		"env",
+		"input_tokens",
+		"output_tokens",
+		"total_tokens",
+		"cost_usd",
+		"duration_ms",
+		"prompt",
+		"completion",
+		"payload_truncated",
+		"payload_dropped",
+		"payload_drop_reason",
+	}
 }
+
+func (Projector) LokiLabels() []string {
+	return []string{"model", "status_code", "env", "gateway"}
+}
+
+var numericAliases = redaction.NumericAliases
 
 func copyAttribute(fields map[string]json.RawMessage, attributes map[string]json.RawMessage, target string, source string) {
 	if value, ok := attributes[source]; ok {

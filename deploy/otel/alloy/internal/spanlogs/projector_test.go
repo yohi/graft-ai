@@ -86,3 +86,64 @@ func TestProjector_drops_invalid_numeric_field_without_invalid_json(t *testing.T
 func raw(value string) json.RawMessage {
 	return json.RawMessage(value)
 }
+
+func TestProjector_requires_positive_start_timestamp_for_duration(t *testing.T) {
+	span := redaction.RedactedSpan{Span: redaction.Span{
+		TraceID:       "00112233445566778899aabbccddeeff",
+		StartUnixNano: 0,
+		EndUnixNano:   1_000_000,
+		Attributes: map[string]json.RawMessage{
+			"model": raw(`"llama"`),
+		},
+	}}
+
+	record, _ := NewProjector().ProjectRequestSpan(span)
+	if _, ok := record.Fields["duration_ms"]; ok {
+		t.Fatalf("duration_ms was projected with unset start timestamp")
+	}
+}
+
+func TestProjector_preserves_redaction_failure_drop_reason(t *testing.T) {
+	span := redaction.RedactedSpan{
+		Span: redaction.Span{
+			TraceID: "00112233445566778899aabbccddeeff",
+			Attributes: map[string]json.RawMessage{
+				"model":                 raw(`"llama"`),
+				"gen_ai.usage.cost_usd": raw(`"NaN"`),
+			},
+		},
+		Status: redaction.RedactionStatus{PayloadDropped: true, PayloadDropReason: "redaction_failure"},
+	}
+
+	record, reason := NewProjector().ProjectRequestSpan(span)
+	if reason != DropReasonNumericFieldInvalid {
+		t.Fatalf("drop reason = %q, want numeric_field_invalid", reason)
+	}
+	if string(record.Fields["payload_drop_reason"]) != `"redaction_failure"` {
+		t.Fatalf("payload_drop_reason = %s, want redaction_failure", record.Fields["payload_drop_reason"])
+	}
+}
+
+func TestProjector_labels_are_deterministic(t *testing.T) {
+	span := redaction.RedactedSpan{Span: redaction.Span{
+		Attributes: map[string]json.RawMessage{
+			"model":       raw(`"llama"`),
+			"status_code": raw(`200`),
+			"env":         raw(`"prod"`),
+			"gateway":     raw(`"main"`),
+		},
+	}}
+
+	wantLabels := map[string]string{
+		"model":       "llama",
+		"status_code": "200",
+		"env":         "prod",
+		"gateway":     "main",
+	}
+	for i := 0; i < 10; i++ {
+		record, _ := NewProjector().ProjectRequestSpan(span)
+		if !reflect.DeepEqual(record.Labels, wantLabels) {
+			t.Fatalf("labels = %#v, want %#v", record.Labels, wantLabels)
+		}
+	}
+}

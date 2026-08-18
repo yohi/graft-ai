@@ -148,32 +148,30 @@ function extractFromRscHydration(html: string): UsageRecords | null {
 
 function extractFromSolidStart(html: string): UsageRecords | null {
   const records: Record<string, unknown>[] = [];
+  const scriptChunks = html.split(/<\/\s*script\s*>/i);
 
-  // 1. JSON.parse("...") calls inside scripts
-  for (const match of html.matchAll(/JSON\.parse\(\s*(["'])([\s\S]*?)\1\s*\)/gi)) {
-    const raw = match[2];
-    if (raw === undefined) continue;
-    try {
-      const parsed: unknown = JSON.parse(JSON.parse(`"${raw.replace(/"/g, '\\"')}"`));
-      const found = findUsageRecords(parsed);
-      if (found !== null) records.push(...found);
-    } catch {
-      continue;
-    }
-  }
+  for (const chunk of scriptChunks) {
+    const scriptIndex = chunk.toLowerCase().lastIndexOf("<script");
+    if (scriptIndex === -1) continue;
+    const bodyIndex = chunk.indexOf(">", scriptIndex);
+    if (bodyIndex === -1) continue;
+    const script = chunk.slice(bodyIndex + 1).trim();
+    if (script.length === 0) continue;
 
-  // 2. SolidStart resource streaming / assignments
-  for (const match of html.matchAll(
-    /(?:\.resolve|\$R\[\d+\]\s*=|_\$HY\.r\[[^\]]+\]\s*=)\s*(\{[^{}]+\}|\[[^\[\]]+\])/gi,
-  )) {
-    const raw = match[1];
-    if (raw === undefined) continue;
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      const found = findUsageRecords(parsed);
-      if (found !== null) records.push(...found);
-    } catch {
-      continue;
+    // Look for JSON object or array chunks inside the script
+    const jsonMatches = script.match(
+      /\{[^{}]*"(?:usagePercent|rollingUsagePercent|usedPercent|weeklyUsagePercent|monthlyUsagePercent|usage|utilization|resetInSec)"[^{}]*\}/g,
+    );
+    if (jsonMatches !== null) {
+      for (const raw of jsonMatches) {
+        try {
+          const parsed: unknown = JSON.parse(raw);
+          const found = findUsageRecords(parsed);
+          if (found !== null) records.push(...found);
+        } catch {
+          continue;
+        }
+      }
     }
   }
 
@@ -289,11 +287,13 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   if (records === null) {
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim();
     const scripts = Array.from(html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi))
-      .map((m) => m[1]?.replace(/\s+/g, " ").trim().slice(0, 100))
+      .map((m) => m[1]?.replace(/\s+/g, " ").trim().slice(0, 150))
       .filter((s): s is string => typeof s === "string" && s.length > 0)
-      .slice(0, 3);
+      .slice(0, 10);
     const scriptsSummary =
-      scripts.length > 0 ? ` [scripts: ${scripts.join(" | ")}]` : " [no inline scripts]";
+      scripts.length > 0
+        ? ` [${scripts.length} scripts: ${scripts.join(" || ")}]`
+        : " [no inline scripts]";
     const cleanSnippet = html
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")

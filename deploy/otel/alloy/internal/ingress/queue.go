@@ -11,10 +11,11 @@ import (
 var ErrInvalidQueueCapacity = errors.New("otel ingress: invalid queue capacity")
 
 type Envelope struct {
-	TraceID     string
-	Payload     []byte
-	ContentType string
-	Span        redaction.RedactedSpan
+	TraceID         string
+	Payload         []byte
+	ContentType     string
+	SamplingRatePPM uint32
+	Span            redaction.RedactedSpan
 }
 
 type IngressQueue struct {

@@ -153,6 +153,11 @@ test("matches every fixed SHA-256 sampling fixture with exact integer arithmetic
   }
 });
 
+test("pins sampling rejection fixtures", () => {
+  assert.deepEqual(sampling.invalidRates, ["-0.1", "1.000001", "2"]);
+  assert.equal(sampling.priorityOverridesRejected, true);
+});
+
 test("pins canonical metrics, labels, and duration buckets", () => {
   assert.deepEqual(contracts.metrics.canonicalNames, [
     "ai_gateway_requests_total",

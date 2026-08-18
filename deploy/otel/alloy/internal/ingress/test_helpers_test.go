@@ -44,6 +44,7 @@ func newTestReceiver(t *testing.T, queueCapacity int) (*Receiver, *IngressQueue)
 		RateLimiter:           limiter,
 		MaxBodyBytes:          8 * 1024 * 1024,
 		MaxConcurrentRequests: 100,
+		SamplingRatePPM:       500_000,
 	})
 	if err != nil {
 		t.Fatalf("new receiver: %v", err)

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/ingress"
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/sampling"
 )
 
 const (
@@ -28,14 +29,16 @@ const (
 	defaultForwarderCount   = 4
 	defaultForwardTimeout   = 10 * time.Second
 	defaultForwardURL       = "http://localhost:12345/v1/traces"
+	defaultSamplingRate     = "1"
 )
 
 type config struct {
-	address       string
-	trustedCIDRs  []string
-	proxySecret   string
-	hmacKeySource ingress.SecretSource
-	forwardURL    string
+	address         string
+	trustedCIDRs    []string
+	proxySecret     string
+	hmacKeySource   ingress.SecretSource
+	forwardURL      string
+	samplingRatePPM uint32
 }
 
 func main() {
@@ -81,6 +84,7 @@ func run() error {
 		RateLimiter:           rateLimiter,
 		MaxBodyBytes:          defaultMaxBodyBytes,
 		MaxConcurrentRequests: defaultMaxConcurrent,
+		SamplingRatePPM:       cfg.samplingRatePPM,
 	})
 	if err != nil {
 		return fmt.Errorf("configure receiver: %w", err)
@@ -123,12 +127,17 @@ func loadConfig() (config, error) {
 	if strings.TrimSpace(hmacKeySource.FilePath) == "" && strings.TrimSpace(os.Getenv(hmacKeySource.EnvironmentName)) == "" {
 		return config{}, errors.New("OTEL_RATE_LIMIT_HMAC_KEY_FILE or OTEL_RATE_LIMIT_HMAC_KEY is required")
 	}
+	samplingRatePPM, err := sampling.ParseRatePPM(envOrDefault("OTEL_SAMPLING_RATE", defaultSamplingRate))
+	if err != nil {
+		return config{}, fmt.Errorf("parse OTEL_SAMPLING_RATE: %w", err)
+	}
 	return config{
-		address:       envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
-		trustedCIDRs:  trustedCIDRs,
-		proxySecret:   proxySecret,
-		hmacKeySource: hmacKeySource,
-		forwardURL:    envOrDefault("OTEL_ALLOY_FORWARD_URL", defaultForwardURL),
+		address:         envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
+		trustedCIDRs:    trustedCIDRs,
+		proxySecret:     proxySecret,
+		hmacKeySource:   hmacKeySource,
+		forwardURL:      envOrDefault("OTEL_ALLOY_FORWARD_URL", defaultForwardURL),
+		samplingRatePPM: samplingRatePPM,
 	}, nil
 }
 

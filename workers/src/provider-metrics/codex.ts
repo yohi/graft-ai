@@ -140,7 +140,12 @@ export async function fetchCodexMetrics(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json",
-    "User-Agent": "graft-ai",
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+    Origin: "https://chatgpt.com",
+    Referer: "https://chatgpt.com/",
+    "OpenAI-Beta": "codex-1",
+    originator: "Codex Desktop",
   };
   if (accountId) {
     headers["ChatGPT-Account-Id"] = accountId;

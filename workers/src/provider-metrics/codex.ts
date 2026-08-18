@@ -1,8 +1,7 @@
 import type { CodexFetchResult } from "./types";
 import { getWithRetry } from "../http-retry";
 
-const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const DEFAULT_BASE_URL = "https://chatgpt.com";
 const TIMEOUT_MS = 30000;
 
 type WindowSnapshot = {
@@ -107,12 +106,13 @@ function parseResetCreditsResponse(value: unknown): CodexFetchResult["resetCredi
 }
 
 async function fetchResetCredits(
+  baseUrl: string,
   headers: Readonly<Record<string, string>>,
   fetchFn: typeof fetch,
 ): Promise<CodexFetchResult["resetCredits"]> {
   try {
     const response = await getWithRetry({
-      url: RESET_CREDITS_URL,
+      url: `${baseUrl}/backend-api/wham/rate-limit-reset-credits`,
       headers: { ...headers, "OpenAI-Beta": "codex-1", originator: "Codex Desktop" },
       fetchFn,
       logLabel: "Codex reset credits fetch",
@@ -136,7 +136,9 @@ export async function fetchCodexMetrics(
   accessToken: string,
   accountId?: string,
   fetchFn: typeof fetch = fetch,
+  proxyUrlOrBaseUrl?: string,
 ): Promise<CodexFetchResult> {
+  const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json",
@@ -152,7 +154,7 @@ export async function fetchCodexMetrics(
   }
 
   const response = await getWithRetry({
-    url: USAGE_URL,
+    url: `${baseUrl}/backend-api/wham/usage`,
     headers,
     fetchFn,
     logLabel: "Codex usage fetch",
@@ -173,7 +175,7 @@ export async function fetchCodexMetrics(
 
   const body: unknown = await response.json();
   const data = parseUsageResponse(body);
-  const resetCredits = await fetchResetCredits(headers, fetchFn);
+  const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
 
   return {
     sessionUsageRatio: data.primaryWindow.usedPercent / 100,

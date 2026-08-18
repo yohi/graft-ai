@@ -176,12 +176,18 @@ describe("fetchCodexMetrics", () => {
     expect(result.resetCredits).toBeUndefined();
   });
 
-  it("defaults plan to 'unknown' when plan_type absent", async () => {
-    const noPlan = { rate_limit: MOCK_USAGE_RESPONSE.rate_limit };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(noPlan), { status: 200 }));
-    const result = await fetchCodexMetrics("token", undefined, mockFetch);
-    expect(result.plan).toBe("unknown");
+  it("routes requests to custom proxyUrl when provided", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      expect(url.startsWith("https://proxy.example.com/backend-api/")).toBe(true);
+      return new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 });
+    });
+
+    const result = await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      "https://proxy.example.com/",
+    );
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
   });
 });

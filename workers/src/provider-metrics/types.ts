@@ -13,6 +13,8 @@ export interface ProviderMetricsEnv {
   // Codex OAuth
   CODEX_ACCESS_TOKEN?: string;
   CODEX_ACCOUNT_ID?: string; // optional workspace account id
+  CODEX_PROXY_URL?: string; // optional residential/forward proxy URL
+  CODEX_API_BASE_URL?: string; // optional custom base URL (default: https://chatgpt.com)
 
   // OpenCodeGo
   OPENCODEGO_SESSION_COOKIE?: string;

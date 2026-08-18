@@ -1,5 +1,10 @@
 import type { OpenCodeGoFetchResult } from "./types";
-import { extractWorkspaceId, extractZenBalance, parseOpenCodeGoUsage } from "./opencodego-parser";
+import {
+  extractWorkspaceId,
+  extractZenBalance,
+  extractZenBilling,
+  parseOpenCodeGoUsage,
+} from "./opencodego-parser";
 import { getWithRetry } from "../http-retry";
 
 const BASE_URL = "https://opencode.ai";
@@ -34,6 +39,11 @@ function normalizeCookie(raw: string): string {
 
 function serverInstanceHeader(): string {
   return `server-fn:${crypto.randomUUID()}`;
+}
+
+function isNullPayload(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === "null" || trimmed.endsWith("=[],null)") || trimmed.endsWith("=[], null)");
 }
 
 async function fetchServerRPC(
@@ -112,18 +122,63 @@ export async function fetchOpenCodeGoMetrics(
   const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
 
   // 1. Fetch subscription usage via SolidStart server RPC
-  let usageText: string;
+  let subscriptionText = "";
+  let subscriptionFetchFailed = false;
   try {
-    usageText = await fetchServerRPC(SUBSCRIPTION_SERVER_ID, [workspaceId], context, workspaceId);
-  } catch (error) {
-    // If subscription RPC fails, try scraping fallback or rethrow
-    const errDetail = error instanceof Error ? error.message : String(error);
-    throw new OpenCodeGoFetchError(`OpenCodeGo subscription fetch failed: ${errDetail}`);
+    subscriptionText = await fetchServerRPC(
+      SUBSCRIPTION_SERVER_ID,
+      [workspaceId],
+      context,
+      workspaceId,
+    );
+  } catch {
+    subscriptionFetchFailed = true;
   }
 
-  const usage = parseOpenCodeGoUsage(usageText);
-  return {
-    ...usage,
-    zenBalanceUSD: await fetchZenBalance(workspaceId, context),
-  };
+  // 2. If subscription payload is present and not null, try parsing usage
+  if (!subscriptionFetchFailed && !isNullPayload(subscriptionText)) {
+    try {
+      const usage = parseOpenCodeGoUsage(subscriptionText);
+      return {
+        ...usage,
+        zenBalanceUSD: await fetchZenBalance(workspaceId, context),
+      };
+    } catch {
+      // Fall through to pay-as-you-go / billing fallback
+    }
+  }
+
+  // 3. Fallback: Fetch pay-as-you-go / Zen billing usage
+  try {
+    const billingText = await fetchServerRPC(
+      BILLING_SERVER_ID,
+      [workspaceId],
+      context,
+      workspaceId,
+    );
+    const billing = extractZenBilling(billingText);
+    if (billing !== null) {
+      const limit = billing.monthlyLimitUSD;
+      const usage = billing.monthlyUsageUSD;
+      const ratio = limit !== null && limit > 0 ? Math.min(1.0, usage / limit) : 0;
+      return {
+        rollingUsageRatio: ratio,
+        monthlyUsageRatio: ratio,
+        rollingResetSeconds: 0,
+        monthlyResetSeconds: 0,
+        zenBalanceUSD: billing.balanceUSD,
+      };
+    }
+  } catch {
+    // Both failed
+  }
+
+  if (subscriptionText.length > 0) {
+    // If we have subscriptionText, parse it to throw the detailed error with snippet
+    parseOpenCodeGoUsage(subscriptionText);
+  }
+
+  throw new OpenCodeGoFetchError(
+    `OpenCodeGo: Could not resolve subscription or billing usage for workspace ${workspaceId}`,
+  );
 }

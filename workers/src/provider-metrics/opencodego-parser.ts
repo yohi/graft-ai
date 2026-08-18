@@ -313,11 +313,88 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   };
 }
 
+export type OpenCodeZenBilling = {
+  readonly monthlyUsageUSD: number;
+  readonly monthlyLimitUSD: number | null;
+  readonly balanceUSD: number | null;
+  readonly hasSubscription: boolean;
+};
+
+const USD_SCALE = 100_000_000.0;
+
 export function extractWorkspaceId(html: string): string | null {
   return html.match(/(wrk_[a-zA-Z0-9]+)/)?.[1] ?? null;
 }
 
+export function extractZenBilling(text: string): OpenCodeZenBilling | null {
+  // 1. Try parsing JSON structure
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const billing = findBillingInObject(parsed);
+    if (billing !== null) return billing;
+  } catch {
+    // Continue to regex scanning
+  }
+
+  // 2. Scan SolidStart $R[...] stream / raw JS text
+  const monthlyUsageMatch = text.match(
+    /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)/,
+  );
+  if (monthlyUsageMatch === null) return null;
+
+  const rawUsage = Number(monthlyUsageMatch[1]);
+  if (!Number.isFinite(rawUsage)) return null;
+
+  const monthlyLimitMatch = text.match(
+    /(?:"monthlyLimit"|monthlyLimit)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)/,
+  );
+  const rawLimit = monthlyLimitMatch !== null ? Number(monthlyLimitMatch[1]) : null;
+
+  const balanceMatch = text.match(
+    /(?:"balance"|balance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)/,
+  );
+  const rawBalance = balanceMatch !== null ? Number(balanceMatch[1]) : null;
+
+  const hasSub = text.includes('"subscription"') && !text.match(/"subscription"\s*:\s*null/);
+
+  return {
+    monthlyUsageUSD: rawUsage / USD_SCALE,
+    monthlyLimitUSD: rawLimit !== null && Number.isFinite(rawLimit) ? rawLimit : null,
+    balanceUSD: rawBalance !== null && Number.isFinite(rawBalance) ? rawBalance / USD_SCALE : null,
+    hasSubscription: Boolean(hasSub),
+  };
+}
+
+function findBillingInObject(value: unknown): OpenCodeZenBilling | null {
+  if (!isRecord(value)) return null;
+
+  if (typeof value["monthlyUsage"] === "number") {
+    const rawUsage = value["monthlyUsage"];
+    const rawLimit = typeof value["monthlyLimit"] === "number" ? value["monthlyLimit"] : null;
+    const rawBalance = typeof value["balance"] === "number" ? value["balance"] : null;
+    const hasSub = value["subscription"] !== null && value["subscription"] !== undefined;
+
+    return {
+      monthlyUsageUSD: rawUsage / USD_SCALE,
+      monthlyLimitUSD: rawLimit,
+      balanceUSD: rawBalance !== null ? rawBalance / USD_SCALE : null,
+      hasSubscription: hasSub,
+    };
+  }
+
+  for (const child of Object.values(value)) {
+    const found = findBillingInObject(child);
+    if (found !== null) return found;
+  }
+
+  return null;
+}
+
 export function extractZenBalance(html: string): number | null {
+  const billing = extractZenBilling(html);
+  if (billing?.balanceUSD !== null && billing?.balanceUSD !== undefined) {
+    return billing.balanceUSD;
+  }
   const value = html.match(/"zenBalance"\s*:\s*([^,\s}<]+)/)?.[1];
   if (value === undefined) return null;
   const balance = Number(value);

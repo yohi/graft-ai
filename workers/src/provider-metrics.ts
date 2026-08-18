@@ -70,7 +70,12 @@ export async function collectAndPushProviderMetrics(
       ? fetchOpenAIMetrics(openAiApiKey, historyDays, fetch, scheduledTime)
       : Promise.resolve(null),
     codexAccessToken !== undefined && codexAccessToken !== ""
-      ? fetchCodexMetrics(codexAccessToken, env.CODEX_ACCOUNT_ID)
+      ? fetchCodexMetrics(
+          codexAccessToken,
+          env.CODEX_ACCOUNT_ID,
+          fetch,
+          env.CODEX_PROXY_URL || env.CODEX_API_BASE_URL,
+        )
       : Promise.resolve(null),
     openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""
       ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID)

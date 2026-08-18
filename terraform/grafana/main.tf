@@ -21,14 +21,14 @@ data "grafana_cloud_stack" "this" {
 }
 
 # ------------------------------------------------------------------
-# Access Policy: logs:write scoped to this stack
+# Access Policy: logs:write + metrics:write scoped to this stack
 # ------------------------------------------------------------------
-resource "grafana_cloud_access_policy" "loki_write" {
+resource "grafana_cloud_access_policy" "telemetry_write" {
   provider     = grafana.cloud
   region       = data.grafana_cloud_stack.this.region_slug
-  name         = "graft-ai-loki-write"
-  display_name = "graft-ai-loki-write"
-  scopes       = ["logs:write"]
+  name         = "graft-ai-telemetry-write"
+  display_name = "graft-ai-telemetry-write"
+  scopes       = ["logs:write", "metrics:write"]
 
   realm {
     type       = "stack"
@@ -39,12 +39,12 @@ resource "grafana_cloud_access_policy" "loki_write" {
 # ------------------------------------------------------------------
 # Token for the Access Policy
 # ------------------------------------------------------------------
-resource "grafana_cloud_access_policy_token" "loki_write" {
+resource "grafana_cloud_access_policy_token" "telemetry_write" {
   provider         = grafana.cloud
   region           = data.grafana_cloud_stack.this.region_slug
-  access_policy_id = grafana_cloud_access_policy.loki_write.policy_id
-  name             = "graft-ai-loki-write"
-  display_name     = "graft-ai-loki-write"
+  access_policy_id = grafana_cloud_access_policy.telemetry_write.policy_id
+  name             = "graft-ai-telemetry-write"
+  display_name     = "graft-ai-telemetry-write"
   expires_at       = timeadd(timestamp(), "8760h")
 
   lifecycle {
@@ -53,7 +53,7 @@ resource "grafana_cloud_access_policy_token" "loki_write" {
 }
 
 # ------------------------------------------------------------------
-# Outputs — used by the setup script to register Wrangler secrets
+# Outputs — used by setup scripts and CI to configure secrets
 # ------------------------------------------------------------------
 output "grafana_loki_url" {
   description = "Grafana Cloud Loki push URL"
@@ -65,8 +65,29 @@ output "grafana_loki_username" {
   value       = tostring(data.grafana_cloud_stack.this.logs_user_id)
 }
 
+output "grafana_prometheus_url" {
+  description = "Grafana Cloud Prometheus push URL"
+  value       = data.grafana_cloud_stack.this.prometheus_url
+}
+
+output "grafana_prometheus_username" {
+  description = "Grafana Cloud Prometheus instance username (numeric ID)"
+  value       = tostring(data.grafana_cloud_stack.this.prometheus_user_id)
+}
+
+output "grafana_otlp_url" {
+  description = "Grafana Cloud OTLP gateway push URL"
+  value       = data.grafana_cloud_stack.this.otlp_url
+}
+
+output "grafana_access_policy_token" {
+  description = "Access Policy Token with logs:write and metrics:write"
+  value       = grafana_cloud_access_policy_token.telemetry_write.token
+  sensitive   = true
+}
+
 output "grafana_loki_write_token" {
-  description = "Access Policy Token for Loki write (logs:write)"
-  value       = grafana_cloud_access_policy_token.loki_write.token
+  description = "Alias for grafana_access_policy_token (backward compatibility)"
+  value       = grafana_cloud_access_policy_token.telemetry_write.token
   sensitive   = true
 }

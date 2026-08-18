@@ -63,7 +63,7 @@ function providerResponse(input: RequestInfo | URL): Response {
   if (url.includes("opencode.ai") && url.includes("def399")) {
     return new Response('<script>["wrk_test123"]</script>', { status: 200 });
   }
-  if (url.includes("opencode.ai") && url.includes("/go")) {
+  if (url.includes("opencode.ai") && url.includes("7abeebee")) {
     return new Response(
       '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"subscription":{"usagePercent":30,"resetInSec":3600}}}}</script>',
       { status: 200 },

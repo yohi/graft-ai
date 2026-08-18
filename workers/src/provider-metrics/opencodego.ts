@@ -4,6 +4,7 @@ import { getWithRetry } from "../http-retry";
 
 const BASE_URL = "https://opencode.ai";
 const WORKSPACES_SERVER_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
+const SUBSCRIPTION_SERVER_ID = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4";
 const BILLING_SERVER_ID = "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d";
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
@@ -23,103 +24,104 @@ class OpenCodeGoFetchError extends Error {
   }
 }
 
-async function get(
-  url: string,
-  context: FetchContext,
-  extraHeaders?: Readonly<Record<string, string>>,
-): Promise<Response> {
-  return getWithRetry({
-    url,
-    headers: {
-      Cookie: context.cookie,
-      "User-Agent": USER_AGENT,
-      Referer: BASE_URL,
-      Origin: BASE_URL,
-      ...extraHeaders,
-    },
-    fetchFn: context.fetchFn,
-    logLabel: "OpenCodeGo fetch",
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    perAttemptTimeoutMs: TIMEOUT_MS,
-    redirect: "manual",
-  });
-}
-
-async function discardResponse(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
+function normalizeCookie(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.includes("=")) {
+    return trimmed;
+  }
+  return `auth=${trimmed}; __Host-auth=${trimmed}`;
 }
 
 function serverInstanceHeader(): string {
   return `server-fn:${crypto.randomUUID()}`;
 }
 
-async function fetchWorkspaceId(context: FetchContext): Promise<string> {
-  const response = await get(`${BASE_URL}/_server?id=${WORKSPACES_SERVER_ID}`, context, {
-    "X-Server-Id": WORKSPACES_SERVER_ID,
-    "X-Server-Instance": serverInstanceHeader(),
-    Accept: "text/javascript, application/json, */*",
+async function fetchServerRPC(
+  serverId: string,
+  args: readonly unknown[] | null,
+  context: FetchContext,
+  refererWorkspaceId?: string,
+): Promise<string> {
+  const referer = refererWorkspaceId
+    ? `${BASE_URL}/workspace/${refererWorkspaceId}/billing`
+    : BASE_URL;
+
+  const url =
+    args !== null && args.length > 0
+      ? `${BASE_URL}/_server?id=${serverId}&args=${encodeURIComponent(JSON.stringify(args))}`
+      : `${BASE_URL}/_server?id=${serverId}`;
+
+  const response = await getWithRetry({
+    url,
+    headers: {
+      Cookie: context.cookie,
+      "X-Server-Id": serverId,
+      "X-Server-Instance": serverInstanceHeader(),
+      "User-Agent": USER_AGENT,
+      Origin: BASE_URL,
+      Referer: referer,
+      Accept: "text/javascript, application/json;q=0.9, */*;q=0.8",
+    },
+    fetchFn: context.fetchFn,
+    logLabel: `OpenCodeGo RPC [${serverId.slice(0, 8)}]`,
+    isRetryableStatus: (status) => status === 429 || status >= 500,
+    perAttemptTimeoutMs: TIMEOUT_MS,
+    redirect: "manual",
   });
+
   if (!response.ok) {
-    await discardResponse(response);
+    await response.body?.cancel().catch(() => undefined);
     if (response.status === 401 || response.status === 403) {
       throw new OpenCodeGoFetchError(
         `OpenCodeGo: HTTP ${response.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
       );
     }
-    throw new OpenCodeGoFetchError(`OpenCodeGo workspace fetch failed: HTTP ${response.status}`);
+    throw new OpenCodeGoFetchError(`OpenCodeGo RPC failed: HTTP ${response.status}`);
   }
 
-  const workspaceId = extractWorkspaceId(await response.text());
+  return response.text();
+}
+
+async function fetchWorkspaceId(context: FetchContext): Promise<string> {
+  const text = await fetchServerRPC(WORKSPACES_SERVER_ID, null, context);
+  const workspaceId = extractWorkspaceId(text);
   if (workspaceId === null) {
-    throw new OpenCodeGoFetchError("OpenCodeGo: Could not extract workspace ID from response");
+    throw new OpenCodeGoFetchError(
+      `OpenCodeGo: Could not extract workspace ID from response (response length: ${text.length})`,
+    );
   }
   return workspaceId;
 }
 
 async function fetchZenBalance(workspaceId: string, context: FetchContext): Promise<number | null> {
-  const args = encodeURIComponent(JSON.stringify([workspaceId]));
-  let response: Response;
   try {
-    response = await get(`${BASE_URL}/_server?id=${BILLING_SERVER_ID}&args=${args}`, context, {
-      "X-Server-Id": BILLING_SERVER_ID,
-      "X-Server-Instance": serverInstanceHeader(),
-      Accept: "text/javascript, application/json, */*",
-    });
-  } catch {
-    return null;
-  }
-  if (!response.ok) {
-    await discardResponse(response);
-    return null;
-  }
-  try {
-    return extractZenBalance(await response.text());
+    const text = await fetchServerRPC(BILLING_SERVER_ID, [workspaceId], context, workspaceId);
+    return extractZenBalance(text);
   } catch {
     return null;
   }
 }
 
 export async function fetchOpenCodeGoMetrics(
-  cookie: string,
+  rawCookie: string,
   workspaceIdOverride?: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<OpenCodeGoFetchResult> {
+  const cookie = normalizeCookie(rawCookie);
   const context: FetchContext = { cookie, fetchFn };
   const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
-  const usageResponse = await get(`${BASE_URL}/workspace/${workspaceId}/go`, context);
-  if (!usageResponse.ok) {
-    await discardResponse(usageResponse);
-    if (usageResponse.status === 401 || usageResponse.status === 403) {
-      throw new OpenCodeGoFetchError(
-        `OpenCodeGo: HTTP ${usageResponse.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
-      );
-    }
-    throw new OpenCodeGoFetchError(
-      `OpenCodeGo usage page fetch failed: HTTP ${usageResponse.status}`,
-    );
+
+  // 1. Fetch subscription usage via SolidStart server RPC
+  let usageText: string;
+  try {
+    usageText = await fetchServerRPC(SUBSCRIPTION_SERVER_ID, [workspaceId], context, workspaceId);
+  } catch (error) {
+    // If subscription RPC fails, try scraping fallback or rethrow
+    const errDetail = error instanceof Error ? error.message : String(error);
+    throw new OpenCodeGoFetchError(`OpenCodeGo subscription fetch failed: ${errDetail}`);
   }
 
-  const usage = parseOpenCodeGoUsage(await usageResponse.text());
+  const usage = parseOpenCodeGoUsage(usageText);
   return {
     ...usage,
     zenBalanceUSD: await fetchZenBalance(workspaceId, context),

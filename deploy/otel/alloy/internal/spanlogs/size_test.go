@@ -61,6 +61,48 @@ func TestSizer_truncates_both_payloads_with_utf8_safe_50_50_budget(t *testing.T)
 	}
 }
 
+func TestSizer_allocates_independent_proportional_budgets_for_asymmetric_payloads(t *testing.T) {
+	// Completion is 9x larger than prompt; budgets should reflect that ratio.
+	record := JSONLogRecord{Fields: map[string]json.RawMessage{
+		"trace_id":   raw(`"00112233445566778899aabbccddeeff"`),
+		"prompt":     json.RawMessage(strconv.Quote(strings.Repeat("p", 1000))),
+		"completion": json.RawMessage(strconv.Quote(strings.Repeat("c", 9000))),
+	}}
+
+	finalized, reason := NewSizer(1024).Finalize(record)
+	if reason != DropReasonNone {
+		t.Fatalf("drop reason = %q, want none", reason)
+	}
+	if len(finalized.Serialized) > 1024 {
+		t.Fatalf("serialized bytes = %d, exceeds %d", len(finalized.Serialized), 1024)
+	}
+
+	var prompt, completion string
+	if err := json.Unmarshal(finalized.Fields["prompt"], &prompt); err != nil {
+		t.Fatalf("decode prompt: %v", err)
+	}
+	if err := json.Unmarshal(finalized.Fields["completion"], &completion); err != nil {
+		t.Fatalf("decode completion: %v", err)
+	}
+	if !strings.HasSuffix(prompt, "[TRUNCATED]") || !strings.HasSuffix(completion, "[TRUNCATED]") {
+		t.Fatalf("expected both payloads truncated: promptSuffix=%v completionSuffix=%v", strings.HasSuffix(prompt, "[TRUNCATED]"), strings.HasSuffix(completion, "[TRUNCATED]"))
+	}
+
+	// The completion budget should be substantially larger than the prompt budget.
+	if len(completion) <= len(prompt)*2 {
+		t.Fatalf("completion budget too small: prompt=%d completion=%d", len(prompt), len(completion))
+	}
+}
+
+func TestSizer_jsonStringByteSize_accounts_for_html_escaping(t *testing.T) {
+	value := "a<b>c&d\u2028\u2029e"
+	got := jsonStringByteSize(value)
+	want := len(marshalString(value))
+	if got != want {
+		t.Fatalf("jsonStringByteSize(%q) = %d, want %d", value, got, want)
+	}
+}
+
 func TestSizer_uses_100_0_budget_when_only_one_payload_exists(t *testing.T) {
 	record := JSONLogRecord{Fields: map[string]json.RawMessage{
 		"trace_id": raw(`"00112233445566778899aabbccddeeff"`),

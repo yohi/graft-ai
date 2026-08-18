@@ -80,31 +80,38 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 		completionOriginalSize = completionRoot.encodedSize
 	}
 
-	var target int
+	var promptTarget, completionTarget int
 	switch payloadCount {
 	case 1:
-		target = remaining
+		if hasPrompt {
+			promptTarget = remaining
+		} else {
+			completionTarget = remaining
+		}
 	case 2:
 		total := promptOriginalSize + completionOriginalSize
 		if total == 0 {
-			target = remaining / 2
-		} else if hasPrompt {
-			target = remaining * promptOriginalSize / total
+			promptTarget = remaining / 2
+			completionTarget = remaining - promptTarget
 		} else {
-			target = remaining * completionOriginalSize / total
+			promptTarget = remaining * promptOriginalSize / total
+			completionTarget = remaining * completionOriginalSize / total
 		}
 	}
-	if target < 0 {
-		target = 0
+	if promptTarget < 0 {
+		promptTarget = 0
+	}
+	if completionTarget < 0 {
+		completionTarget = 0
 	}
 
 	for step := 0; step < 3; step++ {
 		candidate := cloneFields(metadata)
 		if hasPrompt {
-			candidate["prompt"], _ = promptRoot.truncate(target)
+			candidate["prompt"], _ = promptRoot.truncate(promptTarget)
 		}
 		if hasCompletion {
-			candidate["completion"], _ = completionRoot.truncate(target)
+			candidate["completion"], _ = completionRoot.truncate(completionTarget)
 		}
 		serialized, err = marshalFields(candidate)
 		if err == nil && len(serialized) <= maxBytes {
@@ -116,10 +123,26 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 			break
 		}
 		over := len(serialized) - maxBytes
-		if target <= over+1 {
+		if promptTarget+completionTarget <= over+1 {
 			break
 		}
-		target -= over + 1
+		// Reduce both budgets proportionally to their share of the overflow.
+		if hasPrompt && hasCompletion {
+			promptOver := over * promptOriginalSize / (promptOriginalSize + completionOriginalSize)
+			if promptOver < 1 {
+				promptOver = 1
+			}
+			completionOver := over - promptOver
+			if completionOver < 1 {
+				completionOver = 1
+			}
+			promptTarget -= promptOver
+			completionTarget -= completionOver
+		} else if hasPrompt {
+			promptTarget -= over + 1
+		} else if hasCompletion {
+			completionTarget -= over + 1
+		}
 	}
 	return dropPayload(finalized, metadata, maxBytes)
 }
@@ -400,6 +423,10 @@ func jsonStringByteSize(value string) int {
 		switch r {
 		case '"', '\\', '\b', '\f', '\n', '\r', '\t':
 			size += 2
+		case '<', '>', '&':
+			size += 6 // \u003c, \u003e, \u0026
+		case '\u2028', '\u2029':
+			size += 6 // \u2028, \u2029
 		default:
 			if r < 0x20 {
 				size += 6 // \u00XX

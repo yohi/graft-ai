@@ -137,6 +137,9 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		}
 		if !r.queue.Enqueue(envelope) {
 			r.metrics.CapacityDrop()
+			if accepted > 0 {
+				r.metrics.AcceptedN(accepted)
+			}
 			writer.Header().Set("X-OTel-Drop-Reason", "capacity")
 			r.accept(writer, "capacity")
 			return

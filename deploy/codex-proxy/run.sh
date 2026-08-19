@@ -46,7 +46,8 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-cat << 'EOF' > "$TMP_DIR/server.mjs"
+# プロキシスクリプトを生成
+cat > "$TMP_DIR/server.mjs" << 'EOF'
 import http from "node:http";
 
 const PORT = Number(process.env.PORT || 8080);
@@ -113,7 +114,8 @@ server.listen(PORT, HOST, () => {
 });
 EOF
 
-PORT="$PORT" node "$TMP_DIR/server.mjs" > "$TMP_DIR/proxy.log" 2>&1 &
+# バックグラウンドプロセスに stdin を奪われないよう < /dev/null を付与
+PORT="$PORT" node "$TMP_DIR/server.mjs" < /dev/null > "$TMP_DIR/proxy.log" 2>&1 &
 PROXY_PID=$!
 
 sleep 0.5
@@ -140,18 +142,19 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   DOWNLOAD_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${OS}-${CF_ARCH}"
   if [[ "$OS" == "darwin" ]]; then
     DOWNLOAD_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${CF_ARCH}.tgz"
-    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cf.tgz"
+    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cf.tgz" < /dev/null
     tar -xzf "$TMP_DIR/cf.tgz" -C "$TMP_DIR"
     CLOUDFLARED_BIN="$TMP_DIR/cloudflared"
   else
-    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cloudflared"
+    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cloudflared" < /dev/null
     chmod +x "$TMP_DIR/cloudflared"
     CLOUDFLARED_BIN="$TMP_DIR/cloudflared"
   fi
 fi
 
 echo "🚇 [3/3] トンネルを接続中..."
-"$CLOUDFLARED_BIN" tunnel --url "http://127.0.0.1:${PORT}" > "$TMP_DIR/cloudflared.log" 2>&1 &
+# バックグラウンドプロセスに stdin を奪われないよう < /dev/null を付与
+"$CLOUDFLARED_BIN" tunnel --url "http://127.0.0.1:${PORT}" < /dev/null > "$TMP_DIR/cloudflared.log" 2>&1 &
 CLOUDFLARED_PID=$!
 
 TUNNEL_URL=""
@@ -196,7 +199,7 @@ echo "※ このプロセスを実行している間、プロキシが有効に�
 echo "=========================================================================="
 echo ""
 
-# トンネルプロセスを待機（エラー発生時はログ出力）
+# トンネルプロセスを監視待機（curl | bash でも標準入力 EOF で終了しないように sleep ループ）
 while kill -0 "$CLOUDFLARED_PID" 2>/dev/null; do
   sleep 2
 done

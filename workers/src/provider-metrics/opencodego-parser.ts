@@ -487,17 +487,19 @@ function parseNanoUsd(val: unknown, allowNegative = false): number | null {
 }
 
 // OpenCodeGo monthlyLimit in billing RPC is represented as a normal USD dollar amount (e.g. 10, 20, 2500).
-function parseDollarLimit(val: unknown): number | null {
+function parseDollarAmount(val: unknown): number | null {
   const num = parseNumericValue(val);
   if (num === null || num < 0) return null;
   return num;
 }
 
-// OpenCodeGo balance / zenBalance can be integer nano-units (in RPC, e.g. 500000000 = $5.00) or pre-scaled dollars (in HTML, e.g. 23.45).
-function parseBalanceUsd(val: unknown): number | null {
+// OpenCodeGo balance / zenBalance can be integer nano-units in billing RPC (e.g. 5000000000 = $50.00) or pre-scaled decimal dollars in HTML (e.g. 23.45).
+function parseZenBalanceValue(val: unknown): number | null {
   const num = parseNumericValue(val);
   if (num === null || num < 0) return null;
-  return num >= 1_000_000 && Number.isInteger(num) ? num / USD_SCALE : num;
+  // Decimal floating-point numbers from HTML (e.g. 23.45) are pre-scaled USD amounts.
+  // Integer numbers from billing RPC (e.g. 5000000000) are nano-unit integers.
+  return Number.isInteger(num) ? num / USD_SCALE : num;
 }
 
 function parseJsonBilling(text: string): OpenCodeZenBilling | null {
@@ -509,10 +511,12 @@ function parseJsonBilling(text: string): OpenCodeZenBilling | null {
     const monthlyUsageUSD = parseNanoUsd(rawUsage, true);
     if (monthlyUsageUSD === null) return null;
 
+    const rawBalance = parsed["balance"] ?? parsed["zenBalance"];
+
     return {
       monthlyUsageUSD,
-      monthlyLimitUSD: parseDollarLimit(parsed["monthlyLimit"] ?? parsed["limit"]),
-      balanceUSD: parseBalanceUsd(parsed["balance"] ?? parsed["zenBalance"]),
+      monthlyLimitUSD: parseDollarAmount(parsed["monthlyLimit"] ?? parsed["limit"]),
+      balanceUSD: rawBalance !== undefined && rawBalance !== null ? parseZenBalanceValue(rawBalance) : null,
       hasSubscription: Boolean(parsed["hasSubscription"] ?? parsed["subscription"]),
     };
   } catch {
@@ -539,8 +543,8 @@ function parseRegexBilling(text: string): OpenCodeZenBilling | null {
 
   return {
     monthlyUsageUSD,
-    monthlyLimitUSD: limitMatch?.[1] ? parseDollarLimit(limitMatch[1]) : null,
-    balanceUSD: balanceMatch?.[1] ? parseBalanceUsd(balanceMatch[1]) : null,
+    monthlyLimitUSD: limitMatch?.[1] ? parseDollarAmount(limitMatch[1]) : null,
+    balanceUSD: balanceMatch?.[1] ? parseZenBalanceValue(balanceMatch[1]) : null,
     hasSubscription: subMatch !== null && subMatch[1]?.toLowerCase() === "true",
   };
 }
@@ -553,9 +557,10 @@ export function extractZenBalance(text: string): number | null {
   const billing = extractZenBilling(text);
   if (billing && billing.balanceUSD !== null) return billing.balanceUSD;
 
+  // Embedded HTML page JSON or direct RPC response
   const match =
     /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(
       text,
     );
-  return match?.[1] ? parseBalanceUsd(match[1]) : null;
+  return match?.[1] ? parseZenBalanceValue(match[1]) : null;
 }

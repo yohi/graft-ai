@@ -59,10 +59,9 @@ TF_VAR_grafana_stack_region_slug="${TF_VAR_grafana_stack_region_slug:-prod-ap-no
 export TF_VAR_grafana_stack_region_slug
 
 if [[ -z "${TF_VAR_grafana_stack_slug:-}" ]]; then
-  DETECTED_SLUG=$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "")
-  if [[ -n "$DETECTED_SLUG" ]]; then
-    export TF_VAR_grafana_stack_slug="$DETECTED_SLUG"
-  fi
+  DETECTED_SLUG=$(grep 'stack:' "${HOME}/.config/gcx/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' || echo "yohi")
+  read -r -p "$(echo -e "${YELLOW}[ASK]${NC}  Grafana Stack Slug [default: ${DETECTED_SLUG:-yohi}]: ")" input_slug
+  export TF_VAR_grafana_stack_slug="${input_slug:-${DETECTED_SLUG:-yohi}}"
 else
   export TF_VAR_grafana_stack_slug
 fi

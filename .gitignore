@@ -31,3 +31,5 @@ oss/
 .codegraph/
 deploy/otel/alloy/bin/
 deploy/otel/alloy/alloy-otel
+deploy/otel/secrets/
+deploy/otel/docker-compose.smoke.override.yml

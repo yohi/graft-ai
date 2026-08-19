@@ -1,0 +1,27 @@
+apiVersion: 1
+
+datasources:
+  - name: OTel Prometheus
+    uid: otel-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+  - name: OTel Loki
+    uid: otel-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+  - name: OTel Tempo
+    uid: otel-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: otel-loki
+        filterByTraceID: true
+        timeShift: 5m
+        tags:
+          - key: trace_id
+            value: trace_id

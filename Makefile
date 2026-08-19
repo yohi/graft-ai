@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
 
 install:
 	cd workers && npm install
@@ -22,6 +22,7 @@ test:
 	node scripts/verify-terraform-logpush-fields.mjs
 	node --test tests/verify-terraform-logpush-fields.test.mjs
 	node --test tests/deploy-dashboards.test.mjs
+	$(MAKE) otel-validate
 	bash tests/setup-free-tier.test.sh
 	bash tests/manage-cloudflare-logpush-job.test.sh
 
@@ -33,6 +34,14 @@ otel-contracts: otel-node-preflight
 
 otel-alloy-test:
 	$(MAKE) -C deploy/otel/alloy test
+
+otel-validate: otel-node-preflight
+	node scripts/verify-otel-config.mjs
+	node --test tests/otel-dashboard.test.mjs
+	docker compose -f deploy/otel/docker-compose.yml config >/dev/null
+
+otel-smoke:
+	bash deploy/otel/tests/compose-smoke.test.sh
 
 typecheck:
 	cd workers && npm run typecheck:ci

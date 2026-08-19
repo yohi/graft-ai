@@ -1,0 +1,130 @@
+name: graft-ai-otel
+
+services:
+  grafana:
+    image: grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    secrets:
+      - grafana_admin_password
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../grafana/dashboards:/var/lib/grafana/dashboards/otel:ro
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+    networks:
+      - otel
+
+  alloy:
+    build:
+      context: ./alloy
+    environment:
+      OTEL_HTTP_ADDR: ":4318"
+      OTEL_INGEST_TOKEN_FILE: /run/secrets/otel_ingest_token
+      OTEL_TRUSTED_PROXY_CIDRS: 172.30.0.10/32
+      OTEL_RATE_LIMIT_HMAC_KEY_FILE: /run/secrets/otel_hmac_key
+      OTEL_TEMPO_URL: http://tempo:4318/v1/traces
+      OTEL_LOKI_URL: http://loki:3100/loki/api/v1/push
+      OTEL_PROMETHEUS_URL: http://prometheus:9090/api/v1/otlp/v1/metrics
+      OTEL_SAMPLING_RATE: "1"
+    secrets:
+      - otel_ingest_token
+      - otel_hmac_key
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+    networks:
+      - otel
+
+  tempo:
+    image: grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - tempo-data:/var/tempo
+      - ./config/tempo.yaml:/etc/tempo/tempo.yaml:ro
+    networks:
+      - otel
+
+  loki:
+    image: grafana/loki:3.3.2@sha256:8af2de1abbdd7aa92b27c9bcc96f0f4140c9096b507c77921ffddf1c6ad6c48f
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - loki-data:/loki
+      - ./config/loki.yaml:/etc/loki/loki.yaml:ro
+    networks:
+      - otel
+
+  prometheus:
+    image: prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --enable-feature=otlp-write-receiver
+    volumes:
+      - prometheus-data:/prometheus
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - otel
+
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:2025.2.1@sha256:03737f27c38ecfb257a55664953cac510727cf27052c51ddb7c8ff1a2b9969e1
+    command: ["tunnel", "--no-autoupdate", "--token-file", "/run/secrets/cloudflared_token", "run"]
+    secrets:
+      - cloudflared_token
+    networks:
+      otel:
+        ipv4_address: 172.30.0.10
+
+  smoke:
+    profiles: ["smoke"]
+    image: node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+    working_dir: /workspace
+    command: ["node", "/workspace/deploy/otel/scripts/synthetic-otlp-smoke.mjs"]
+    environment:
+      OTEL_SMOKE_TOKEN: smoke-token
+      OTEL_SMOKE_URL: http://alloy:4318/v1/traces
+      OTEL_SMOKE_PROMETHEUS_URL: http://prometheus:9090
+      OTEL_SMOKE_LOKI_URL: http://loki:3100
+      OTEL_SMOKE_TEMPO_URL: http://tempo:3200
+    volumes:
+      - ../..:/workspace:ro
+    depends_on:
+      - alloy
+      - tempo
+      - loki
+      - prometheus
+    networks:
+      otel:
+        ipv4_address: 172.30.0.20
+
+volumes:
+  grafana-data:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+
+secrets:
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
+  otel_ingest_token:
+    file: ./secrets/otel_ingest_token
+  otel_hmac_key:
+    file: ./secrets/otel_hmac_key
+  cloudflared_token:
+    file: ./secrets/cloudflared_token
+
+networks:
+  otel:
+    name: graft-ai-otel
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

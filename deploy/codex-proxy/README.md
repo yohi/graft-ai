@@ -35,12 +35,19 @@ cd deploy/codex-proxy
 ./run.sh
 ```
 
-### 方法 2: ワンライナー起動（クイックスタート）
+### 方法 2: スクリプトを個別にダウンロードして起動
 
-自宅の PC / Mac / Linux で以下のコマンドを実行して起動することも可能です（内容を確認した上で実行してください）：
+リポジトリ全体をクローンせずに実行する場合は、スクリプトをダウンロードして内容を確認した上で実行します：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yohi/graft-ai/master/deploy/codex-proxy/run.sh | bash
+# スクリプトをダウンロード
+curl -fsSL https://raw.githubusercontent.com/yohi/graft-ai/master/deploy/codex-proxy/run.sh -o run-codex-proxy.sh
+
+# 内容を確認
+less run-codex-proxy.sh
+
+# 実行
+bash run-codex-proxy.sh
 ```
 
 ---

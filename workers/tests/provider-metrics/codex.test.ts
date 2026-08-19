@@ -168,6 +168,7 @@ describe("fetchCodexMetrics", () => {
         primary_window: {
           used_percent: 60,
           reset_at: 1786161204,
+          limit_window_seconds: 18000,
         },
         secondary_window: null,
       },
@@ -411,7 +412,7 @@ describe("fetchCodexMetrics", () => {
     expect(result.sessionUsageRatio).toBeUndefined();
   });
 
-  it("preserves secondary window even when it lacks limit_window_seconds", async () => {
+  it("leaves secondary window undefined when it lacks limit_window_seconds", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith("rate-limit-reset-credits")) {
         return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
@@ -439,11 +440,11 @@ describe("fetchCodexMetrics", () => {
     const result = await fetchCodexMetrics("token", undefined, mockFetch);
     expect(result.sessionUsageRatio).toBeCloseTo(0.3);
     expect(result.sessionResetTimestampSeconds).toBe(1786161204);
-    expect(result.weeklyUsageRatio).toBeCloseTo(0.6);
-    expect(result.weeklyResetTimestampSeconds).toBe(1786247604);
+    expect(result.weeklyUsageRatio).toBeUndefined();
+    expect(result.weeklyResetTimestampSeconds).toBeUndefined();
   });
 
-  it("assigns primary to session and secondary to weekly when neither has limit_window_seconds", async () => {
+  it("leaves period metrics undefined when windows lack limit_window_seconds", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string) => {
       if (url.endsWith("rate-limit-reset-credits")) {
         return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
@@ -467,9 +468,9 @@ describe("fetchCodexMetrics", () => {
     });
 
     const result = await fetchCodexMetrics("token", undefined, mockFetch);
-    expect(result.sessionUsageRatio).toBeCloseTo(0.1);
-    expect(result.sessionResetTimestampSeconds).toBe(1786161204);
-    expect(result.weeklyUsageRatio).toBeCloseTo(0.5);
-    expect(result.weeklyResetTimestampSeconds).toBe(1786247604);
+    expect(result.sessionUsageRatio).toBeUndefined();
+    expect(result.sessionResetTimestampSeconds).toBeUndefined();
+    expect(result.weeklyUsageRatio).toBeUndefined();
+    expect(result.weeklyResetTimestampSeconds).toBeUndefined();
   });
 });

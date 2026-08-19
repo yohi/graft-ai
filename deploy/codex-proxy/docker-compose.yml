@@ -7,8 +7,7 @@ services:
     environment:
       - PORT=8080
       - HOST=0.0.0.0
-      # オプション: 共有シークレットを設定してプロキシを保護する場合
-      # - PROXY_SECRET=your-secure-random-secret
+      - PROXY_SECRET=${PROXY_SECRET}
 
   # オプション: Cloudflare Tunnel を Docker 経由で動かす場合
   # cloudflared:

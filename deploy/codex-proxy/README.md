@@ -138,12 +138,11 @@ docker compose up -d
 
 ## ⚙️ `graft-ai` への設定
 
-公開されたプロキシ URL（および必要に応じて共有シークレット）を `graft-ai` の Secret に登録します：
+公開されたプロキシ URL および共有シークレットを `graft-ai` の Secret に登録します：
 
 ```bash
 cd workers
 npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc
-# 共有シークレットを設定している場合:
 npx wrangler secret put CODEX_PROXY_SECRET --config wrangler.provider-metrics.jsonc
 ```
 
@@ -158,5 +157,5 @@ Enter a secret value: https://codex-proxy.yourdomain.com
 
 - **パスホワイトリスト制限:**
   本プロキシは、オープンプロキシ化を防ぐため `/backend-api/wham/usage` および `/backend-api/wham/rate-limit-reset-credits` などの許可されたエンドポイント宛てのリクエストのみを `chatgpt.com` に転送し、それ以外のパスは `403 Forbidden` で拒否します。
-- **共有シークレット保護:**
-  環境変数 `PROXY_SECRET` を設定（`run.sh` では自動生成）すると、`X-Proxy-Secret` ヘッダーが一致しないリクエストを `401 Unauthorized` で遮断します（`graft-ai` の `CODEX_PROXY_SECRET` 設定と連携します）。
+- **共有シークレット保護（必須）:**
+  `PROXY_SECRET` による認証が必須化されており、`X-Proxy-Secret` ヘッダーが一致しないリクエストを `401 Unauthorized` で遮断します（`graft-ai` の `CODEX_PROXY_SECRET` 設定と連携します）。`setup-systemd.sh` や `run.sh` を利用する場合は自動生成されます。

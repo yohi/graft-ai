@@ -4,14 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-User=%I
+User=root
 WorkingDirectory=/opt/graft-ai-codex-proxy
+EnvironmentFile=/etc/codex-proxy/proxy.env
 ExecStart=/usr/bin/env node /opt/graft-ai-codex-proxy/server.mjs
 Restart=always
 RestartSec=5
-Environment=PORT=8080
-Environment=HOST=127.0.0.1
-Environment=NODE_ENV=production
 
 [Install]
 WantedBy=multi-user.target

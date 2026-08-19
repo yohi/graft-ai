@@ -21,7 +21,7 @@ const MOCK_USAGE_HTML = `
 }
 </script>`;
 
-const MOCK_ZEN_HTML = `<script>{"zenBalance":23.45}</script>`;
+const MOCK_ZEN_HTML = `{"zenBalance":2345000000}`;
 
 const MOCK_USAGE_TOP_LEVEL_JSON = JSON.stringify({
   usagePercent: 42,
@@ -575,5 +575,19 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(result.rollingUsageRatio).toBeCloseTo(0.001);
     expect(result.monthlyUsageRatio).toBeCloseTo(0.001);
     expect(result.zenBalanceUSD).toBeCloseTo(0.02);
+  });
+
+  it("extracts integer and decimal USD balances from HTML sources correctly", async () => {
+    const { extractZenBalance } = await import("../../src/provider-metrics/opencodego-parser");
+    expect(extractZenBalance('<script>{"zenBalance": 23.45}</script>', "html")).toBe(23.45);
+    expect(extractZenBalance('<script>{"zenBalance": 50}</script>', "html")).toBe(50);
+    expect(extractZenBalance('<script>{"zenBalance": 1000000}</script>', "html")).toBe(1000000);
+  });
+
+  it("extracts nano-unit balances from RPC sources correctly", async () => {
+    const { extractZenBalance } = await import("../../src/provider-metrics/opencodego-parser");
+    expect(extractZenBalance('{"zenBalance": 2345000000}', "rpc")).toBe(23.45);
+    expect(extractZenBalance('{"balance": 5000000000}', "rpc")).toBe(50.0);
+    expect(extractZenBalance('{"balance": 1000000}', "rpc")).toBe(0.01);
   });
 });

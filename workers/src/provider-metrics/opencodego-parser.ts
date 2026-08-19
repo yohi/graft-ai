@@ -478,7 +478,7 @@ function parseNumericValue(val: unknown): number | null {
   return val;
 }
 
-// OpenCodeGo monthlyUsage in billing RPC is represented in integer nano-units (10^8 = $1.00 USD).
+// OpenCodeGo monthlyUsage and balance in billing RPC are represented in integer nano-units (10^8 = $1.00 USD).
 function parseNanoUsd(val: unknown, allowNegative = false): number | null {
   const num = parseNumericValue(val);
   if (num === null) return null;
@@ -486,20 +486,11 @@ function parseNanoUsd(val: unknown, allowNegative = false): number | null {
   return num / USD_SCALE;
 }
 
-// OpenCodeGo monthlyLimit in billing RPC is represented as a normal USD dollar amount (e.g. 10, 20, 2500).
+// OpenCodeGo monthlyLimit (in billing RPC) and zenBalance (in HTML page JSON) are represented as USD dollar amounts (e.g. 10, 20, 23.45, 2500).
 function parseDollarAmount(val: unknown): number | null {
   const num = parseNumericValue(val);
   if (num === null || num < 0) return null;
   return num;
-}
-
-// OpenCodeGo balance / zenBalance can be integer nano-units in billing RPC (e.g. 5000000000 = $50.00) or pre-scaled decimal dollars in HTML (e.g. 23.45).
-function parseZenBalanceValue(val: unknown): number | null {
-  const num = parseNumericValue(val);
-  if (num === null || num < 0) return null;
-  // Decimal floating-point numbers from HTML (e.g. 23.45) are pre-scaled USD amounts.
-  // Integer numbers from billing RPC (e.g. 5000000000) are nano-unit integers.
-  return Number.isInteger(num) ? num / USD_SCALE : num;
 }
 
 function parseJsonBilling(text: string): OpenCodeZenBilling | null {
@@ -516,7 +507,7 @@ function parseJsonBilling(text: string): OpenCodeZenBilling | null {
     return {
       monthlyUsageUSD,
       monthlyLimitUSD: parseDollarAmount(parsed["monthlyLimit"] ?? parsed["limit"]),
-      balanceUSD: rawBalance !== undefined && rawBalance !== null ? parseZenBalanceValue(rawBalance) : null,
+      balanceUSD: rawBalance !== undefined && rawBalance !== null ? parseNanoUsd(rawBalance) : null,
       hasSubscription: Boolean(parsed["hasSubscription"] ?? parsed["subscription"]),
     };
   } catch {
@@ -544,7 +535,7 @@ function parseRegexBilling(text: string): OpenCodeZenBilling | null {
   return {
     monthlyUsageUSD,
     monthlyLimitUSD: limitMatch?.[1] ? parseDollarAmount(limitMatch[1]) : null,
-    balanceUSD: balanceMatch?.[1] ? parseZenBalanceValue(balanceMatch[1]) : null,
+    balanceUSD: balanceMatch?.[1] ? parseNanoUsd(balanceMatch[1]) : null,
     hasSubscription: subMatch !== null && subMatch[1]?.toLowerCase() === "true",
   };
 }
@@ -553,14 +544,32 @@ export function extractZenBilling(text: string): OpenCodeZenBilling | null {
   return parseJsonBilling(text) ?? parseRegexBilling(text);
 }
 
-export function extractZenBalance(text: string): number | null {
+export function extractZenBalance(text: string, sourceType: "rpc" | "html" = "rpc"): number | null {
+  if (sourceType === "html") {
+    // HTML page embeddings contain pre-scaled USD dollar values (e.g. 23, 23.45)
+    const match = /(?:"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(text);
+    return match?.[1] ? parseDollarAmount(match[1]) : null;
+  }
+
+  // RPC responses contain integer nano-units (10^8 = $1.00 USD)
   const billing = extractZenBilling(text);
   if (billing && billing.balanceUSD !== null) return billing.balanceUSD;
 
-  // Embedded HTML page JSON or direct RPC response
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (isRecord(parsed)) {
+      const rawBalance = parsed["zenBalance"] ?? parsed["balance"];
+      if (rawBalance !== undefined && rawBalance !== null) {
+        return parseNanoUsd(rawBalance);
+      }
+    }
+  } catch {
+    // Continue to regex scanning
+  }
+
   const match =
     /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(
       text,
     );
-  return match?.[1] ? parseZenBalanceValue(match[1]) : null;
+  return match?.[1] ? parseNanoUsd(match[1]) : null;
 }

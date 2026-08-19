@@ -74,13 +74,13 @@ func metricProto(sample metrics.MetricSample) (*metricspb.Metric, error) {
 		return nil, fmt.Errorf("metric %q has non-finite duration", sample.Name)
 	}
 	bucketCounts := make([]uint64, len(sample.Buckets))
-	var cumulative uint64
 	for index, boundary := range sample.Buckets {
 		if sample.Value <= boundary {
-			cumulative++
+			bucketCounts[index] = 1
+			break
 		}
-		bucketCounts[index] = cumulative
 	}
+
 	return &metricspb.Metric{
 		Name: sample.Name,
 		Unit: "s",
@@ -89,7 +89,7 @@ func metricProto(sample metrics.MetricSample) (*metricspb.Metric, error) {
 			DataPoints: []*metricspb.HistogramDataPoint{{
 				Attributes:     labels,
 				TimeUnixNano:   timestamp,
-				Count:          cumulative,
+				Count:          1,
 				Sum:            &sample.Value,
 				BucketCounts:   bucketCounts,
 				ExplicitBounds: sample.Buckets[:len(sample.Buckets)-1],

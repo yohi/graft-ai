@@ -21,28 +21,54 @@ func EncodeTempo(spans []redaction.RedactedSpan) ([]byte, error) {
 	if len(spans) == 0 {
 		return nil, nil
 	}
-	resourceAttributes, err := attributesProto(spans[0].ResourceAttributes)
-	if err != nil {
-		return nil, err
-	}
-	resourceSpans := &tracepb.ResourceSpans{
-		Resource: &resourcepb.Resource{Attributes: resourceAttributes},
-		ScopeSpans: []*tracepb.ScopeSpans{{
-			Spans: make([]*tracepb.Span, 0, len(spans)),
-		}},
-	}
+	resourceSpansByAttributes := make(map[string]*tracepb.ResourceSpans)
 	for _, span := range spans {
+		key := resourceAttributesKey(span.ResourceAttributes)
+		group, ok := resourceSpansByAttributes[key]
+		if !ok {
+			resourceAttributes, err := attributesProto(span.ResourceAttributes)
+			if err != nil {
+				return nil, err
+			}
+			group = &tracepb.ResourceSpans{
+				Resource: &resourcepb.Resource{Attributes: resourceAttributes},
+				ScopeSpans: []*tracepb.ScopeSpans{{
+					Spans: make([]*tracepb.Span, 0, len(spans)),
+				}},
+			}
+			resourceSpansByAttributes[key] = group
+		}
 		encoded, err := spanProto(span)
 		if err != nil {
 			return nil, fmt.Errorf("encode Tempo span: %w", err)
 		}
-		resourceSpans.ScopeSpans[0].Spans = append(resourceSpans.ScopeSpans[0].Spans, encoded)
+		group.ScopeSpans[0].Spans = append(group.ScopeSpans[0].Spans, encoded)
 	}
-	payload, err := proto.Marshal(&collectortracepb.ExportTraceServiceRequest{ResourceSpans: []*tracepb.ResourceSpans{resourceSpans}})
+	resourceSpans := make([]*tracepb.ResourceSpans, 0, len(resourceSpansByAttributes))
+	for _, group := range resourceSpansByAttributes {
+		resourceSpans = append(resourceSpans, group)
+	}
+	payload, err := proto.Marshal(&collectortracepb.ExportTraceServiceRequest{ResourceSpans: resourceSpans})
 	if err != nil {
 		return nil, fmt.Errorf("marshal Tempo payload: %w", err)
 	}
 	return payload, nil
+}
+
+func resourceAttributesKey(attributes map[string]json.RawMessage) string {
+	keys := make([]string, 0, len(attributes))
+	for key := range attributes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var builder strings.Builder
+	for _, key := range keys {
+		builder.WriteString(key)
+		builder.WriteByte(0)
+		builder.Write(attributes[key])
+		builder.WriteByte(0)
+	}
+	return builder.String()
 }
 
 func spanProto(span redaction.RedactedSpan) (*tracepb.Span, error) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/spanlogs"
 )
@@ -26,10 +27,14 @@ func EncodeLoki(records []spanlogs.JSONLogRecord) ([]byte, error) {
 		if len(record.Serialized) == 0 {
 			continue
 		}
-		timestamp := strconv.FormatUint(record.TimestampUnixNano, 10)
+		timestamp := record.TimestampUnixNano
+		if timestamp == 0 {
+			timestamp = uint64(time.Now().UnixNano())
+		}
+		timestampStr := strconv.FormatUint(timestamp, 10)
 		payload.Streams = append(payload.Streams, lokiStream{
 			Stream: record.Labels,
-			Values: [][2]string{{timestamp, string(record.Serialized)}},
+			Values: [][2]string{{timestampStr, string(record.Serialized)}},
 		})
 	}
 	if len(payload.Streams) == 0 {

@@ -39,6 +39,9 @@ func decodeSpans(body []byte, contentType string) ([]redaction.Span, error) {
 				if len(span.GetTraceId()) != 16 {
 					continue
 				}
+				if len(span.GetSpanId()) != 8 {
+					continue
+				}
 				attributes := attributeMap(span.GetAttributes())
 				normalizeAttributes(attributes, span)
 				parentSpanID := hex.EncodeToString(span.GetParentSpanId())

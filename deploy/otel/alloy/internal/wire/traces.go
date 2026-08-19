@@ -21,9 +21,16 @@ func EncodeTempo(spans []redaction.RedactedSpan) ([]byte, error) {
 	if len(spans) == 0 {
 		return nil, nil
 	}
-	resourceSpansByAttributes := make(map[string]*tracepb.ResourceSpans)
-	for _, span := range spans {
+	groupKeys := make([]string, len(spans))
+	groupCounts := make(map[string]int)
+	for index, span := range spans {
 		key := resourceAttributesKey(span.ResourceAttributes)
+		groupKeys[index] = key
+		groupCounts[key]++
+	}
+	resourceSpansByAttributes := make(map[string]*tracepb.ResourceSpans)
+	for index, span := range spans {
+		key := groupKeys[index]
 		group, ok := resourceSpansByAttributes[key]
 		if !ok {
 			resourceAttributes, err := attributesProto(span.ResourceAttributes)
@@ -33,7 +40,7 @@ func EncodeTempo(spans []redaction.RedactedSpan) ([]byte, error) {
 			group = &tracepb.ResourceSpans{
 				Resource: &resourcepb.Resource{Attributes: resourceAttributes},
 				ScopeSpans: []*tracepb.ScopeSpans{{
-					Spans: make([]*tracepb.Span, 0, len(spans)),
+					Spans: make([]*tracepb.Span, 0, groupCounts[key]),
 				}},
 			}
 			resourceSpansByAttributes[key] = group
@@ -44,9 +51,14 @@ func EncodeTempo(spans []redaction.RedactedSpan) ([]byte, error) {
 		}
 		group.ScopeSpans[0].Spans = append(group.ScopeSpans[0].Spans, encoded)
 	}
+	keys := make([]string, 0, len(resourceSpansByAttributes))
+	for key := range resourceSpansByAttributes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	resourceSpans := make([]*tracepb.ResourceSpans, 0, len(resourceSpansByAttributes))
-	for _, group := range resourceSpansByAttributes {
-		resourceSpans = append(resourceSpans, group)
+	for _, key := range keys {
+		resourceSpans = append(resourceSpans, resourceSpansByAttributes[key])
 	}
 	payload, err := proto.Marshal(&collectortracepb.ExportTraceServiceRequest{ResourceSpans: resourceSpans})
 	if err != nil {

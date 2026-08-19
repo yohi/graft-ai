@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -19,16 +20,20 @@ func EncodeMetrics(normalized metrics.NormalizedMetrics) ([]byte, error) {
 	if len(normalized.Samples) == 0 {
 		return nil, nil
 	}
+	aggregated, timestamp, err := aggregateSamples(normalized.Samples)
+	if err != nil {
+		return nil, err
+	}
 	output := &collectormetricspb.ExportMetricsServiceRequest{
 		ResourceMetrics: []*metricspb.ResourceMetrics{{
 			Resource: &resourcepb.Resource{},
 			ScopeMetrics: []*metricspb.ScopeMetrics{{
-				Metrics: make([]*metricspb.Metric, 0, len(normalized.Samples)),
+				Metrics: make([]*metricspb.Metric, 0, len(aggregated)),
 			}},
 		}},
 	}
-	for _, sample := range normalized.Samples {
-		metric, err := metricProto(sample)
+	for _, sample := range aggregated {
+		metric, err := metricProto(sample, timestamp)
 		if err != nil {
 			return nil, err
 		}
@@ -41,7 +46,90 @@ func EncodeMetrics(normalized metrics.NormalizedMetrics) ([]byte, error) {
 	return payload, nil
 }
 
-func metricProto(sample metrics.MetricSample) (*metricspb.Metric, error) {
+type aggregatedSample struct {
+	Name         string
+	Labels       map[string]string
+	Buckets      []float64
+	Value        float64
+	Count        uint64
+	BucketCounts []uint64
+}
+
+func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint64, error) {
+	var timestamp uint64
+	for _, sample := range samples {
+		if sample.TimestampUnixNano > timestamp {
+			timestamp = sample.TimestampUnixNano
+		}
+	}
+	if timestamp == 0 {
+		timestamp = uint64(time.Now().UnixNano())
+	}
+
+	groups := make(map[string]*aggregatedSample)
+	var order []string
+	for _, sample := range samples {
+		key := sampleKey(sample)
+		group, ok := groups[key]
+		if !ok {
+			group = &aggregatedSample{
+				Name:    sample.Name,
+				Labels:  sample.Labels,
+				Buckets: sample.Buckets,
+				Value:   sample.Value,
+			}
+			groups[key] = group
+			order = append(order, key)
+		}
+		if len(sample.Buckets) == 0 {
+			group.Value += sample.Value
+			group.Count++
+			continue
+		}
+		if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+			return nil, 0, fmt.Errorf("metric %q has non-finite duration", sample.Name)
+		}
+		group.Value += sample.Value
+		group.Count++
+		if len(group.BucketCounts) == 0 {
+			group.BucketCounts = make([]uint64, len(sample.Buckets))
+		}
+		for index, boundary := range sample.Buckets {
+			if sample.Value <= boundary {
+				group.BucketCounts[index]++
+				break
+			}
+		}
+	}
+
+	result := make([]aggregatedSample, 0, len(groups))
+	for _, key := range order {
+		result = append(result, *groups[key])
+	}
+	return result, timestamp, nil
+}
+
+func sampleKey(sample metrics.MetricSample) string {
+	return sample.Name + "\x00" + labelsKey(sample.Labels)
+}
+
+func labelsKey(labels map[string]string) string {
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var builder strings.Builder
+	for _, key := range keys {
+		builder.WriteString(key)
+		builder.WriteByte(0)
+		builder.WriteString(labels[key])
+		builder.WriteByte(0)
+	}
+	return builder.String()
+}
+
+func metricProto(sample aggregatedSample, timestamp uint64) (*metricspb.Metric, error) {
 	labels := make([]*commonpb.KeyValue, 0, len(sample.Labels))
 	keys := make([]string, 0, len(sample.Labels))
 	for key := range sample.Labels {
@@ -51,17 +139,13 @@ func metricProto(sample metrics.MetricSample) (*metricspb.Metric, error) {
 	for _, key := range keys {
 		labels = append(labels, &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: sample.Labels[key]}}})
 	}
-	timestamp := sample.TimestampUnixNano
-	if timestamp == 0 {
-		timestamp = uint64(time.Now().UnixNano())
-	}
 	if len(sample.Buckets) == 0 {
 		return &metricspb.Metric{
 			Name: sample.Name,
 			Unit: "1",
 			Data: &metricspb.Metric_Sum{Sum: &metricspb.Sum{
 				IsMonotonic:            true,
-				AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
+				AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
 				DataPoints: []*metricspb.NumberDataPoint{{
 					Attributes:   labels,
 					TimeUnixNano: timestamp,
@@ -70,27 +154,20 @@ func metricProto(sample metrics.MetricSample) (*metricspb.Metric, error) {
 			}},
 		}, nil
 	}
-	if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
-		return nil, fmt.Errorf("metric %q has non-finite duration", sample.Name)
-	}
-	bucketCounts := make([]uint64, len(sample.Buckets))
-	for index, boundary := range sample.Buckets {
-		if sample.Value <= boundary {
-			bucketCounts[index] = 1
-			break
-		}
-	}
 
+	bucketCounts := make([]uint64, len(sample.Buckets))
+	copy(bucketCounts, sample.BucketCounts)
+	sum := sample.Value
 	return &metricspb.Metric{
 		Name: sample.Name,
 		Unit: "s",
 		Data: &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
-			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_CUMULATIVE,
+			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
 			DataPoints: []*metricspb.HistogramDataPoint{{
 				Attributes:     labels,
 				TimeUnixNano:   timestamp,
-				Count:          1,
-				Sum:            &sample.Value,
+				Count:          sample.Count,
+				Sum:            &sum,
 				BucketCounts:   bucketCounts,
 				ExplicitBounds: sample.Buckets[:len(sample.Buckets)-1],
 			}},

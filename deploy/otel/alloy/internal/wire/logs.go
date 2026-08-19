@@ -32,8 +32,12 @@ func EncodeLoki(records []spanlogs.JSONLogRecord) ([]byte, error) {
 			timestamp = uint64(time.Now().UnixNano())
 		}
 		timestampStr := strconv.FormatUint(timestamp, 10)
+		labels := record.Labels
+		if len(labels) == 0 {
+			labels = map[string]string{"service_name": "unknown"}
+		}
 		payload.Streams = append(payload.Streams, lokiStream{
-			Stream: record.Labels,
+			Stream: labels,
 			Values: [][2]string{{timestampStr, string(record.Serialized)}},
 		})
 	}

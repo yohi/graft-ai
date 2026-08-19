@@ -17,6 +17,8 @@ func processLoop(ctx context.Context, queue *ingress.IngressQueue, traceSelector
 	brancher := fanout.NewFanOut(sampler)
 	ticker := time.NewTicker(selector.DefaultIdle / 2)
 	defer ticker.Stop()
+	metricsTicker := time.NewTicker(30 * time.Second)
+	defer metricsTicker.Stop()
 	for {
 		select {
 		case envelope, ok := <-queue.Items():
@@ -31,9 +33,26 @@ func processLoop(ctx context.Context, queue *ingress.IngressQueue, traceSelector
 			for _, trace := range traceSelector.FlushIdle(now) {
 				dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM)
 			}
+		case <-metricsTicker.C:
+			logDispatcherMetrics(ctx, backendDispatcher.Snapshot())
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func logDispatcherMetrics(ctx context.Context, snapshot dispatcher.MetricsSnapshot) {
+	for backend, value := range snapshot.Retries {
+		slog.InfoContext(ctx, "dispatcher metrics", "backend", backend, "retries", value)
+	}
+	for backend, value := range snapshot.Failures {
+		slog.InfoContext(ctx, "dispatcher metrics", "backend", backend, "failures", value)
+	}
+	for backend, value := range snapshot.Exhausted {
+		slog.InfoContext(ctx, "dispatcher metrics", "backend", backend, "exhausted", value)
+	}
+	for backend, value := range snapshot.Drops {
+		slog.InfoContext(ctx, "dispatcher metrics", "backend", backend, "drops", value)
 	}
 }
 
@@ -47,7 +66,7 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to encode OTel metrics", "trace_id", trace.TraceID, "error", err)
 	} else if len(metricsPayload) > 0 {
-		backendDispatcher.Handoff(dispatcher.Output{
+		if result := backendDispatcher.Handoff(dispatcher.Output{
 			Backend:     dispatcher.Prometheus,
 			TraceID:     trace.TraceID,
 			Payload:     metricsPayload,
@@ -55,7 +74,9 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 			Priority:    2,
 			Units:       1,
 			ReceivedAt:  trace.ReceivedAt,
-		})
+		}); result.Dropped {
+			slog.WarnContext(ctx, "dropped OTel metrics submission", "trace_id", trace.TraceID, "reason", result.Reason)
+		}
 	}
 	if !result.Sampled {
 		return
@@ -64,7 +85,7 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to encode Tempo trace", "trace_id", trace.TraceID, "error", err)
 	} else if len(tempoPayload) > 0 {
-		backendDispatcher.Handoff(dispatcher.Output{
+		if result := backendDispatcher.Handoff(dispatcher.Output{
 			Backend:     dispatcher.Tempo,
 			TraceID:     trace.TraceID,
 			Payload:     tempoPayload,
@@ -72,13 +93,15 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 			Priority:    2,
 			Units:       len(result.Tempo),
 			ReceivedAt:  trace.ReceivedAt,
-		})
+		}); result.Dropped {
+			slog.WarnContext(ctx, "dropped Tempo submission", "trace_id", trace.TraceID, "reason", result.Reason)
+		}
 	}
 	lokiPayload, err := wire.EncodeLoki(result.Loki)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to encode Loki payload", "trace_id", trace.TraceID, "error", err)
 	} else if len(lokiPayload) > 0 {
-		backendDispatcher.Handoff(dispatcher.Output{
+		if result := backendDispatcher.Handoff(dispatcher.Output{
 			Backend:     dispatcher.Loki,
 			TraceID:     trace.TraceID,
 			Payload:     lokiPayload,
@@ -86,6 +109,8 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 			Priority:    1,
 			Units:       len(result.Loki),
 			ReceivedAt:  trace.ReceivedAt,
-		})
+		}); result.Dropped {
+			slog.WarnContext(ctx, "dropped Loki submission", "trace_id", trace.TraceID, "reason", result.Reason)
+		}
 	}
 }

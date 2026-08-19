@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"time"
@@ -13,7 +14,10 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
-	return http.StatusText(e.Status)
+	if text := http.StatusText(e.Status); text != "" {
+		return fmt.Sprintf("%d %s", e.Status, text)
+	}
+	return fmt.Sprintf("HTTP %d", e.Status)
 }
 
 type RetryPolicy struct {

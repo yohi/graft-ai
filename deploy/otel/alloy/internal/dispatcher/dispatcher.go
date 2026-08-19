@@ -151,6 +151,8 @@ func (d *Dispatcher) sendWithRetry(ctx context.Context, backend Backend, config 
 	return lastErr
 }
 
+const maxDrainBytes = 64 * 1024
+
 func (d *Dispatcher) send(ctx context.Context, backend Backend, config BackendConfig, output Output) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.URL, bytes.NewReader(output.Payload))
 	if err != nil {
@@ -165,7 +167,7 @@ func (d *Dispatcher) send(ctx context.Context, backend Backend, config BackendCo
 		return fmt.Errorf("send %s output: %w", backend, err)
 	}
 	defer response.Body.Close()
-	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes)); err != nil {
 		return fmt.Errorf("read %s response: %w", backend, err)
 	}
 	if response.StatusCode >= http.StatusBadRequest {

@@ -25,12 +25,16 @@ const (
 	defaultIngressQueueSize = 1000
 	defaultRateCapacity     = 20
 	defaultRateRefill       = 2
-	defaultPipelineWorkers  = 1
-	defaultSamplingRate     = "1"
-	defaultTempoURL         = "http://tempo:4318/v1/traces"
-	defaultLokiURL          = "http://loki:3100/loki/api/v1/push"
-	defaultPrometheusURL    = "http://prometheus:9090/api/v1/otlp/v1/metrics"
-	samplingSeed            = "graft-ai-otel-v1"
+	// defaultPipelineWorkers must remain 1 because all workers share the same
+	// non-thread-safe traceSelector in processLoop. Raise it only after giving
+	// each worker its own RequestSelector or making RequestSelector safe for
+	// concurrent use.
+	defaultPipelineWorkers = 1
+	defaultSamplingRate    = "1"
+	defaultTempoURL        = "http://tempo:4318/v1/traces"
+	defaultLokiURL         = "http://loki:3100/loki/api/v1/push"
+	defaultPrometheusURL   = "http://prometheus:9090/api/v1/otlp/v1/metrics"
+	samplingSeed           = "graft-ai-otel-v1"
 )
 
 func main() {

@@ -46,6 +46,8 @@ func NewRedactor() Redactor {
 
 func (Redactor) Redact(span Span) (RedactedSpan, RedactionStatus) {
 	redacted := RedactedSpan{Span: cloneSpan(span)}
+	redacted.Name = redactString(redacted.Name)
+	redacted.StatusMessage = redactString(redacted.StatusMessage)
 	status := RedactionStatus{}
 	for key, value := range redacted.Attributes {
 		if isPayloadKey(key) {

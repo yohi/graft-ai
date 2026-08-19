@@ -37,7 +37,7 @@ func loadConfig() (config, error) {
 		return config{}, err
 	}
 	hmacKeySource := ingress.SecretSource{
-		FilePath:        os.Getenv("OTEL_RATE_LIMIT_HMAC_KEY_FILE"),
+		FilePath:        strings.TrimSpace(os.Getenv("OTEL_RATE_LIMIT_HMAC_KEY_FILE")),
 		EnvironmentName: "OTEL_RATE_LIMIT_HMAC_KEY",
 	}
 	if strings.TrimSpace(hmacKeySource.FilePath) == "" && strings.TrimSpace(os.Getenv(hmacKeySource.EnvironmentName)) == "" {

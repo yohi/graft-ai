@@ -44,8 +44,8 @@ func TestDispatcher_handoff_sends_each_backend_independently(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	dispatcher.Start(ctx)
 	defer func() {
-		cancel()
 		dispatcher.Close()
+		cancel()
 	}()
 
 	for _, output := range []Output{

@@ -3,7 +3,6 @@ package dispatcher
 import (
 	"context"
 	"errors"
-	"sort"
 	"sync"
 	"time"
 )
@@ -156,12 +155,14 @@ func lowestPriorityIndex(items []Output) int {
 }
 
 func sortedIndex(items []Output, less func(Output, Output) bool) int {
-	indices := make([]int, len(items))
-	for index := range indices {
-		indices[index] = index
+	if len(items) == 0 {
+		return 0
 	}
-	sort.SliceStable(indices, func(left, right int) bool {
-		return less(items[indices[left]], items[indices[right]])
-	})
-	return indices[0]
+	selected := 0
+	for index := 1; index < len(items); index++ {
+		if less(items[index], items[selected]) {
+			selected = index
+		}
+	}
+	return selected
 }

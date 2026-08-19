@@ -21,13 +21,14 @@ import (
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/selector"
 )
 
+type pipelineOutput struct {
+	backend     dispatcher.Backend
+	contentType string
+	body        []byte
+}
+
 func TestPipeline_acceptsOTLPAndDeliversRedactedSignalsToAllBackends(t *testing.T) {
-	type output struct {
-		backend     dispatcher.Backend
-		contentType string
-		body        []byte
-	}
-	outputs := make(chan output, 3)
+	outputs := make(chan pipelineOutput, 3)
 	backendServer := func(backend dispatcher.Backend) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			body, err := io.ReadAll(request.Body)
@@ -35,7 +36,7 @@ func TestPipeline_acceptsOTLPAndDeliversRedactedSignalsToAllBackends(t *testing.
 				t.Errorf("read %s body: %v", backend, err)
 				return
 			}
-			outputs <- output{backend: backend, contentType: request.Header.Get("Content-Type"), body: body}
+			outputs <- pipelineOutput{backend: backend, contentType: request.Header.Get("Content-Type"), body: body}
 			writer.WriteHeader(http.StatusOK)
 		}))
 	}
@@ -130,7 +131,7 @@ func TestPipeline_acceptsOTLPAndDeliversRedactedSignalsToAllBackends(t *testing.
 	}
 	backendDispatcher.Close()
 
-	seen := make(map[dispatcher.Backend]output, 3)
+	seen := make(map[dispatcher.Backend]pipelineOutput, 3)
 	for len(seen) < 3 {
 		select {
 		case item := <-outputs:
@@ -181,11 +182,7 @@ func intAny(value int64) *commonpb.AnyValue {
 	return &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: value}}
 }
 
-func assertPipelineTempo(t *testing.T, output struct {
-	backend     dispatcher.Backend
-	contentType string
-	body        []byte
-}) {
+func assertPipelineTempo(t *testing.T, output pipelineOutput) {
 	t.Helper()
 	if output.contentType != "application/x-protobuf" {
 		t.Fatalf("Tempo content type = %q", output.contentType)
@@ -197,17 +194,12 @@ func assertPipelineTempo(t *testing.T, output struct {
 	if got := len(payload.GetResourceSpans()[0].GetScopeSpans()[0].GetSpans()); got != 2 {
 		t.Fatalf("Tempo spans = %d, want 2", got)
 	}
-	encoded, _ := proto.Marshal(payload)
-	if bytes.Contains(encoded, []byte("prompt-secret")) || bytes.Contains(encoded, []byte("sk-live-secret")) {
+	if bytes.Contains(output.body, []byte("prompt-secret")) || bytes.Contains(output.body, []byte("sk-live-secret")) {
 		t.Fatal("Tempo payload contains credential-like payload")
 	}
 }
 
-func assertPipelineLoki(t *testing.T, output struct {
-	backend     dispatcher.Backend
-	contentType string
-	body        []byte
-}) {
+func assertPipelineLoki(t *testing.T, output pipelineOutput) {
 	t.Helper()
 	if output.contentType != "application/json" {
 		t.Fatalf("Loki content type = %q", output.contentType)
@@ -235,11 +227,7 @@ func assertPipelineLoki(t *testing.T, output struct {
 	}
 }
 
-func assertPipelineMetrics(t *testing.T, output struct {
-	backend     dispatcher.Backend
-	contentType string
-	body        []byte
-}) {
+func assertPipelineMetrics(t *testing.T, output pipelineOutput) {
 	t.Helper()
 	if output.contentType != "application/x-protobuf" {
 		t.Fatalf("Prometheus content type = %q", output.contentType)

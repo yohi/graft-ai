@@ -26,17 +26,21 @@
 
 ## 🚀 セットアップ手順
 
-### ⚡️ 方法 1: ワンライナー起動（最速・事前準備不要）
+### 方法 1: ローカルリポジトリから起動（推奨）
 
-自宅の PC / Mac / Linux で以下のコマンドを 1 行実行するだけで、プロキシ起動と Cloudflare Tunnel の開通が自動で行われ、URL が発行されます（`cloudflared` が未インストールの場合は一時的に自動取得されます）：
+リポジトリをクローン後、スクリプトを実行します（Cloudflare Tunnel の開通および安全な共有シークレット生成が自動で行われます）：
+
+```bash
+cd deploy/codex-proxy
+./run.sh
+```
+
+### 方法 2: ワンライナー起動（クイックスタート）
+
+自宅の PC / Mac / Linux で以下のコマンドを実行して起動することも可能です（内容を確認した上で実行してください）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yohi/graft-ai/master/deploy/codex-proxy/run.sh | bash
-```
-
-またはリポジトリ内から：
-```bash
-./deploy/codex-proxy/run.sh
 ```
 
 ---
@@ -153,6 +157,6 @@ Enter a secret value: https://codex-proxy.yourdomain.com
 ## 🔒 セキュリティと保護機能
 
 - **パスホワイトリスト制限:**
-  本プロキシは、オープンプロキシ化を防ぐため `/backend-api/wham/*` 宛てのリクエストのみを `chatgpt.com` に転送し、それ以外のパスは `403 Forbidden` で拒否します。
-- **共有シークレット保護（オプション）:**
-  環境変数 `PROXY_SECRET` を設定すると、`X-Proxy-Secret` ヘッダーが一致しないリクエストを `401 Unauthorized` で遮断できます（`graft-ai` の `CODEX_PROXY_SECRET` 設定と連携します）。
+  本プロキシは、オープンプロキシ化を防ぐため `/backend-api/wham/usage` および `/backend-api/wham/rate-limit-reset-credits` などの許可されたエンドポイント宛てのリクエストのみを `chatgpt.com` に転送し、それ以外のパスは `403 Forbidden` で拒否します。
+- **共有シークレット保護:**
+  環境変数 `PROXY_SECRET` を設定（`run.sh` では自動生成）すると、`X-Proxy-Secret` ヘッダーが一致しないリクエストを `401 Unauthorized` で遮断します（`graft-ai` の `CODEX_PROXY_SECRET` 設定と連携します）。

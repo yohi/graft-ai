@@ -8,6 +8,7 @@ const PROXY_SECRET = process.env.PROXY_SECRET?.trim();
 // 安全のため、転送を許可するパスを完全一致の静的マッピングで制限
 const PATH_MAP = {
   "/backend-api/wham/usage": "https://chatgpt.com/backend-api/wham/usage",
+  "/backend-api/wham/rate-limit-reset-credits": "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
   "/backend-api/wham/reset-credits": "https://chatgpt.com/backend-api/wham/reset-credits",
 };
 
@@ -43,12 +44,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 完全静的な固定エンドポイント URL の決定（ユーザー入力を含めない）
-  let targetUrlString = "";
-  if (url.pathname === "/backend-api/wham/usage") {
-    targetUrlString = "https://chatgpt.com/backend-api/wham/usage";
-  } else if (url.pathname === "/backend-api/wham/reset-credits") {
-    targetUrlString = "https://chatgpt.com/backend-api/wham/reset-credits";
-  } else {
+  const targetUrlString = PATH_MAP[url.pathname];
+  if (!targetUrlString) {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Forbidden: Path not allowed by proxy whitelist" }));
     return;
@@ -96,5 +93,7 @@ server.listen(PORT, HOST, () => {
   console.log(`🎯 Forwarding whitelisted paths to ${TARGET_ORIGIN}`);
   if (PROXY_SECRET) {
     console.log(`🔒 Proxy Secret authentication enabled`);
+  } else {
+    console.warn(`⚠️  WARNING: PROXY_SECRET is not set. Proxy is open without authentication.`);
   }
 });

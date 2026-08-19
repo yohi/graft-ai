@@ -6,6 +6,14 @@ set -uo pipefail
 # ==============================================================================
 
 PORT="${PORT:-8080}"
+PROXY_SECRET="${PROXY_SECRET:-}"
+GENERATED_SECRET=0
+
+if [[ -z "$PROXY_SECRET" ]]; then
+  PROXY_SECRET=$(head -c 16 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || openssl rand -hex 16 2>/dev/null || od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || echo "secret_$(date +%s)")
+  GENERATED_SECRET=1
+fi
+
 TMP_DIR=$(mktemp -d)
 PROXY_PID=""
 CLOUDFLARED_PID=""
@@ -136,7 +144,7 @@ server.listen(PORT, HOST, () => {
 EOF
 
 # バックグラウンドプロセスに stdin を奪われないよう < /dev/null を付与
-PORT="$PORT" node "$TMP_DIR/server.mjs" < /dev/null > "$TMP_DIR/proxy.log" 2>&1 &
+PORT="$PORT" PROXY_SECRET="$PROXY_SECRET" node "$TMP_DIR/server.mjs" < /dev/null > "$TMP_DIR/proxy.log" 2>&1 &
 PROXY_PID=$!
 
 sleep 0.5
@@ -209,11 +217,20 @@ echo "$SEPARATOR"
 echo ""
 echo "🔗 プロキシ URL:"
 echo "   $TUNNEL_URL"
+if [[ -n "$PROXY_SECRET" ]]; then
+  echo "🔒 プロキシ シークレット:"
+  echo "   $PROXY_SECRET"
+fi
 echo ""
 echo "📋 次のコマンドで graft-ai に登録してください:"
 echo "   cd workers"
 echo "   npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc"
 echo "   (プロンプトに上記 URL を入力)"
+if [[ -n "$PROXY_SECRET" ]]; then
+  echo ""
+  echo "   npx wrangler secret put CODEX_PROXY_SECRET --config wrangler.provider-metrics.jsonc"
+  echo "   (プロンプトに上記 シークレット を入力)"
+fi
 echo ""
 echo "$SEPARATOR"
 echo "※ このプロセスを実行している間、プロキシが有効になります (Ctrl+C で終了)。"

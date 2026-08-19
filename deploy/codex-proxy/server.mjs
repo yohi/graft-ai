@@ -5,8 +5,11 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TARGET_ORIGIN = "https://chatgpt.com";
 const PROXY_SECRET = process.env.PROXY_SECRET?.trim();
 
-// 安全のため、転送を許可するパスのプレフィックスを制限
-const ALLOWED_PATH_PREFIXES = ["/backend-api/wham/"];
+// 安全のため、転送を許可するパスを完全一致で制限
+const ALLOWED_PATHS = new Set([
+  "/backend-api/wham/usage",
+  "/backend-api/wham/reset-credits",
+]);
 
 const server = http.createServer(async (req, res) => {
   // CORS ヘッダー
@@ -39,15 +42,15 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // パス制限のチェック
-  const isAllowed = ALLOWED_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix));
-  if (!isAllowed) {
+  // パス制限の厳格な完全一致チェック
+  if (!ALLOWED_PATHS.has(url.pathname)) {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Forbidden: Path not allowed by proxy whitelist" }));
     return;
   }
 
-  const targetUrl = `${TARGET_ORIGIN}${url.pathname}${url.search}`;
+  const targetUrl = new URL(url.pathname, TARGET_ORIGIN);
+  targetUrl.search = url.search;
 
   try {
     // Cloudflare Tunnel 等が付与する cf-*, cdn-loop, x-forwarded-* を排除し、必要なヘッダーのみ安全に転送
@@ -65,7 +68,7 @@ const server = http.createServer(async (req, res) => {
     if (req.headers["openai-beta"]) forwardHeaders["OpenAI-Beta"] = req.headers["openai-beta"];
     if (req.headers["originator"]) forwardHeaders["originator"] = req.headers["originator"];
 
-    const upstreamResponse = await fetch(targetUrl, {
+    const upstreamResponse = await fetch(targetUrl.href, {
       method: req.method,
       headers: forwardHeaders,
     });

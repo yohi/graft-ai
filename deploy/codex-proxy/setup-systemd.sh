@@ -61,7 +61,7 @@ else
   echo "🚇 [3/4] cloudflared サービスをインストール中..."
   if ! command -v cloudflared >/dev/null 2>&1; then
     echo "cloudflared をインストール中..."
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    curl --proto '=https' --tlsv1.2 -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
     echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared jammy main' | tee /etc/apt/sources.list.d/cloudflared.list
     apt-get update && apt-get install -y cloudflared || true
   fi

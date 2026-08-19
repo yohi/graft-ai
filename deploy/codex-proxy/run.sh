@@ -9,6 +9,7 @@ PORT="${PORT:-8080}"
 TMP_DIR=$(mktemp -d)
 PROXY_PID=""
 CLOUDFLARED_PID=""
+SEPARATOR="=========================================================================="
 
 # 空いているポートを検索
 find_free_port() {
@@ -17,6 +18,7 @@ find_free_port() {
     p=$((p + 1))
   done
   echo "$p"
+  return 0
 }
 
 PORT=$(find_free_port "$PORT")
@@ -34,6 +36,7 @@ cleanup() {
   rm -rf "$TMP_DIR"
   echo "✨ 停止しました。"
   exit "$exit_code"
+  return 0
 }
 
 trap cleanup INT TERM EXIT
@@ -149,11 +152,11 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   DOWNLOAD_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${OS}-${CF_ARCH}"
   if [[ "$OS" == "darwin" ]]; then
     DOWNLOAD_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-${CF_ARCH}.tgz"
-    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cf.tgz" < /dev/null
+    curl --proto '=https' --tlsv1.2 -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cf.tgz" < /dev/null
     tar -xzf "$TMP_DIR/cf.tgz" -C "$TMP_DIR"
     CLOUDFLARED_BIN="$TMP_DIR/cloudflared"
   else
-    curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cloudflared" < /dev/null
+    curl --proto '=https' --tlsv1.2 -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/cloudflared" < /dev/null
     chmod +x "$TMP_DIR/cloudflared"
     CLOUDFLARED_BIN="$TMP_DIR/cloudflared"
   fi
@@ -189,9 +192,9 @@ if [[ -z "$TUNNEL_URL" ]]; then
 fi
 
 echo ""
-echo "=========================================================================="
+echo "$SEPARATOR"
 echo "🎉 Codex プロキシが正常に起動しました！"
-echo "=========================================================================="
+echo "$SEPARATOR"
 echo ""
 echo "🔗 プロキシ URL:"
 echo "   $TUNNEL_URL"
@@ -201,9 +204,9 @@ echo "   cd workers"
 echo "   npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc"
 echo "   (プロンプトに上記 URL を入力)"
 echo ""
-echo "=========================================================================="
+echo "$SEPARATOR"
 echo "※ このプロセスを実行している間、プロキシが有効になります (Ctrl+C で終了)。"
-echo "=========================================================================="
+echo "$SEPARATOR"
 echo ""
 
 # トンネルプロセスを監視待機（curl | bash でも標準入力 EOF で終了しないように sleep ループ）

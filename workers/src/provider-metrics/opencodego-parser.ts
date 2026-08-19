@@ -470,16 +470,34 @@ function cleanNumericString(raw: string): string {
   return s;
 }
 
-function scaleUsd(val: unknown, allowNegative = false): number | null {
+function parseNumericValue(val: unknown): number | null {
   if (typeof val === "string") {
     val = Number(cleanNumericString(val));
   }
   if (typeof val !== "number" || !Number.isFinite(val)) return null;
-  if (val < 0) return allowNegative ? 0 : null;
-  // OpenCodeGo nano-units are scaled by 10^8 (e.g. 100_000_000 = $1.00 USD, 1_000_000 = $0.01 USD).
-  // Pre-scaled USD amounts (limits, balances) are normal dollar amounts (e.g. 20, 2000, 23.45).
-  // Any value >= 1_000_000 represents an unscaled nano-unit integer of at least 1 cent ($0.01 USD).
-  return val >= 1_000_000 ? val / USD_SCALE : val;
+  return val;
+}
+
+// OpenCodeGo monthlyUsage in billing RPC is represented in integer nano-units (10^8 = $1.00 USD).
+function parseNanoUsd(val: unknown, allowNegative = false): number | null {
+  const num = parseNumericValue(val);
+  if (num === null) return null;
+  if (num < 0) return allowNegative ? 0 : null;
+  return num / USD_SCALE;
+}
+
+// OpenCodeGo monthlyLimit in billing RPC is represented as a normal USD dollar amount (e.g. 10, 20, 2500).
+function parseDollarLimit(val: unknown): number | null {
+  const num = parseNumericValue(val);
+  if (num === null || num < 0) return null;
+  return num;
+}
+
+// OpenCodeGo balance / zenBalance can be integer nano-units (in RPC, e.g. 500000000 = $5.00) or pre-scaled dollars (in HTML, e.g. 23.45).
+function parseBalanceUsd(val: unknown): number | null {
+  const num = parseNumericValue(val);
+  if (num === null || num < 0) return null;
+  return num >= 1_000_000 && Number.isInteger(num) ? num / USD_SCALE : num;
 }
 
 function parseJsonBilling(text: string): OpenCodeZenBilling | null {
@@ -488,13 +506,13 @@ function parseJsonBilling(text: string): OpenCodeZenBilling | null {
     if (!isRecord(parsed)) return null;
 
     const rawUsage = parsed["monthlyUsage"] ?? parsed["usage"];
-    const monthlyUsageUSD = scaleUsd(rawUsage, true);
+    const monthlyUsageUSD = parseNanoUsd(rawUsage, true);
     if (monthlyUsageUSD === null) return null;
 
     return {
       monthlyUsageUSD,
-      monthlyLimitUSD: scaleUsd(parsed["monthlyLimit"] ?? parsed["limit"]),
-      balanceUSD: scaleUsd(parsed["balance"] ?? parsed["zenBalance"]),
+      monthlyLimitUSD: parseDollarLimit(parsed["monthlyLimit"] ?? parsed["limit"]),
+      balanceUSD: parseBalanceUsd(parsed["balance"] ?? parsed["zenBalance"]),
       hasSubscription: Boolean(parsed["hasSubscription"] ?? parsed["subscription"]),
     };
   } catch {
@@ -507,7 +525,7 @@ function parseRegexBilling(text: string): OpenCodeZenBilling | null {
     /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(text);
   if (!usageMatch?.[1]) return null;
 
-  const monthlyUsageUSD = scaleUsd(cleanNumericString(usageMatch[1]), true);
+  const monthlyUsageUSD = parseNanoUsd(usageMatch[1], true);
   if (monthlyUsageUSD === null) return null;
 
   const limitMatch =
@@ -521,8 +539,8 @@ function parseRegexBilling(text: string): OpenCodeZenBilling | null {
 
   return {
     monthlyUsageUSD,
-    monthlyLimitUSD: limitMatch?.[1] ? scaleUsd(cleanNumericString(limitMatch[1])) : null,
-    balanceUSD: balanceMatch?.[1] ? scaleUsd(cleanNumericString(balanceMatch[1])) : null,
+    monthlyLimitUSD: limitMatch?.[1] ? parseDollarLimit(limitMatch[1]) : null,
+    balanceUSD: balanceMatch?.[1] ? parseBalanceUsd(balanceMatch[1]) : null,
     hasSubscription: subMatch !== null && subMatch[1]?.toLowerCase() === "true",
   };
 }
@@ -539,5 +557,5 @@ export function extractZenBalance(text: string): number | null {
     /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(
       text,
     );
-  return match?.[1] ? scaleUsd(cleanNumericString(match[1])) : null;
+  return match?.[1] ? parseBalanceUsd(match[1]) : null;
 }

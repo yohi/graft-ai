@@ -172,6 +172,7 @@ jobs:
           OPENAI_ADMIN_API_KEY: ${{ secrets.OPENAI_ADMIN_API_KEY || secrets.OPENAI_API_KEY }}
           CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
           CODEX_ACCOUNT_ID: ${{ secrets.CODEX_ACCOUNT_ID || vars.CODEX_ACCOUNT_ID }}
+          CODEX_PROXY_URL: ${{ secrets.CODEX_PROXY_URL || vars.CODEX_PROXY_URL }}
           OPENCODEGO_SESSION_COOKIE: ${{ secrets.OPENCODEGO_SESSION_COOKIE }}
           OPENCODEGO_WORKSPACE_ID: ${{ secrets.OPENCODEGO_WORKSPACE_ID || vars.OPENCODEGO_WORKSPACE_ID }}
         run: |
@@ -189,6 +190,7 @@ jobs:
           sync_secret "OPENAI_ADMIN_API_KEY" "$OPENAI_ADMIN_API_KEY"
           sync_secret "CODEX_ACCESS_TOKEN" "$CODEX_ACCESS_TOKEN"
           sync_secret "CODEX_ACCOUNT_ID" "$CODEX_ACCOUNT_ID"
+          sync_secret "CODEX_PROXY_URL" "$CODEX_PROXY_URL"
           sync_secret "OPENCODEGO_SESSION_COOKIE" "$OPENCODEGO_SESSION_COOKIE"
           sync_secret "OPENCODEGO_WORKSPACE_ID" "$OPENCODEGO_WORKSPACE_ID"
 

@@ -176,12 +176,152 @@ describe("fetchCodexMetrics", () => {
     expect(result.resetCredits).toBeUndefined();
   });
 
-  it("defaults plan to 'unknown' when plan_type absent", async () => {
-    const noPlan = { rate_limit: MOCK_USAGE_RESPONSE.rate_limit };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(noPlan), { status: 200 }));
-    const result = await fetchCodexMetrics("token", undefined, mockFetch);
-    expect(result.plan).toBe("unknown");
+  it("routes requests to custom proxyUrl when provided", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      expect(url.startsWith("https://proxy.example.com/backend-api/")).toBe(true);
+      return new Response(JSON.stringify(MOCK_USAGE_RESPONSE), { status: 200 });
+    });
+
+    const result = await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      "https://proxy.example.com/",
+    );
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+  });
+
+  it("falls back to browser rendering on 403 when browserBinding is provided and fetches reset credits", async () => {
+    let requestHandler: ((req: any) => void) | undefined;
+    const mockPage = {
+      setRequestInterception: vi.fn().mockResolvedValue(undefined),
+      on: vi.fn().mockImplementation((event: string, handler: (req: any) => void) => {
+        if (event === "request") requestHandler = handler;
+      }),
+      goto: vi.fn().mockImplementation(async (url: string) => {
+        // Simulate intercepted requests: one target URL, one external origin
+        if (requestHandler) {
+          const targetReq = {
+            url: () => url,
+            headers: () => ({ "Existing-Header": "val" }),
+            continue: vi.fn(),
+          };
+          requestHandler(targetReq);
+          expect(targetReq.continue).toHaveBeenCalledWith({
+            headers: {
+              "Existing-Header": "val",
+              Authorization: "Bearer token",
+              "ChatGPT-Account-Id": "acct-123",
+              "OpenAI-Beta": "codex-1",
+              originator: "Codex Desktop",
+              Accept: "application/json",
+            },
+          });
+
+          const externalReq = {
+            url: () => "https://cdn.example.com/asset.js",
+            headers: () => ({ "Existing-Header": "val" }),
+            continue: vi.fn(),
+          };
+          requestHandler(externalReq);
+          expect(externalReq.continue).toHaveBeenCalledWith();
+        }
+        return {
+          text: vi.fn().mockResolvedValue(JSON.stringify(MOCK_USAGE_RESPONSE)),
+        };
+      }),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const mockBrowser = {
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockLaunch = vi.fn().mockResolvedValue(mockBrowser);
+
+    vi.doMock("@cloudflare/puppeteer", () => ({
+      default: { launch: mockLaunch },
+    }));
+
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("/wham/usage")) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
+    });
+    const mockBrowserBinding = {} as Fetcher;
+
+    const result = await fetchCodexMetrics(
+      "token",
+      "acct-123",
+      mockFetch,
+      undefined,
+      mockBrowserBinding,
+    );
+
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+    expect(result.resetCredits).toEqual({ credits: 12, availableCount: 8 });
+    expect(mockPage.setRequestInterception).toHaveBeenCalledWith(true);
+    expect(mockLaunch).toHaveBeenCalledWith(mockBrowserBinding);
+    expect(mockBrowser.close).toHaveBeenCalled();
+  });
+
+  it("handles puppeteer without default export on 403", async () => {
+    const mockPage = {
+      setRequestInterception: vi.fn().mockResolvedValue(undefined),
+      on: vi.fn(),
+      goto: vi.fn().mockResolvedValue({
+        text: vi.fn().mockResolvedValue(JSON.stringify(MOCK_USAGE_RESPONSE)),
+      }),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const mockBrowser = {
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const mockLaunch = vi.fn().mockResolvedValue(mockBrowser);
+
+    vi.doMock("@cloudflare/puppeteer", () => ({
+      launch: mockLaunch,
+    }));
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    const mockBrowserBinding = {} as Fetcher;
+
+    const result = await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      undefined,
+      mockBrowserBinding,
+    );
+
+    expect(result.sessionUsageRatio).toBeCloseTo(0.45);
+    expect(mockLaunch).toHaveBeenCalledWith(mockBrowserBinding);
+  });
+
+  it("throws descriptive error when browser rendering returns non-JSON HTML", async () => {
+    const mockPage = {
+      setRequestInterception: vi.fn().mockResolvedValue(undefined),
+      on: vi.fn(),
+      goto: vi.fn().mockResolvedValue({
+        text: vi.fn().mockResolvedValue("<html><body>Just a moment...</body></html>"),
+      }),
+      evaluate: vi.fn().mockResolvedValue(""),
+    };
+    const mockBrowser = {
+      newPage: vi.fn().mockResolvedValue(mockPage),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.doMock("@cloudflare/puppeteer", () => ({
+      launch: vi.fn().mockResolvedValue(mockBrowser),
+    }));
+
+    const mockFetch = vi.fn().mockResolvedValue(new Response("Forbidden", { status: 403 }));
+    const mockBrowserBinding = {} as Fetcher;
+
+    await expect(
+      fetchCodexMetrics("token", undefined, mockFetch, undefined, mockBrowserBinding),
+    ).rejects.toThrow(/Browser rendering returned non-JSON response/);
   });
 });

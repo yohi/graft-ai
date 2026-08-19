@@ -1,8 +1,7 @@
 import type { CodexFetchResult } from "./types";
 import { getWithRetry } from "../http-retry";
 
-const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const DEFAULT_BASE_URL = "https://chatgpt.com";
 const TIMEOUT_MS = 30000;
 
 type WindowSnapshot = {
@@ -107,12 +106,13 @@ function parseResetCreditsResponse(value: unknown): CodexFetchResult["resetCredi
 }
 
 async function fetchResetCredits(
+  baseUrl: string,
   headers: Readonly<Record<string, string>>,
   fetchFn: typeof fetch,
 ): Promise<CodexFetchResult["resetCredits"]> {
   try {
     const response = await getWithRetry({
-      url: RESET_CREDITS_URL,
+      url: `${baseUrl}/backend-api/wham/rate-limit-reset-credits`,
       headers: { ...headers, "OpenAI-Beta": "codex-1", originator: "Codex Desktop" },
       fetchFn,
       logLabel: "Codex reset credits fetch",
@@ -132,11 +132,80 @@ async function fetchResetCredits(
   }
 }
 
+async function fetchViaBrowserRendering(
+  browserBinding: Fetcher,
+  baseUrl: string,
+  accessToken: string,
+  accountId?: string,
+): Promise<CodexUsageResponse> {
+  const puppeteerModule = await import("@cloudflare/puppeteer");
+  const launcher =
+    "launch" in puppeteerModule && typeof puppeteerModule.launch === "function"
+      ? puppeteerModule
+      : (puppeteerModule.default ?? puppeteerModule);
+  const browser = await launcher.launch(browserBinding);
+  try {
+    const page = await browser.newPage();
+    const targetUrl = `${baseUrl}/backend-api/wham/usage`;
+
+    await page.setRequestInterception(true);
+    page.on("request", (interceptedRequest) => {
+      if (interceptedRequest.url() === targetUrl) {
+        const headers = {
+          ...interceptedRequest.headers(),
+          Authorization: `Bearer ${accessToken}`,
+          ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+          "OpenAI-Beta": "codex-1",
+          originator: "Codex Desktop",
+          Accept: "application/json",
+        };
+        interceptedRequest.continue({ headers });
+      } else {
+        interceptedRequest.continue();
+      }
+    });
+
+    const response = await page.goto(targetUrl, {
+      waitUntil: "networkidle0",
+      timeout: 30000,
+    });
+
+    let rawText = "";
+    if (response !== null) {
+      try {
+        rawText = await response.text();
+      } catch {
+        rawText = "";
+      }
+    }
+    if (rawText.length === 0) {
+      const evalResult = await page.evaluate("document.body.innerText");
+      rawText = typeof evalResult === "string" ? evalResult : "";
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(rawText);
+    } catch {
+      const snippet = rawText.replace(/\s+/g, " ").trim().slice(0, 200);
+      throw new CodexResponseError(
+        `Browser rendering returned non-JSON response (snippet: ${snippet || "<empty>"})`,
+      );
+    }
+    return parseUsageResponse(body);
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
 export async function fetchCodexMetrics(
   accessToken: string,
   accountId?: string,
   fetchFn: typeof fetch = fetch,
+  proxyUrlOrBaseUrl?: string,
+  browserBinding?: Fetcher,
 ): Promise<CodexFetchResult> {
+  const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json",
@@ -151,8 +220,10 @@ export async function fetchCodexMetrics(
     headers["ChatGPT-Account-Id"] = accountId;
   }
 
+  let data: CodexUsageResponse;
+
   const response = await getWithRetry({
-    url: USAGE_URL,
+    url: `${baseUrl}/backend-api/wham/usage`,
     headers,
     fetchFn,
     logLabel: "Codex usage fetch",
@@ -161,19 +232,25 @@ export async function fetchCodexMetrics(
   });
 
   if (!response.ok) {
-    let bodySnippet = "";
-    try {
-      const text = await response.text();
-      bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
-    } catch {
-      await response.body?.cancel().catch(() => undefined);
+    if (response.status === 403 && browserBinding !== undefined) {
+      // Fallback to Cloudflare Browser Rendering to solve interactive JS challenge
+      data = await fetchViaBrowserRendering(browserBinding, baseUrl, accessToken, accountId);
+    } else {
+      let bodySnippet = "";
+      try {
+        const text = await response.text();
+        bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
+      } catch {
+        await response.body?.cancel().catch(() => undefined);
+      }
+      throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
     }
-    throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
+  } else {
+    const body: unknown = await response.json();
+    data = parseUsageResponse(body);
   }
 
-  const body: unknown = await response.json();
-  const data = parseUsageResponse(body);
-  const resetCredits = await fetchResetCredits(headers, fetchFn);
+  const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
 
   return {
     sessionUsageRatio: data.primaryWindow.usedPercent / 100,

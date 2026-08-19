@@ -92,7 +92,17 @@ curl https://xxxx-xxxx-xxxx.trycloudflare.com/healthz
    - **Service Type**: `HTTP`
    - **URL**: `codex-proxy:8080`（Docker Compose の場合）または `localhost:8080`
 
-#### 2. Docker Compose で永続起動
+#### 2. 永続起動の方法 (Docker または systemd)
+
+**パターン A: systemd サービスとして自動起動する場合 (Linux / ThinkCentreTiny 推奨)**
+ワンコマンドでプロキシと `cloudflared` の常駐サービス化（OS 起動時の自動起動）を完了できます：
+
+```bash
+cd deploy/codex-proxy
+sudo ./setup-systemd.sh [Cloudflare Tunnel Token]
+```
+
+**パターン B: Docker Compose で常時起動する場合**
 `deploy/codex-proxy/docker-compose.yml` を編集し、コメントアウトを解除して Tunnel Token を設定します：
 
 ```yaml

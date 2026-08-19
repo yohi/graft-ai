@@ -14,11 +14,15 @@ export interface ProviderMetricsEnv {
   CODEX_ACCESS_TOKEN?: string;
   CODEX_ACCOUNT_ID?: string; // optional workspace account id
   CODEX_PROXY_URL?: string; // optional residential/forward proxy URL
+  CODEX_PROXY_SECRET?: string; // optional shared secret for residential proxy auth
   CODEX_API_BASE_URL?: string; // optional custom base URL (default: https://chatgpt.com)
 
   // OpenCodeGo
   OPENCODEGO_SESSION_COOKIE?: string;
   OPENCODEGO_WORKSPACE_ID?: string; // optional override, fetched if missing
+
+  // Ollama Cloud
+  OLLAMA_SESSION_COOKIE?: string;
 
   // Cloudflare Browser Rendering (Headless Chromium)
   MYBROWSER?: Fetcher;
@@ -48,14 +52,14 @@ export interface OpenAIFetchResult {
 
 /** Codex fetcher の結果 */
 export interface CodexFetchResult {
-  /** セッション(5h)使用率 0.0–1.0 */
-  sessionUsageRatio: number;
-  /** 週次使用率 0.0–1.0 */
-  weeklyUsageRatio: number;
-  /** セッションリセット Unix 秒 */
-  sessionResetTimestampSeconds: number;
-  /** 週次リセット Unix 秒 */
-  weeklyResetTimestampSeconds: number;
+  /** セッション(5h)使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
+  sessionUsageRatio?: number;
+  /** 週次使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
+  weeklyUsageRatio?: number;
+  /** セッションリセット Unix 秒（レスポンスにウィンドウがない場合は undefined） */
+  sessionResetTimestampSeconds?: number;
+  /** 週次リセット Unix 秒（レスポンスにウィンドウがない場合は undefined） */
+  weeklyResetTimestampSeconds?: number;
   /** クレジット残高（取得できない場合は null） */
   creditsRemaining: number | null;
   /** リセットクレジット（補助エンドポイントが利用できない場合は undefined） */
@@ -75,12 +79,28 @@ export interface OpenCodeGoFetchResult {
   weeklyUsageRatio?: number;
   /** 月次使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
   monthlyUsageRatio?: number;
-  /** ローリングリセット残秒 */
-  rollingResetSeconds: number;
+  /** ローリングリセット残秒（月間枠上限時は undefined） */
+  rollingResetSeconds?: number;
   /** 週次リセット残秒（レスポンスにウィンドウがない場合は undefined） */
   weeklyResetSeconds?: number;
   /** 月次リセット残秒（レスポンスにウィンドウがない場合は undefined） */
   monthlyResetSeconds?: number;
   /** Zen クレジット残高 USD（取得できない場合は null） */
   zenBalanceUSD: number | null;
+}
+
+/** Ollama Cloud fetcher の結果 */
+export interface OllamaFetchResult {
+  /** セッション使用率 0.0–1.0（取得できない場合は undefined） */
+  sessionUsageRatio?: number;
+  /** 週次使用率 0.0–1.0（取得できない場合は undefined） */
+  weeklyUsageRatio?: number;
+  /** セッションリセット Unix 秒（取得できない場合は undefined） */
+  sessionResetTimestampSeconds?: number;
+  /** 週次リセット Unix 秒（取得できない場合は undefined） */
+  weeklyResetTimestampSeconds?: number;
+  /** プラン名（Free / Pro / Max 等） */
+  plan?: string;
+  /** アカウント Email */
+  email?: string;
 }

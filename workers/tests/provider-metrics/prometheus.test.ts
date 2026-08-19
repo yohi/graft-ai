@@ -129,6 +129,25 @@ describe("pushProviderMetrics", () => {
     expect(names).toContain("opencodego_zen_balance_usd");
   });
 
+  it("includes ollama metrics when ollama result provided", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    const sampleOllama = {
+      sessionUsageRatio: 0.4,
+      weeklyUsageRatio: 0.15,
+      sessionResetTimestampSeconds: 1786161204,
+      weeklyResetTimestampSeconds: 1786247604,
+      plan: "Pro",
+    };
+    await pushProviderMetrics(env, { ollama: sampleOllama }, mockFetch);
+    const init = mockFetch.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
+    const names = metrics.map((m) => m.name);
+    expect(names).toContain("ollama_cloud_usage_ratio");
+    expect(names).toContain("ollama_cloud_reset_timestamp_seconds");
+    expect(names).toContain("ollama_cloud_plan_info");
+  });
+
   it("retries on HTTP 429 up to 2 times", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("Too Many Requests", { status: 429 }));
     const result = await pushProviderMetrics(env, { codex: sampleCodex }, mockFetch);

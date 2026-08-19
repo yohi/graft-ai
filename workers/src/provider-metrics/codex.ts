@@ -7,11 +7,12 @@ const TIMEOUT_MS = 30000;
 type WindowSnapshot = {
   readonly usedPercent: number;
   readonly resetAt: number;
+  readonly limitWindowSeconds?: number;
 };
 
 type CodexUsageResponse = {
-  readonly primaryWindow: WindowSnapshot;
-  readonly secondaryWindow: WindowSnapshot;
+  readonly primaryWindow: WindowSnapshot | null;
+  readonly secondaryWindow: WindowSnapshot | null;
   readonly creditsRemaining: number | null;
   readonly plan: string;
 };
@@ -39,9 +40,9 @@ function parseFiniteNumber(value: unknown, path: string): number {
   return value;
 }
 
-function parseWindow(value: unknown, path: string): WindowSnapshot {
-  if (value === undefined) {
-    invalidResponse(`${path} is a required window`);
+function parseWindow(value: unknown, path: string): WindowSnapshot | null {
+  if (value === undefined || value === null) {
+    return null;
   }
   if (!isRecord(value)) {
     invalidResponse(`${path} must be an object`);
@@ -57,7 +58,20 @@ function parseWindow(value: unknown, path: string): WindowSnapshot {
     invalidResponse(`${path}.reset_at must be a non-negative integer`);
   }
 
-  return { usedPercent, resetAt };
+  let limitWindowSeconds: number | undefined;
+  if (value["limit_window_seconds"] !== undefined && value["limit_window_seconds"] !== null) {
+    limitWindowSeconds = parseFiniteNumber(
+      value["limit_window_seconds"],
+      `${path}.limit_window_seconds`,
+    );
+  } else if (value["reset_after_seconds"] !== undefined && value["reset_after_seconds"] !== null) {
+    limitWindowSeconds = parseFiniteNumber(
+      value["reset_after_seconds"],
+      `${path}.reset_after_seconds`,
+    );
+  }
+
+  return { usedPercent, resetAt, limitWindowSeconds };
 }
 
 function parseCreditsRemaining(value: unknown): number | null {
@@ -89,9 +103,16 @@ function parseUsageResponse(value: unknown): CodexUsageResponse {
     invalidResponse("plan_type must be a string");
   }
 
+  const primaryWindow = parseWindow(rateLimit["primary_window"], "rate_limit.primary_window");
+  const secondaryWindow = parseWindow(rateLimit["secondary_window"], "rate_limit.secondary_window");
+
+  if (primaryWindow === null && secondaryWindow === null) {
+    invalidResponse("rate_limit must contain at least one valid window");
+  }
+
   return {
-    primaryWindow: parseWindow(rateLimit["primary_window"], "rate_limit.primary_window"),
-    secondaryWindow: parseWindow(rateLimit["secondary_window"], "rate_limit.secondary_window"),
+    primaryWindow,
+    secondaryWindow,
     creditsRemaining: parseCreditsRemaining(value["credits"]),
     plan: planType ?? "unknown",
   };
@@ -198,12 +219,47 @@ async function fetchViaBrowserRendering(
   }
 }
 
+function classifyCodexWindow(window: WindowSnapshot | null): "weekly" | "session" | null {
+  if (!window) return null;
+  if (window.limitWindowSeconds !== undefined) {
+    return window.limitWindowSeconds >= 86400 * 3 ? "weekly" : "session";
+  }
+  return null;
+}
+
+function normalizeCodexWindows(
+  primary: WindowSnapshot | null,
+  secondary: WindowSnapshot | null,
+): { sessionWindow: WindowSnapshot | null; weeklyWindow: WindowSnapshot | null } {
+  let sessionWindow: WindowSnapshot | null = null;
+  let weeklyWindow: WindowSnapshot | null = null;
+
+  const primaryType = classifyCodexWindow(primary);
+  const secondaryType = classifyCodexWindow(secondary);
+
+  if (primaryType === "weekly") {
+    weeklyWindow = primary;
+  } else if (primaryType === "session") {
+    sessionWindow = primary;
+  }
+
+  if (secondaryType === "weekly" && !weeklyWindow) {
+    weeklyWindow = secondary;
+  } else if (secondaryType === "session" && !sessionWindow) {
+    sessionWindow = secondary;
+  }
+
+  return { sessionWindow, weeklyWindow };
+}
+
 export async function fetchCodexMetrics(
   accessToken: string,
   accountId?: string,
   fetchFn: typeof fetch = fetch,
   proxyUrlOrBaseUrl?: string,
   browserBinding?: Fetcher,
+  _now: Date = new Date(),
+  proxySecret?: string,
 ): Promise<CodexFetchResult> {
   const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
@@ -218,6 +274,9 @@ export async function fetchCodexMetrics(
   };
   if (accountId) {
     headers["ChatGPT-Account-Id"] = accountId;
+  }
+  if (proxySecret) {
+    headers["X-Proxy-Secret"] = proxySecret;
   }
 
   let data: CodexUsageResponse;
@@ -251,12 +310,16 @@ export async function fetchCodexMetrics(
   }
 
   const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
+  const { sessionWindow, weeklyWindow } = normalizeCodexWindows(
+    data.primaryWindow,
+    data.secondaryWindow,
+  );
 
   return {
-    sessionUsageRatio: data.primaryWindow.usedPercent / 100,
-    weeklyUsageRatio: data.secondaryWindow.usedPercent / 100,
-    sessionResetTimestampSeconds: data.primaryWindow.resetAt,
-    weeklyResetTimestampSeconds: data.secondaryWindow.resetAt,
+    sessionUsageRatio: sessionWindow ? sessionWindow.usedPercent / 100 : undefined,
+    weeklyUsageRatio: weeklyWindow ? weeklyWindow.usedPercent / 100 : undefined,
+    sessionResetTimestampSeconds: sessionWindow ? sessionWindow.resetAt : undefined,
+    weeklyResetTimestampSeconds: weeklyWindow ? weeklyWindow.resetAt : undefined,
     creditsRemaining: data.creditsRemaining,
     resetCredits,
     plan: data.plan,

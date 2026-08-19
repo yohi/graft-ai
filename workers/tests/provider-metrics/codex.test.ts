@@ -161,6 +161,29 @@ describe("fetchCodexMetrics", () => {
     expect(result.creditsRemaining).toBeNull();
   });
 
+  it("handles null or missing secondary_window without error", async () => {
+    const responseWithNullSecondary = {
+      plan_type: "plus",
+      rate_limit: {
+        primary_window: {
+          used_percent: 60,
+          reset_at: 1786161204,
+          limit_window_seconds: 18000,
+        },
+        secondary_window: null,
+      },
+    };
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(responseWithNullSecondary), { status: 200 }));
+    const result = await fetchCodexMetrics("token", undefined, mockFetch);
+    expect(result.sessionUsageRatio).toBeCloseTo(0.6);
+    expect(result.weeklyUsageRatio).toBeUndefined();
+    expect(result.sessionResetTimestampSeconds).toBe(1786161204);
+    expect(result.weeklyResetTimestampSeconds).toBeUndefined();
+    expect(result.plan).toBe("plus");
+  });
+
   it("ignores non-finite reset credits without losing usage metrics", async () => {
     const mockFetch = vi
       .fn()
@@ -323,5 +346,131 @@ describe("fetchCodexMetrics", () => {
     await expect(
       fetchCodexMetrics("token", undefined, mockFetch, undefined, mockBrowserBinding),
     ).rejects.toThrow(/Browser rendering returned non-JSON response/);
+  });
+
+  it("sends X-Proxy-Secret header when proxySecret is provided", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      return new Response(
+        JSON.stringify(
+          url.endsWith("rate-limit-reset-credits")
+            ? MOCK_RESET_CREDITS_RESPONSE
+            : MOCK_USAGE_RESPONSE,
+        ),
+        { status: 200 },
+      );
+    });
+
+    await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      "https://proxy.example.com",
+      undefined,
+      new Date(),
+      "my-secret-proxy-key",
+    );
+
+    for (const [, init] of mockFetch.mock.calls as [string, RequestInit][]) {
+      const headers = new Headers(init.headers);
+      expect(headers.get("X-Proxy-Secret")).toBe("my-secret-proxy-key");
+    }
+  });
+
+  it("classifies weekly window correctly even when less than 24 hours remain", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          plan_type: "plus",
+          rate_limit: {
+            primary_window: {
+              used_percent: 75,
+              reset_at: 1786247604,
+              limit_window_seconds: 604800, // 7-day window
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+
+    // Injected 'now' is only 1 hour before reset_at (1786247604 - 3600 = 1786244004)
+    const now = new Date((1786247604 - 3600) * 1000);
+    const result = await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      undefined,
+      undefined,
+      now,
+    );
+
+    expect(result.weeklyUsageRatio).toBeCloseTo(0.75);
+    expect(result.weeklyResetTimestampSeconds).toBe(1786247604);
+    expect(result.sessionUsageRatio).toBeUndefined();
+  });
+
+  it("leaves secondary window undefined when it lacks limit_window_seconds", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          plan_type: "pro",
+          rate_limit: {
+            primary_window: {
+              used_percent: 30,
+              reset_at: 1786161204,
+              limit_window_seconds: 18000, // session window
+            },
+            secondary_window: {
+              used_percent: 60,
+              reset_at: 1786247604,
+              // limit_window_seconds is omitted
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await fetchCodexMetrics("token", undefined, mockFetch);
+    expect(result.sessionUsageRatio).toBeCloseTo(0.3);
+    expect(result.sessionResetTimestampSeconds).toBe(1786161204);
+    expect(result.weeklyUsageRatio).toBeUndefined();
+    expect(result.weeklyResetTimestampSeconds).toBeUndefined();
+  });
+
+  it("leaves period metrics undefined when windows lack limit_window_seconds", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          plan_type: "free",
+          rate_limit: {
+            primary_window: {
+              used_percent: 10,
+              reset_at: 1786161204,
+            },
+            secondary_window: {
+              used_percent: 50,
+              reset_at: 1786247604,
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+
+    const result = await fetchCodexMetrics("token", undefined, mockFetch);
+    expect(result.sessionUsageRatio).toBeUndefined();
+    expect(result.sessionResetTimestampSeconds).toBeUndefined();
+    expect(result.weeklyUsageRatio).toBeUndefined();
+    expect(result.weeklyResetTimestampSeconds).toBeUndefined();
   });
 });

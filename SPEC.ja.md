@@ -63,8 +63,9 @@ Loki に push します。
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
-Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCodeGo
-から使用量メトリクスを取得し、OTLP/v1 JSON で Grafana Cloud Prometheus に push します。
+Cron `* * * * *` で実行する Worker です。Codex、OpenAI API、OpenCodeGo
+の使用量メトリクスを各プロバイダーから取得し、OTLP/JSON 形式で Grafana Cloud
+Prometheus に push します。
 
 **Providers:**
 
@@ -77,24 +78,27 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
   継続実行します。
 - OpenAI レスポンスに cost bucket と token bucket がともに0件の場合、結果は空とみなし
   push ペイロードから除外します。
-- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token）
-- Codex の `primary_window` と `secondary_window` は必須です。欠損や範囲外の値は
-  Codex fetch 全体を失敗させます。
+- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token、`CODEX_PROXY_URL` または `CODEX_API_BASE_URL` でプロキシ/カスタムBase URLを指定可能）
+- `primary_window` または `secondary_window` のうち少なくとも1つの有効なウィンドウが必要です。`secondary_window` が欠落または null の場合（単一ウィンドウプラン等）、その使用率とリセット時刻は 0 として扱われます。
+- 直接リクエストで HTTP 403（Cloudflare WAF Turnstile チャレンジ）が発生した場合、`CODEX_PROXY_URL`（Cloudflare Tunnel を介した住宅用プロキシ等）経由で通信するか、Cloudflare Browser Rendering へフォールバックします。
 - `GET .../wham/rate-limit-reset-credits` は補助エンドポイントです。失敗時も Codex
   usage メトリクスは push され、`codex_reset_credits` と
   `codex_reset_credits_available_count` のみ省略されます。
-- **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping（Session Cookie）
+- **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping および `_server` RPC（Session Cookie）
 - OpenCodeGo の rolling usage と rolling reset は必須フィールドです。欠損時は fetch
   が失敗します。weekly と monthly ウィンドウは任意で、レスポンスに含まれない場合は
-  それらのメトリクスは省略されます。
+  それらのメトリクスは省略されます。サブスクリプション RPC が null を返した場合（従量課金/Zen ワークスペース等）、Billing RPC エンドポイントにフォールバックします。
 - `OPENCODEGO_WORKSPACE_ID` 未設定時、使用量ページをスクレイピングする前に
   OpenCodeGo の `_server` エンドポイントからワークスペース ID を自動取得します。
+- **Ollama Cloud:** `ollama.com/settings` の HTML scraping（Session Cookie）
+- プラン名（`Free`, `Pro`, `Max` 等）、Session/Hourly 利用率、Weekly 利用率、および `data-time` の ISO リセット日時を抽出します。ウィンドウが存在しない場合は該当メトリクスを省略します。
 
 **Metrics pushed:**
 
 - `openai_api_cost_usd{line_item}`、`openai_api_{input,output,cached}_tokens{model}`、`openai_api_requests{model}`
 - `codex_usage_ratio{period}`、`codex_reset_timestamp_seconds{period}`、`codex_credits_remaining`、`codex_reset_credits`、`codex_reset_credits_available_count`、`codex_plan_info{plan}`
 - `opencodego_usage_ratio{period}`、`opencodego_reset_seconds_remaining{period}`、`opencodego_zen_balance_usd`
+- `ollama_cloud_usage_ratio{period}`、`ollama_cloud_reset_timestamp_seconds{period}`、`ollama_cloud_plan_info{plan}`
 
 **Error handling:** Provider ごとの fetch は独立しており、1つの失敗が他のメトリクス
 push を妨げません。HTTP 401 と 403 は即時失敗（cookie/key 期限切れ）として扱い、
@@ -104,7 +108,7 @@ push を妨げません。HTTP 401 と 403 は即時失敗（cookie/key 期限�
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 
-Cron `*/5 * * * *` で実行する Worker です。設定した ISO 8601 のアンカー時刻と
+Cron `* * * * *` で実行する Worker です。設定した ISO 8601 のアンカー時刻と
 公式に文書化されたリセット間隔から、session と weekly のレート制限リセット
 メトリクスを派生します。Ollama Cloud のダッシュボードをスクレイピングしたり、
 実際の使用量を推測したりはしません。結果は OTLP/v1 JSON で Grafana Cloud

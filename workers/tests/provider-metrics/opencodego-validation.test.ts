@@ -5,7 +5,7 @@ const WORKSPACE_HTML = `<script>self.__next_f=[["wrk_abc123"]]</script>`;
 const ZEN_HTML = `<script>{"zenBalance":23.45}</script>`;
 const VALID_USAGE = `{"usagePercent":50,"resetInSec":600}`;
 
-function mockFetchForUsage(usageBody: string, zenBody = ZEN_HTML) {
+function mockFetchForUsage(usageBody: string, zenBody = "{}") {
   let call = 0;
   return vi.fn().mockImplementation(async () => {
     call++;
@@ -52,25 +52,45 @@ describe("fetchOpenCodeGoMetrics usage response validation", () => {
     ).rejects.toThrow(/reset seconds must be a finite non-negative safe integer/i);
   });
 
-  it.each([
-    ["usage percentage", "usagePercent", `{"resetInSec":600}`],
-    ["reset seconds", "resetInSec", `{"usagePercent":50}`],
-  ])("does not read inherited %s", async (_label, property, body) => {
-    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, property);
-    Object.defineProperty(Object.prototype, property, {
+  it("does not read inherited usage percentage", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, "usagePercent");
+    Object.defineProperty(Object.prototype, "usagePercent", {
       configurable: true,
-      value: property === "usagePercent" ? 50 : 600,
+      value: 50,
     });
 
     try {
       await expect(
-        fetchOpenCodeGoMetrics("session=abc", undefined, mockFetchForUsage(body)),
+        fetchOpenCodeGoMetrics("session=abc", undefined, mockFetchForUsage(`{"resetInSec":600}`)),
       ).rejects.toThrow(/could not parse usage|missing required rolling/i);
     } finally {
       if (descriptor === undefined) {
-        Reflect.deleteProperty(Object.prototype, property);
+        Reflect.deleteProperty(Object.prototype, "usagePercent");
       } else {
-        Object.defineProperty(Object.prototype, property, descriptor);
+        Object.defineProperty(Object.prototype, "usagePercent", descriptor);
+      }
+    }
+  });
+
+  it("does not read inherited reset seconds", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, "resetInSec");
+    Object.defineProperty(Object.prototype, "resetInSec", {
+      configurable: true,
+      value: 600,
+    });
+
+    try {
+      const result = await fetchOpenCodeGoMetrics(
+        "session=abc",
+        undefined,
+        mockFetchForUsage(`{"usagePercent":50}`),
+      );
+      expect(result.rollingResetSeconds).toBeUndefined();
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(Object.prototype, "resetInSec");
+      } else {
+        Object.defineProperty(Object.prototype, "resetInSec", descriptor);
       }
     }
   });
@@ -110,5 +130,25 @@ describe("fetchOpenCodeGoMetrics usage response validation", () => {
     await expect(
       fetchOpenCodeGoMetrics("session=abc", undefined, mockFetchForUsage(body)),
     ).rejects.toThrow(expectedError);
+  });
+
+  it("skips non-numeric values and picks valid numeric candidate", async () => {
+    const body = `<script>
+      self.__next_f=[["wrk_abc123"]];
+      self.otherData = {"usagePercent": "unlimited", "resetInSec": "soon"};
+      self.actualUsage = {"usagePercent": 40, "resetInSec": 1800};
+    </script>`;
+
+    let call = 0;
+    const mockFetch = vi.fn().mockImplementation(async () => {
+      call++;
+      if (call === 1) return new Response(WORKSPACE_HTML, { status: 200 });
+      if (call === 2) return new Response(body, { status: 200 });
+      return new Response(ZEN_HTML, { status: 200 });
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    expect(result.rollingUsageRatio).toBeCloseTo(0.4);
+    expect(result.rollingResetSeconds).toBe(1800);
   });
 });

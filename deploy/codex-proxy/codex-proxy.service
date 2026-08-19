@@ -1,0 +1,15 @@
+[Unit]
+Description=graft-ai Codex Residential Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/graft-ai-codex-proxy
+EnvironmentFile=/etc/codex-proxy/proxy.env
+ExecStart=/usr/bin/env node /opt/graft-ai-codex-proxy/server.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

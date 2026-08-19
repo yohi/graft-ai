@@ -23,28 +23,17 @@ const MOCK_USAGE_RESPONSE = {
 };
 
 describe("fetchCodexMetrics usage response validation", () => {
-  it.each([
-    [
-      "primary_window",
-      {
-        ...MOCK_USAGE_RESPONSE,
-        rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, primary_window: undefined },
-      },
-    ],
-    [
-      "secondary_window",
-      {
-        ...MOCK_USAGE_RESPONSE,
-        rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, secondary_window: undefined },
-      },
-    ],
-  ])("throws when %s is missing", async (_window, incompleteResponse) => {
+  it("throws when both primary_window and secondary_window are missing", async () => {
+    const incompleteResponse = {
+      ...MOCK_USAGE_RESPONSE,
+      rate_limit: { primary_window: undefined, secondary_window: undefined },
+    };
     const mockFetch = vi
       .fn()
       .mockResolvedValue(new Response(JSON.stringify(incompleteResponse), { status: 200 }));
 
     await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /required window/,
+      /at least one valid window/,
     );
   });
 

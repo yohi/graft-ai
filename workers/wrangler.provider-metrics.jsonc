@@ -12,7 +12,7 @@
     "binding": "MYBROWSER"
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["* * * * *"]
   },
   "vars": {
     "OPENAI_API_HISTORY_DAYS": "1"

@@ -71,8 +71,8 @@ Loki.
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
-A scheduled Worker (cron `*/5 * * * *`) that fetches usage metrics from Codex,
-OpenAI API, and OpenCodeGo and pushes them to Grafana Cloud Prometheus via
+A scheduled Worker (cron `* * * * *`) that fetches usage metrics from Codex,
+OpenAI API, and OpenCodeGo, and pushes them to Grafana Cloud Prometheus via
 OTLP/v1 JSON.
 
 **Providers:**
@@ -86,24 +86,31 @@ OTLP/v1 JSON.
   value; other providers still execute.
 - When the OpenAI response contains zero cost buckets and zero token buckets,
   the result is treated as empty and excluded from the push payload.
-- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token)
-- Codex `primary_window` and `secondary_window` are required; missing or
-  out-of-range values cause the Codex fetch to fail.
+- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token, optional custom base/proxy via `CODEX_PROXY_URL` or `CODEX_API_BASE_URL`)
+  - At least one valid window (`primary_window` or `secondary_window`) is required. When `secondary_window` is absent or null (e.g. for single-window plans), its usage ratio and reset timestamp are omitted (`undefined`) to display as hyphens on Grafana dashboards rather than false 0% usage.
+  - When direct requests receive HTTP 403 (Cloudflare WAF Turnstile challenge), the Worker can route through `CODEX_PROXY_URL` (e.g. residential proxy via Cloudflare Tunnel) or fallback to Cloudflare Browser Rendering.
 - `GET .../wham/rate-limit-reset-credits` is a supplementary endpoint. When it
   fails, Codex usage metrics are still pushed; only `codex_reset_credits` and
   `codex_reset_credits_available_count` are omitted.
-- **OpenCodeGo:** HTML scraping of `opencode.ai/workspace/{id}/go` (Session Cookie)
+- **OpenCodeGo:** HTML scraping of `opencode.ai/workspace/{id}/go` and `_server` RPC (Session Cookie)
 - OpenCodeGo rolling usage and rolling reset are required fields; the fetch
   fails when they are absent. Weekly and monthly windows are optional; their
-  metrics are omitted when the response does not contain them.
+  metrics are omitted when the response does not contain them. When subscription
+  RPC returns null (e.g. pay-as-you-go workspaces), it falls back to the billing
+  RPC endpoint.
 - When `OPENCODEGO_WORKSPACE_ID` is unset, the workspace ID is auto-fetched from
   the OpenCodeGo `_server` endpoint before scraping the usage page.
+- **Ollama Cloud:** HTML scraping of `ollama.com/settings` (Session Cookie)
+- Extracts Plan tier (`Free`, `Pro`, `Max`), Session/Hourly usage percent,
+  Weekly usage percent, and `data-time` ISO reset timestamps. When session or
+  weekly blocks are absent, their metrics are omitted.
 
 **Metrics pushed:**
 
 - `openai_api_cost_usd{line_item}`, `openai_api_{input,output,cached}_tokens{model}`, `openai_api_requests{model}`
 - `codex_usage_ratio{period}`, `codex_reset_timestamp_seconds{period}`, `codex_credits_remaining`, `codex_reset_credits`, `codex_reset_credits_available_count`, `codex_plan_info{plan}`
 - `opencodego_usage_ratio{period}`, `opencodego_reset_seconds_remaining{period}`, `opencodego_zen_balance_usd`
+- `ollama_cloud_usage_ratio{period}`, `ollama_cloud_reset_timestamp_seconds{period}`, `ollama_cloud_plan_info{plan}`
 
 **Error handling:** Each provider fetch is independent; a single failure does
 not prevent other metrics from being pushed. HTTP 401 and 403 responses are
@@ -115,7 +122,7 @@ logs an error and exits without pushing.
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 
-A scheduled Worker (cron `*/5 * * * *`) derives session and weekly rate-limit
+A scheduled Worker (cron `* * * * *`) derives session and weekly rate-limit
 reset metrics from a configured ISO 8601 anchor and documented reset intervals.
 It does not scrape the Ollama Cloud dashboard or attempt to infer actual usage.
 The resulting metrics are pushed to Grafana Cloud Prometheus via OTLP/v1 JSON.

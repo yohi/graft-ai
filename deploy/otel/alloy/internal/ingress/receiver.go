@@ -1,16 +1,17 @@
 package ingress
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
-	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/spanlogs"
 )
 
 const (
@@ -26,6 +27,7 @@ type ReceiverConfig struct {
 	MaxBodyBytes          int64
 	MaxConcurrentRequests int
 	SamplingRatePPM       uint32
+	Now                   func() time.Time
 }
 
 type Receiver struct {
@@ -38,8 +40,7 @@ type Receiver struct {
 	concurrency     chan struct{}
 	metrics         *IngressMetrics
 	redactor        redaction.Redactor
-	projector       spanlogs.Projector
-	sizer           spanlogs.Sizer
+	now             func() time.Time
 }
 
 func NewReceiver(config ReceiverConfig) (*Receiver, error) {
@@ -55,6 +56,10 @@ func NewReceiver(config ReceiverConfig) (*Receiver, error) {
 	if config.MaxConcurrentRequests <= 0 {
 		return nil, errors.New("otel ingress: max concurrent requests must be positive")
 	}
+	now := config.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &Receiver{
 		authenticator:   config.Authenticator,
 		sourceIdentity:  config.SourceIdentity,
@@ -65,8 +70,7 @@ func NewReceiver(config ReceiverConfig) (*Receiver, error) {
 		concurrency:     make(chan struct{}, config.MaxConcurrentRequests),
 		metrics:         NewIngressMetrics(),
 		redactor:        redaction.NewRedactor(),
-		projector:       spanlogs.NewProjector(),
-		sizer:           spanlogs.NewSizer(spanlogs.MaxLineBytes),
+		now:             now,
 	}, nil
 }
 
@@ -114,7 +118,11 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, r.maxBodyBytes))
 	if err != nil {
-		r.reject(writer, http.StatusRequestEntityTooLarge, "body_size")
+		if isBodyTimeout(request, err) {
+			r.reject(writer, http.StatusRequestTimeout, "timeout")
+		} else {
+			r.reject(writer, http.StatusRequestEntityTooLarge, "body_size")
+		}
 		return
 	}
 	spans, err := decodeSpans(body, contentType)
@@ -126,18 +134,17 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 	var accepted int
 	for _, span := range spans {
 		redacted, _ := r.redactor.Redact(span)
-		record, _ := r.projector.ProjectRequestSpan(redacted)
-		record, sizeReason := r.sizer.Finalize(record)
-		if sizeReason == spanlogs.DropReasonLineSizeMetadata {
-			r.metrics.SizeDrop()
-			continue
+		payload, marshalErr := json.Marshal(redacted.Attributes)
+		if marshalErr != nil {
+			payload = []byte("{}")
 		}
 		envelope := Envelope{
 			TraceID:         redacted.TraceID,
-			Payload:         record.Serialized,
+			Payload:         payload,
 			ContentType:     "application/json",
 			SamplingRatePPM: r.samplingRatePPM,
 			Span:            redacted,
+			ReceivedAt:      r.now(),
 		}
 		if !r.queue.Enqueue(envelope) {
 			r.metrics.CapacityDrop()
@@ -156,6 +163,17 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 	}
 	r.metrics.AcceptedN(accepted)
 	r.accept(writer, "accepted")
+}
+
+func isBodyTimeout(request *http.Request, err error) bool {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(request.Context().Err(), context.DeadlineExceeded) {
+		return true
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
 }
 
 func (r *Receiver) Metrics() MetricsSnapshot {

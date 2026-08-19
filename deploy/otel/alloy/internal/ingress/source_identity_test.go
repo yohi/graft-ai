@@ -42,6 +42,14 @@ func TestSourceIdentity_rejects_untrusted_peer_before_forwarded_headers(t *testi
 	}
 }
 
+func TestNewSourceIdentity_rejects_broad_trusted_networks(t *testing.T) {
+	for _, cidr := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/24"} {
+		if _, err := NewSourceIdentity([]string{cidr}, []byte("hmac-key")); err == nil {
+			t.Fatalf("trusted CIDR %q was accepted", cidr)
+		}
+	}
+}
+
 func TestSourceIdentity_fallbacks_to_unknown_when_forwarded_header_missing_or_invalid(t *testing.T) {
 	identity, err := NewSourceIdentity([]string{"127.0.0.1/32"}, []byte("hmac-key"))
 	if err != nil {

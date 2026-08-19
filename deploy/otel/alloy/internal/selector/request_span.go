@@ -21,6 +21,7 @@ type Trace struct {
 	Spans          []redaction.RedactedSpan
 	RequestSpan    redaction.RedactedSpan
 	HasRequestSpan bool
+	ReceivedAt     time.Time
 }
 
 type Eviction struct {
@@ -105,6 +106,22 @@ func (s *RequestSelector) FlushIdle(now time.Time) []Trace {
 	return flushed
 }
 
+func (s *RequestSelector) FlushAll() []Trace {
+	keys := make([]string, 0, len(s.traces))
+	for traceID := range s.traces {
+		keys = append(keys, traceID)
+	}
+	sort.Strings(keys)
+	flushed := make([]Trace, 0, len(keys))
+	for _, traceID := range keys {
+		state := s.traces[traceID]
+		delete(s.traces, traceID)
+		s.bytes -= state.bytes
+		flushed = append(flushed, buildTrace(*state))
+	}
+	return flushed
+}
+
 func (s *RequestSelector) Evict() []Eviction {
 	var evictions []Eviction
 	for len(s.traces) > s.maxTraces || s.bytes > s.maxBytes {
@@ -146,7 +163,7 @@ func buildTrace(state traceState) Trace {
 		spans[index].Attributes["graft_ai.request_span"] = json.RawMessage("false")
 	}
 	selected := requestSpanIndex(spans)
-	trace := Trace{TraceID: state.traceID, Spans: spans}
+	trace := Trace{TraceID: state.traceID, Spans: spans, ReceivedAt: state.lastReceived}
 	if selected < 0 {
 		return trace
 	}

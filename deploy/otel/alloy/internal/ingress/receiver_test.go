@@ -213,7 +213,7 @@ func TestReceiver_records_partial_acceptance_when_some_spans_are_dropped(t *test
 	}
 }
 
-func TestReceiver_records_size_drop_when_metadata_exceeds_line_size(t *testing.T) {
+func TestReceiver_keeps_redacted_span_when_metadata_exceeds_log_line_size(t *testing.T) {
 	receiver, queue := newTestReceiver(t, 4)
 	body := oversizedMetadataOTLPBody(t)
 	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
@@ -224,15 +224,15 @@ func TestReceiver_records_size_drop_when_metadata_exceeds_line_size(t *testing.T
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
-	if got := receiver.Metrics().SizeDrops; got != 1 {
-		t.Fatalf("size drops = %d, want 1", got)
+	if got := receiver.Metrics().SizeDrops; got != 0 {
+		t.Fatalf("size drops = %d, want 0 before backend projection", got)
 	}
-	if got := receiver.Metrics().Accepted; got != 0 {
-		t.Fatalf("accepted = %d, want 0", got)
+	if got := receiver.Metrics().Accepted; got != 1 {
+		t.Fatalf("accepted = %d, want 1", got)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if _, ok := queue.Dequeue(ctx); ok {
-		t.Fatalf("expected no envelope to be enqueued")
+	if _, ok := queue.Dequeue(ctx); !ok {
+		t.Fatalf("expected redacted span to be enqueued")
 	}
 }

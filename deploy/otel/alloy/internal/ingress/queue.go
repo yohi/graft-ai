@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
 )
@@ -15,6 +16,7 @@ type Envelope struct {
 	Payload         []byte
 	ContentType     string
 	SamplingRatePPM uint32
+	ReceivedAt      time.Time
 	Span            redaction.RedactedSpan
 }
 
@@ -52,6 +54,10 @@ func (q *IngressQueue) Dequeue(ctx context.Context) (Envelope, bool) {
 	case <-ctx.Done():
 		return Envelope{}, false
 	}
+}
+
+func (q *IngressQueue) Items() <-chan Envelope {
+	return q.items
 }
 
 func (q *IngressQueue) Close() {

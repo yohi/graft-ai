@@ -1,22 +1,21 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/dispatcher"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/ingress"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/sampling"
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/selector"
 )
 
 const (
@@ -26,20 +25,13 @@ const (
 	defaultIngressQueueSize = 1000
 	defaultRateCapacity     = 20
 	defaultRateRefill       = 2
-	defaultForwarderCount   = 4
-	defaultForwardTimeout   = 10 * time.Second
-	defaultForwardURL       = "http://localhost:12345/v1/traces"
+	defaultPipelineWorkers  = 1
 	defaultSamplingRate     = "1"
+	defaultTempoURL         = "http://tempo:4318/v1/traces"
+	defaultLokiURL          = "http://loki:3100/loki/api/v1/push"
+	defaultPrometheusURL    = "http://prometheus:9090/api/v1/otlp/v1/metrics"
+	samplingSeed            = "graft-ai-otel-v1"
 )
-
-type config struct {
-	address         string
-	trustedCIDRs    []string
-	proxySecret     string
-	hmacKeySource   ingress.SecretSource
-	forwardURL      string
-	samplingRatePPM uint32
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -89,56 +81,43 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure receiver: %w", err)
 	}
+	sampler, err := sampling.NewSampler(samplingSeed)
+	if err != nil {
+		return fmt.Errorf("configure sampler: %w", err)
+	}
+	traceSelector, err := selector.NewRequestSelector(selector.DefaultMaxTraces, selector.DefaultMaxBytes, selector.DefaultIdle)
+	if err != nil {
+		return fmt.Errorf("configure trace selector: %w", err)
+	}
+	backendDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherConfig{
+		Client: &http.Client{Timeout: 10 * time.Second},
+		Backends: map[dispatcher.Backend]dispatcher.BackendConfig{
+			dispatcher.Tempo:      {URL: cfg.tempoURL, Headers: authHeader(cfg.tempoAuth), MaxItems: 2_000, MaxBytes: 64 * 1024 * 1024, Retry: tempoRetryPolicy()},
+			dispatcher.Loki:       {URL: cfg.lokiURL, Headers: authHeader(cfg.lokiAuth), MaxItems: 500, MaxBytes: 64 * 1024 * 1024, Retry: dispatcher.DefaultRetryPolicy()},
+			dispatcher.Prometheus: {URL: cfg.prometheusURL, Headers: authHeader(cfg.prometheusAuth), MaxItems: 100, MaxBytes: 16 * 1024 * 1024, Retry: dispatcher.DefaultRetryPolicy()},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("configure backend dispatcher: %w", err)
+	}
+	forwarderCtx, stopForwarders := context.WithCancel(context.Background())
+	backendDispatcher.Start(forwarderCtx)
 	server := ingress.NewHTTPServer(receiver)
 	server.Addr = cfg.address
 
-	forwarderCtx, stopForwarders := context.WithCancel(context.Background())
-	defer stopForwarders()
-	forwarderClient := &http.Client{Timeout: defaultForwardTimeout}
 	var forwarderWg sync.WaitGroup
-	for range defaultForwarderCount {
-		forwarderWg.Add(1)
-		go func() {
-			defer forwarderWg.Done()
-			forwardLoop(forwarderCtx, forwarderClient, cfg.forwardURL, queue)
-		}()
+	for range defaultPipelineWorkers {
+		forwarderWg.Go(func() {
+			processLoop(forwarderCtx, queue, traceSelector, sampler, backendDispatcher, cfg.samplingRatePPM)
+		})
 	}
 
 	err = serveUntilSignal(server)
 	queue.Close()
 	forwarderWg.Wait()
 	stopForwarders()
+	backendDispatcher.Close()
 	return err
-}
-
-func loadConfig() (config, error) {
-	proxySecret, err := requiredEnv("OTEL_INGEST_TOKEN")
-	if err != nil {
-		return config{}, err
-	}
-	trustedCIDRs, err := splitRequiredEnv("OTEL_TRUSTED_PROXY_CIDRS")
-	if err != nil {
-		return config{}, err
-	}
-	hmacKeySource := ingress.SecretSource{
-		FilePath:        os.Getenv("OTEL_RATE_LIMIT_HMAC_KEY_FILE"),
-		EnvironmentName: "OTEL_RATE_LIMIT_HMAC_KEY",
-	}
-	if strings.TrimSpace(hmacKeySource.FilePath) == "" && strings.TrimSpace(os.Getenv(hmacKeySource.EnvironmentName)) == "" {
-		return config{}, errors.New("OTEL_RATE_LIMIT_HMAC_KEY_FILE or OTEL_RATE_LIMIT_HMAC_KEY is required")
-	}
-	samplingRatePPM, err := sampling.ParseRatePPM(envOrDefault("OTEL_SAMPLING_RATE", defaultSamplingRate))
-	if err != nil {
-		return config{}, fmt.Errorf("parse OTEL_SAMPLING_RATE: %w", err)
-	}
-	return config{
-		address:         envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
-		trustedCIDRs:    trustedCIDRs,
-		proxySecret:     proxySecret,
-		hmacKeySource:   hmacKeySource,
-		forwardURL:      envOrDefault("OTEL_ALLOY_FORWARD_URL", defaultForwardURL),
-		samplingRatePPM: samplingRatePPM,
-	}, nil
 }
 
 func serveUntilSignal(server *http.Server) error {
@@ -160,66 +139,4 @@ func serveUntilSignal(server *http.Server) error {
 		}
 		return fmt.Errorf("serve HTTP: %w", err)
 	}
-}
-
-func forwardLoop(ctx context.Context, client *http.Client, url string, queue *ingress.IngressQueue) {
-	for {
-		envelope, ok := queue.Dequeue(ctx)
-		if !ok {
-			return
-		}
-		if err := forwardEnvelope(ctx, client, url, envelope); err != nil {
-			slog.Error("failed to forward envelope", "error", err)
-		}
-	}
-}
-
-func forwardEnvelope(ctx context.Context, client *http.Client, url string, envelope ingress.Envelope) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(envelope.Payload))
-	if err != nil {
-		return fmt.Errorf("build forward request: %w", err)
-	}
-	request.Header.Set("Content-Type", envelope.ContentType)
-
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("forward envelope: %w", err)
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode >= http.StatusBadRequest {
-		body, _ := io.ReadAll(response.Body)
-		return fmt.Errorf("forward envelope: downstream returned %d: %s", response.StatusCode, string(body))
-	}
-	return nil
-}
-
-func requiredEnv(name string) (string, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	return value, nil
-}
-
-func splitRequiredEnv(name string) ([]string, error) {
-	value, err := requiredEnv(name)
-	if err != nil {
-		return nil, err
-	}
-	parts := strings.Split(value, ",")
-	for index := range parts {
-		parts[index] = strings.TrimSpace(parts[index])
-		if parts[index] == "" {
-			return nil, fmt.Errorf("%s contains an empty CIDR", name)
-		}
-	}
-	return parts, nil
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }

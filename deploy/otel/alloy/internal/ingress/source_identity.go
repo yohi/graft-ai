@@ -77,6 +77,10 @@ func NewSourceIdentity(trustedCIDRs []string, hmacKey []byte) (SourceIdentity, e
 		if err != nil {
 			return SourceIdentity{}, fmt.Errorf("parse trusted proxy CIDR %q: %w", rawCIDR, err)
 		}
+		ones, bits := network.Mask.Size()
+		if ones != bits {
+			return SourceIdentity{}, fmt.Errorf("trusted proxy CIDR %q must identify one proxy address", rawCIDR)
+		}
 		networks = append(networks, network)
 	}
 	return SourceIdentity{trustedNetworks: networks, hmacKey: append([]byte(nil), hmacKey...)}, nil

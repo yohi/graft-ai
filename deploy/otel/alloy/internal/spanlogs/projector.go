@@ -21,9 +21,10 @@ const (
 )
 
 type JSONLogRecord struct {
-	Fields     map[string]json.RawMessage
-	Labels     map[string]string
-	Serialized []byte
+	Fields            map[string]json.RawMessage
+	Labels            map[string]string
+	Serialized        []byte
+	TimestampUnixNano uint64
 }
 
 type Projector struct{}
@@ -34,8 +35,12 @@ func NewProjector() Projector {
 
 func (Projector) ProjectRequestSpan(span redaction.RedactedSpan) (JSONLogRecord, DropReason) {
 	record := JSONLogRecord{
-		Fields: make(map[string]json.RawMessage),
-		Labels: make(map[string]string),
+		Fields:            make(map[string]json.RawMessage),
+		Labels:            make(map[string]string),
+		TimestampUnixNano: span.EndUnixNano,
+	}
+	if record.TimestampUnixNano == 0 {
+		record.TimestampUnixNano = span.StartUnixNano
 	}
 	addRaw(record.Fields, "trace_id", rawString(span.TraceID))
 	addRaw(record.Fields, "span_id", rawString(span.SpanID))

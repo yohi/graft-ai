@@ -52,10 +52,7 @@ func (f FanOut) Trace(trace selector.Trace, ratePPM uint32) (TraceResult, error)
 	for index, span := range trace.Spans {
 		result.Tempo[index] = tempoCopy(span)
 	}
-	projected, dropReason := f.projector.ProjectRequestSpan(trace.RequestSpan)
-	if dropReason != spanlogs.DropReasonNone {
-		return result, errors.New("fanout: project request span: " + string(dropReason))
-	}
+	projected, _ := f.projector.ProjectRequestSpan(trace.RequestSpan)
 	finalized, reason := f.sizer.Finalize(projected)
 	if reason != spanlogs.DropReasonLineSizeMetadata && finalized.Serialized != nil {
 		result.Loki = []spanlogs.JSONLogRecord{finalized}
@@ -67,23 +64,34 @@ func tempoCopy(span redaction.RedactedSpan) redaction.RedactedSpan {
 	copy := span
 	copy.Attributes = make(map[string]json.RawMessage, len(span.Attributes))
 	for key, value := range span.Attributes {
-		if isSensitiveAttribute(key) {
+		if !isTempoAttribute(key) {
 			continue
 		}
 		copy.Attributes[key] = append(json.RawMessage(nil), value...)
 	}
 	copy.ResourceAttributes = make(map[string]json.RawMessage, len(span.ResourceAttributes))
 	for key, value := range span.ResourceAttributes {
-		copy.ResourceAttributes[key] = append(json.RawMessage(nil), value...)
+		if isTempoResourceAttribute(key) {
+			copy.ResourceAttributes[key] = append(json.RawMessage(nil), value...)
+		}
 	}
 	return copy
 }
 
-func isSensitiveAttribute(key string) bool {
-	return strings.EqualFold(key, redaction.PromptAttribute) ||
-		strings.EqualFold(key, redaction.CompletionAttribute) ||
-		strings.EqualFold(key, redaction.MetadataAttribute) ||
-		strings.EqualFold(key, "prompt") ||
-		strings.EqualFold(key, "completion") ||
-		strings.EqualFold(key, "metadata")
+func isTempoAttribute(key string) bool {
+	switch strings.ToLower(key) {
+	case "trace_id", "span_id", "request_id", "model", "provider", "status", "status_code", "gateway", "env", "input_tokens", "output_tokens", "total_tokens", "cost_usd", "duration_ms", "payload_truncated", "payload_dropped", "payload_drop_reason":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTempoResourceAttribute(key string) bool {
+	switch strings.ToLower(key) {
+	case "service.name", "service.version", "deployment.environment", "cloud.provider", "cloud.region":
+		return true
+	default:
+		return false
+	}
 }

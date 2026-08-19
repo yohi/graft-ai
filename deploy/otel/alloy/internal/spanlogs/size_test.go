@@ -61,8 +61,7 @@ func TestSizer_truncates_both_payloads_with_utf8_safe_50_50_budget(t *testing.T)
 	}
 }
 
-func TestSizer_allocates_independent_proportional_budgets_for_asymmetric_payloads(t *testing.T) {
-	// Completion is 9x larger than prompt; budgets should reflect that ratio.
+func TestSizer_allocates_equal_budgets_for_asymmetric_payloads(t *testing.T) {
 	record := JSONLogRecord{Fields: map[string]json.RawMessage{
 		"trace_id":   raw(`"00112233445566778899aabbccddeeff"`),
 		"prompt":     json.RawMessage(strconv.Quote(strings.Repeat("p", 1000))),
@@ -88,9 +87,8 @@ func TestSizer_allocates_independent_proportional_budgets_for_asymmetric_payload
 		t.Fatalf("expected both payloads truncated: promptSuffix=%v completionSuffix=%v", strings.HasSuffix(prompt, "[TRUNCATED]"), strings.HasSuffix(completion, "[TRUNCATED]"))
 	}
 
-	// The completion budget should be substantially larger than the prompt budget.
-	if len(completion) <= len(prompt)*2 {
-		t.Fatalf("completion budget too small: prompt=%d completion=%d", len(prompt), len(completion))
+	if len(completion) > len(prompt)+64 || len(prompt) > len(completion)+64 {
+		t.Fatalf("payload budgets are not approximately equal: prompt=%d completion=%d", len(prompt), len(completion))
 	}
 }
 

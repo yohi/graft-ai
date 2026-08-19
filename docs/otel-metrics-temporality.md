@@ -9,38 +9,39 @@
 - `Normalize` が span ごとに生成する Value / Count を累積状態として扱わず、span の開始・終了時刻を共有区間として使用しないようにする。
 - 各報告区間の共通 timestamp を設定する。
 
-## 現在の実装の確認結果
+## 対応内容
 
-現時点のコードでは以下がすでに実装されています：
+### 1. DELTA + 集計済みの維持
 
-- `EncodeMetrics` は `aggregateSamples` で name + labels ごとにサンプルを集計しています。
-- Sum / Histogram ともに `AGGREGATION_TEMPORALITY_DELTA` を使用しています。
-- `CUMULATIVE` 指定は存在しません。
+`EncodeMetrics` は `aggregateSamples` で name + labels ごとにサンプルを集計し、Sum / Histogram ともに `AGGREGATION_TEMPORALITY_DELTA` を使用しています。`CUMULATIVE` 指定は存在しません。
 
-したがって、「DELTA に変更して集計せよ」という指摘内容は、レビュー対象バージョン（PR の過去コミット）では未適用だった可能性がありますが、**現在の HEAD ではすでに解決済み**です。
+### 2. 二重加算バグの修正
 
-## 対応済みの軽微な改善
+`aggregateSamples` で新規 group の `Value` を `sample.Value` で初期化した後、同じ sample を再度加算していたため、1 sample 目が 2 倍になっていました。これを修正し、新規 group の `Value` は `0` で初期化してから全 sample を統一的に加算するようにしました。
 
-`EncodeMetrics` 出力する DELTA Sum / Histogram データポイントに `StartTimeUnixNano` を追加しました。これにより、OTLP の DELTA semantics における「報告区間」の始点・終点が揃います。
+### 3. processLoop 側への accumulator 導入
 
-- `aggregateSamples` はサンプル群の最小 `TimestampUnixNano` を `startTime`、最大を `endTime` として返します。
-- `metricProto` は両方を `StartTimeUnixNano` / `TimeUnixNano` に設定します。
+`processLoop` 内に `metrics.Accumulator` を追加し、30 秒ごとの `metricsTicker` で flush して `wire.EncodeMetrics` を呼び出すようにしました。
 
-## 残っている本質的な課題
+- `dispatchTrace` は各 trace の `result.Metrics.Samples` を accumulator に追加するのみ。
+- `flushAccumulator` は accumulator を flush し、flush 開始時刻を `startTime`、現在時刻を `endTime` として `EncodeMetrics` に渡す。
+- これにより、同一 series の複数 trace が共通の報告区間（30 秒間隔）で集計されます。
+- shutdown 時（`queue.Items()` が close された場合）にも最後の accumulator を flush します。
 
-`CanonicalMetrics.Normalize` は request span ごとに raw sample（`ai_gateway_requests_total: 1`、`ai_gateway_errors_total: 1`、`ai_gateway_request_duration_seconds` の histogram 用 duration）を生成します。`EncodeMetrics` はこれらを集計して 1 データポイントにまとめますが、以下は未解決です：
+### 4. StartTimeUnixNano / TimeUnixNano の導出
 
-- 厳密な「報告区間」の管理（例：1 分間の集計窓、または 1 回の Alloy 呼び出し区間）。
-- 現在の `startTime` はサンプルの最小時刻を使っているため、span の時刻をそのまま流用しているに等しく、真の DELTA 集計区間を表しているとは限りません。
-- `Normalize` 側で span ごとに raw sample を作る設計は維持されるべきですが、集計側が時間窓を主導する設計を強化する必要があります。
+`EncodeMetrics` のシグネチャを `EncodeMetrics(normalized, startTime, endTime)` に変更しました。`startTime` と `endTime` は accumulator の報告区間を表し、これまでの「サンプル群の最小・最大 timestamp」ではなく、accumulator が導出する値になります。
 
-## 今後の対応方針
+## 残る考慮事項
 
-上記の本質的な課題は、本 PR で対応するには範囲が大きいため、**follow-up issue として扱う**のが適切です。issue 案としては次のような内容です：
+- 現状の accumulator 間隔は `metricsTicker` と同じ 30 秒固定です。必要に応じて設定可能にするか、または cron 区間に合わせて調整できます。
+- `Normalize` は引き続き span ごとの raw sample を生成します。集計は accumulator / `EncodeMetrics` 側で完結します。
+- `_total` 系は monotonic counter（Sum）、duration は histogram として維持します。gauge 化は行いません。
 
-1. Alloy / `EncodeMetrics` 側で「報告区間」を明示的に定義する（例：直近 1 分間、または 1 回の push サイクル）。
-2. 区間の `StartTimeUnixNano` / `TimeUnixNano` を、サンプルの時刻に依存せずに決定する。
-3. `Normalize` は span ごとの raw sample 生成を継続し、集計は `EncodeMetrics` / Alloy 側で完結させる設計を維持する。
-4. `_total` 系は monotonic counter（Sum）、duration は histogram として維持する。gauge 化は不適切。
+## 関連ファイル
 
-これらは OTLP / Prometheus Remote Write の正しい semantics への改善であり、現状の「span → raw sample → 集計 → DELTA datapoint」というパイプラインを壊さない最小限の後続対応となります。
+- `deploy/otel/alloy/internal/metrics/accumulator.go` — 新規追加
+- `deploy/otel/alloy/internal/metrics/canonical.go` — `MetricSample` に `Count` / `BucketCounts` を追加
+- `deploy/otel/alloy/internal/wire/metrics.go` — `EncodeMetrics` シグネチャ変更、二重加算修正
+- `deploy/otel/alloy/cmd/alloy-otel/pipeline.go` — accumulator 導入
+- `deploy/otel/alloy/internal/wire/metrics_test.go` — テスト追加・更新

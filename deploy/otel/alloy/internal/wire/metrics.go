@@ -16,11 +16,11 @@ import (
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/metrics"
 )
 
-func EncodeMetrics(normalized metrics.NormalizedMetrics) ([]byte, error) {
+func EncodeMetrics(normalized metrics.NormalizedMetrics, startTime, endTime uint64) ([]byte, error) {
 	if len(normalized.Samples) == 0 {
 		return nil, nil
 	}
-	aggregated, startTime, endTime, err := aggregateSamples(normalized.Samples)
+	aggregated, err := aggregateSamples(normalized.Samples)
 	if err != nil {
 		return nil, err
 	}
@@ -55,23 +55,7 @@ type aggregatedSample struct {
 	BucketCounts []uint64
 }
 
-func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint64, uint64, error) {
-	var startTime, endTime uint64
-	for _, sample := range samples {
-		if sample.TimestampUnixNano == 0 {
-			continue
-		}
-		if startTime == 0 || sample.TimestampUnixNano < startTime {
-			startTime = sample.TimestampUnixNano
-		}
-		if sample.TimestampUnixNano > endTime {
-			endTime = sample.TimestampUnixNano
-		}
-	}
-	if endTime == 0 {
-		endTime = uint64(time.Now().UnixNano())
-	}
-
+func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, error) {
 	groups := make(map[string]*aggregatedSample)
 	var order []string
 	for _, sample := range samples {
@@ -82,7 +66,6 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint6
 				Name:    sample.Name,
 				Labels:  sample.Labels,
 				Buckets: sample.Buckets,
-				Value:   sample.Value,
 			}
 			groups[key] = group
 			order = append(order, key)
@@ -93,18 +76,16 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint6
 			continue
 		}
 		if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
-			return nil, 0, 0, fmt.Errorf("metric %q has non-finite duration", sample.Name)
+			return nil, fmt.Errorf("metric %q has non-finite duration", sample.Name)
 		}
 		group.Value += sample.Value
 		group.Count++
 		if len(group.BucketCounts) == 0 {
-			group.BucketCounts = make([]uint64, len(sample.Buckets))
+			group.BucketCounts = sample.BucketCounts
+			continue
 		}
-		for index, boundary := range sample.Buckets {
-			if sample.Value <= boundary {
-				group.BucketCounts[index]++
-				break
-			}
+		for index := range group.BucketCounts {
+			group.BucketCounts[index] += sample.BucketCounts[index]
 		}
 	}
 
@@ -112,7 +93,7 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint6
 	for _, key := range order {
 		result = append(result, *groups[key])
 	}
-	return result, startTime, endTime, nil
+	return result, nil
 }
 
 func sampleKey(sample metrics.MetricSample) string {
@@ -181,4 +162,9 @@ func metricProto(sample aggregatedSample, startTime, endTime uint64) (*metricspb
 			}},
 		}},
 	}, nil
+}
+
+// TimestampNow returns the current time as Unix nanoseconds.
+func TimestampNow() uint64 {
+	return uint64(time.Now().UnixNano())
 }

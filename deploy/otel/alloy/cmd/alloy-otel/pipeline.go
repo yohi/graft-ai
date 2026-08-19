@@ -8,6 +8,7 @@ import (
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/dispatcher"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/fanout"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/ingress"
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/metrics"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/sampling"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/selector"
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/wire"
@@ -19,21 +20,26 @@ func processLoop(ctx context.Context, queue *ingress.IngressQueue, traceSelector
 	defer ticker.Stop()
 	metricsTicker := time.NewTicker(30 * time.Second)
 	defer metricsTicker.Stop()
+	accumulator := metrics.NewAccumulator()
+	accumulatorStart := wire.TimestampNow()
 	for {
 		select {
 		case envelope, ok := <-queue.Items():
 			if !ok {
 				for _, trace := range traceSelector.FlushAll() {
-					dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM)
+					dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM, accumulator)
 				}
+				flushAccumulator(ctx, accumulator, accumulatorStart, backendDispatcher)
 				return
 			}
 			traceSelector.AddAt(envelope.Span, envelope.ReceivedAt)
 		case now := <-ticker.C:
 			for _, trace := range traceSelector.FlushIdle(now) {
-				dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM)
+				dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM, accumulator)
 			}
 		case <-metricsTicker.C:
+			flushAccumulator(ctx, accumulator, accumulatorStart, backendDispatcher)
+			accumulatorStart = wire.TimestampNow()
 			logDispatcherMetrics(ctx, backendDispatcher.Snapshot())
 		case <-ctx.Done():
 			return
@@ -56,26 +62,15 @@ func logDispatcherMetrics(ctx context.Context, snapshot dispatcher.MetricsSnapsh
 	}
 }
 
-func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatcher *dispatcher.Dispatcher, trace selector.Trace, ratePPM uint32) {
+func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatcher *dispatcher.Dispatcher, trace selector.Trace, ratePPM uint32, accumulator *metrics.Accumulator) {
 	result, err := brancher.Trace(trace, ratePPM)
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to process OTel trace", "trace_id", trace.TraceID, "error", err)
 		return
 	}
-	metricsPayload, err := wire.EncodeMetrics(result.Metrics)
-	if err != nil {
-		slog.ErrorContext(ctx, "failed to encode OTel metrics", "trace_id", trace.TraceID, "error", err)
-	} else if len(metricsPayload) > 0 {
-		if result := backendDispatcher.Handoff(dispatcher.Output{
-			Backend:     dispatcher.Prometheus,
-			TraceID:     trace.TraceID,
-			Payload:     metricsPayload,
-			ContentType: "application/x-protobuf",
-			Priority:    2,
-			Units:       1,
-			ReceivedAt:  trace.ReceivedAt,
-		}); result.Dropped {
-			slog.WarnContext(ctx, "dropped OTel metrics submission", "trace_id", trace.TraceID, "reason", result.Reason)
+	for _, sample := range result.Metrics.Samples {
+		if err := accumulator.Add(sample); err != nil {
+			slog.ErrorContext(ctx, "failed to accumulate metric sample", "trace_id", trace.TraceID, "metric", sample.Name, "error", err)
 		}
 	}
 	if !result.Sampled {
@@ -112,5 +107,29 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 		}); result.Dropped {
 			slog.WarnContext(ctx, "dropped Loki submission", "trace_id", trace.TraceID, "reason", result.Reason)
 		}
+	}
+}
+
+func flushAccumulator(ctx context.Context, accumulator *metrics.Accumulator, startTime uint64, backendDispatcher *dispatcher.Dispatcher) {
+	endTime := wire.TimestampNow()
+	normalized := accumulator.Flush(endTime)
+	payload, err := wire.EncodeMetrics(normalized, startTime, endTime)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to encode accumulated metrics", "error", err)
+		return
+	}
+	if len(payload) == 0 {
+		return
+	}
+	if result := backendDispatcher.Handoff(dispatcher.Output{
+		Backend:     dispatcher.Prometheus,
+		TraceID:     "metrics",
+		Payload:     payload,
+		ContentType: "application/x-protobuf",
+		Priority:    2,
+		Units:       1,
+		ReceivedAt:  time.Now(),
+	}); result.Dropped {
+		slog.WarnContext(ctx, "dropped accumulated OTel metrics submission", "reason", result.Reason)
 	}
 }

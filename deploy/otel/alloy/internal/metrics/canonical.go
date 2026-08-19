@@ -23,6 +23,8 @@ type MetricSample struct {
 	Value             float64
 	Labels            map[string]string
 	Buckets           []float64
+	BucketCounts      []uint64
+	Count             uint64
 	TimestampUnixNano uint64
 }
 

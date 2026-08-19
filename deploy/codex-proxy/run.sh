@@ -82,13 +82,20 @@ const server = http.createServer(async (req, res) => {
 
   const targetUrl = `${TARGET_ORIGIN}${url.pathname}${url.search}`;
   try {
-    const forwardHeaders = { ...req.headers };
-    delete forwardHeaders.host;
-    delete forwardHeaders.connection;
-    delete forwardHeaders["content-length"];
+    // Cloudflare Tunnel 等が付与する cf-*, cdn-loop, x-forwarded-* を排除し、必要なヘッダーのみ安全に転送
+    const forwardHeaders = {
+      "User-Agent":
+        req.headers["user-agent"] ||
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+      Accept: req.headers["accept"] || "application/json",
+      Origin: TARGET_ORIGIN,
+      Referer: `${TARGET_ORIGIN}/`,
+    };
 
-    forwardHeaders["Origin"] = TARGET_ORIGIN;
-    forwardHeaders["Referer"] = `${TARGET_ORIGIN}/`;
+    if (req.headers["authorization"]) forwardHeaders["Authorization"] = req.headers["authorization"];
+    if (req.headers["chatgpt-account-id"]) forwardHeaders["ChatGPT-Account-Id"] = req.headers["chatgpt-account-id"];
+    if (req.headers["openai-beta"]) forwardHeaders["OpenAI-Beta"] = req.headers["openai-beta"];
+    if (req.headers["originator"]) forwardHeaders["originator"] = req.headers["originator"];
 
     const upstreamResponse = await fetch(targetUrl, {
       method: req.method,

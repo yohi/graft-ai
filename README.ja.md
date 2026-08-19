@@ -59,6 +59,7 @@ cd workers
 npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.jsonc
 npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
 npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
+npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc       # optional（住宅用プロキシ・Cloudflare Tunnel 連携推奨）
 npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
 npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
@@ -66,6 +67,9 @@ npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.prov
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
 cd ..
 ```
+
+> **Codex の Cloudflare WAF チャレンジ（403）に関する注意事項:**
+> `chatgpt.com` への直接リクエストは、データセンター IP（Cloudflare Workers を含む）からのアクセス時に Cloudflare Turnstile / Managed Challenge（403 Forbidden）でブロックされる場合があります。これを完全無料で安定して回避するため、自宅マシン（Raspberry Pi や PC 等）で [`deploy/codex-proxy/`](./deploy/codex-proxy/) の軽量プロキシと Cloudflare Tunnel を起動し、発行された URL を `CODEX_PROXY_URL` に設定することを推奨します。ワンライナー起動や systemd / Docker 永続化の手順は [`deploy/codex-proxy/README.md`](./deploy/codex-proxy/README.md) を参照してください。
 
 Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で設定します。
 

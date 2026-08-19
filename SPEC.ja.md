@@ -77,16 +77,16 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
   継続実行します。
 - OpenAI レスポンスに cost bucket と token bucket がともに0件の場合、結果は空とみなし
   push ペイロードから除外します。
-- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token）
-- Codex の `primary_window` と `secondary_window` は必須です。欠損や範囲外の値は
-  Codex fetch 全体を失敗させます。
+- **Codex:** `GET https://chatgpt.com/backend-api/wham/usage`（Bearer OAuth Access Token、`CODEX_PROXY_URL` または `CODEX_API_BASE_URL` でプロキシ/カスタムBase URLを指定可能）
+- `primary_window` または `secondary_window` のうち少なくとも1つの有効なウィンドウが必要です。`secondary_window` が欠落または null の場合（単一ウィンドウプラン等）、その使用率とリセット時刻は 0 として扱われます。
+- 直接リクエストで HTTP 403（Cloudflare WAF Turnstile チャレンジ）が発生した場合、`CODEX_PROXY_URL`（Cloudflare Tunnel を介した住宅用プロキシ等）経由で通信するか、Cloudflare Browser Rendering へフォールバックします。
 - `GET .../wham/rate-limit-reset-credits` は補助エンドポイントです。失敗時も Codex
   usage メトリクスは push され、`codex_reset_credits` と
   `codex_reset_credits_available_count` のみ省略されます。
-- **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping（Session Cookie）
+- **OpenCodeGo:** `opencode.ai/workspace/{id}/go` の HTML scraping および `_server` RPC（Session Cookie）
 - OpenCodeGo の rolling usage と rolling reset は必須フィールドです。欠損時は fetch
   が失敗します。weekly と monthly ウィンドウは任意で、レスポンスに含まれない場合は
-  それらのメトリクスは省略されます。
+  それらのメトリクスは省略されます。サブスクリプション RPC が null を返した場合（従量課金/Zen ワークスペース等）、Billing RPC エンドポイントにフォールバックします。
 - `OPENCODEGO_WORKSPACE_ID` 未設定時、使用量ページをスクレイピングする前に
   OpenCodeGo の `_server` エンドポイントからワークスペース ID を自動取得します。
 

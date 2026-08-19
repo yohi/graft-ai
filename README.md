@@ -60,6 +60,7 @@ cd workers
 npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.jsonc
 npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
 npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
+npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc       # optional (recommended for residential proxy via Cloudflare Tunnel)
 npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
 npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
@@ -67,6 +68,9 @@ npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.prov
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
 cd ..
 ```
+
+> **Note on Codex Cloudflare WAF challenges:**
+> Direct requests to `chatgpt.com` from datacenter IPs (such as Cloudflare Workers) may be blocked by Cloudflare Turnstile / Managed Challenges (HTTP 403). To bypass this reliably for free, deploy the lightweight residential proxy in [`deploy/codex-proxy/`](./deploy/codex-proxy/) on a home machine (e.g. Raspberry Pi or PC) with Cloudflare Tunnel, and set the resulting URL to `CODEX_PROXY_URL`. See [`deploy/codex-proxy/README.md`](./deploy/codex-proxy/README.md) for quick one-liner and permanent systemd/Docker setups.
 
 The non-secret history window is configured in
 `workers/wrangler.provider-metrics.jsonc`:

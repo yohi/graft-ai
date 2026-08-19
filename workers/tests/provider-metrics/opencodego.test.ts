@@ -526,4 +526,54 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(result.weeklyResetSeconds).toBeUndefined();
     expect(result.monthlyResetSeconds).toBeUndefined();
   });
+
+  it("correctly handles large USD monthly limits (>= $1000) without dividing by USD_SCALE", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("7abeebee") || url.includes("c7389bd0")) {
+        return new Response("null", { status: 200 });
+      }
+      if (url.includes("c83b78a6")) {
+        // monthlyUsage in nano-units ($500.00 = 500 * 10^8 = 50_000_000_000)
+        // monthlyLimit in pre-scaled USD ($2500)
+        return new Response(
+          '{"monthlyUsage":50000000000,"monthlyLimit":2500,"balance":10000000000}',
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    // 500 / 2500 = 0.2
+    expect(result.rollingUsageRatio).toBeCloseTo(0.2);
+    expect(result.monthlyUsageRatio).toBeCloseTo(0.2);
+    expect(result.zenBalanceUSD).toBeCloseTo(100.0);
+  });
+
+  it("correctly parses minor-unit nano-units (down to $0.01 = 1_000_000)", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes("_server") && url.includes("def399")) {
+        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+      }
+      if (url.includes("7abeebee") || url.includes("c7389bd0")) {
+        return new Response("null", { status: 200 });
+      }
+      if (url.includes("c83b78a6")) {
+        // 1 cent = 1_000_000 nano-units, limit = $10 USD
+        return new Response('{"monthlyUsage":1000000,"monthlyLimit":10,"balance":2000000}', {
+          status: 200,
+        });
+      }
+      return new Response("{}", { status: 200 });
+    });
+
+    const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
+    // $0.01 / $10 = 0.001
+    expect(result.rollingUsageRatio).toBeCloseTo(0.001);
+    expect(result.monthlyUsageRatio).toBeCloseTo(0.001);
+    expect(result.zenBalanceUSD).toBeCloseTo(0.02);
+  });
 });

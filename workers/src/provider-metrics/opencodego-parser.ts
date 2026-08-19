@@ -476,7 +476,10 @@ function scaleUsd(val: unknown, allowNegative = false): number | null {
   }
   if (typeof val !== "number" || !Number.isFinite(val)) return null;
   if (val < 0) return allowNegative ? 0 : null;
-  return val > 1000 ? val / USD_SCALE : val;
+  // OpenCodeGo nano-units are scaled by 10^8 (e.g. 100_000_000 = $1.00 USD, 1_000_000 = $0.01 USD).
+  // Pre-scaled USD amounts (limits, balances) are normal dollar amounts (e.g. 20, 2000, 23.45).
+  // Any value >= 1_000_000 represents an unscaled nano-unit integer of at least 1 cent ($0.01 USD).
+  return val >= 1_000_000 ? val / USD_SCALE : val;
 }
 
 function parseJsonBilling(text: string): OpenCodeZenBilling | null {

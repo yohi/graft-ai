@@ -86,6 +86,8 @@ export async function collectAndPushProviderMetrics(
           fetch,
           env.CODEX_PROXY_URL || env.CODEX_API_BASE_URL,
           env.MYBROWSER,
+          new Date(scheduledTime),
+          env.CODEX_PROXY_SECRET,
         )
       : Promise.resolve(null),
     openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""

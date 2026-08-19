@@ -56,6 +56,7 @@ import http from "node:http";
 const PORT = Number(process.env.PORT || 8080);
 const HOST = "127.0.0.1";
 const TARGET_ORIGIN = "https://chatgpt.com";
+const PROXY_SECRET = process.env.PROXY_SECRET?.trim();
 const ALLOWED_PATH_PREFIXES = ["/backend-api/wham/"];
 
 const server = http.createServer(async (req, res) => {
@@ -74,6 +75,15 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", service: "graft-ai-codex-proxy" }));
     return;
+  }
+
+  if (PROXY_SECRET) {
+    const providedSecret = req.headers["x-proxy-secret"];
+    if (providedSecret !== PROXY_SECRET) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing X-Proxy-Secret" }));
+      return;
+    }
   }
 
   const isAllowed = ALLOWED_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix));
@@ -103,6 +113,7 @@ const server = http.createServer(async (req, res) => {
     const upstreamResponse = await fetch(targetUrl, {
       method: req.method,
       headers: forwardHeaders,
+      signal: AbortSignal.timeout(15_000),
     });
 
     const responseHeaders = Object.fromEntries(upstreamResponse.headers.entries());

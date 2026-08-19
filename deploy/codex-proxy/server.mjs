@@ -34,7 +34,7 @@ const server = http.createServer(async (req, res) => {
 
   // 共有シークレットによる簡易認証（設定されている場合）
   if (PROXY_SECRET) {
-    const providedSecret = req.headers["x-proxy-secret"] || url.searchParams.get("secret");
+    const providedSecret = req.headers["x-proxy-secret"];
     if (providedSecret !== PROXY_SECRET) {
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing X-Proxy-Secret" }));
@@ -73,6 +73,7 @@ const server = http.createServer(async (req, res) => {
     const upstreamResponse = await fetch(targetUrlString, {
       method: req.method,
       headers: forwardHeaders,
+      signal: AbortSignal.timeout(15_000),
     });
 
     const responseHeaders = Object.fromEntries(upstreamResponse.headers.entries());
@@ -84,7 +85,7 @@ const server = http.createServer(async (req, res) => {
     res.end(Buffer.from(body));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[Proxy Error] ${req.method} ${targetUrl}: ${message}`);
+    console.error(`[Proxy Error] ${req.method} ${targetUrlString}: ${message}`);
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Bad Gateway", detail: message }));
   }

@@ -6,7 +6,6 @@ import {
   extractZenBalance,
   extractZenBilling,
   parseOpenCodeGoUsage,
-  OpenCodeGoResponseError,
 } from "./opencodego-parser";
 import { getWithRetry } from "../http-retry";
 
@@ -99,8 +98,44 @@ async function fetchServerRPC(
     logLabel: `OpenCodeGo RPC [${serverId.slice(0, 8)}]`,
     isRetryableStatus: (status) => status === 429 || status >= 500,
     perAttemptTimeoutMs: TIMEOUT_MS,
-    redirect: "follow",
+    redirect: "manual",
   });
+
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("Location");
+    if (!location) {
+      throw new OpenCodeGoFetchError(
+        `OpenCodeGo RPC [${serverId.slice(0, 8)}] redirected with HTTP ${response.status} but missing Location header`,
+      );
+    }
+    const targetUrl = new URL(location, BASE_URL);
+    if (targetUrl.origin !== new URL(BASE_URL).origin) {
+      throw new OpenCodeGoFetchError(
+        `OpenCodeGo RPC [${serverId.slice(0, 8)}] attempted cross-origin redirect to ${targetUrl.origin}`,
+      );
+    }
+    const redirectResponse = await getWithRetry({
+      url: targetUrl.toString(),
+      headers,
+      fetchFn: context.fetchFn,
+      logLabel: `OpenCodeGo RPC redirect [${serverId.slice(0, 8)}]`,
+      isRetryableStatus: (status) => status === 429 || status >= 500,
+      perAttemptTimeoutMs: TIMEOUT_MS,
+      redirect: "manual",
+    });
+    if (!redirectResponse.ok) {
+      await redirectResponse.body?.cancel().catch(() => undefined);
+      if (redirectResponse.status === 401 || redirectResponse.status === 403) {
+        throw new OpenCodeGoFetchError(
+          `OpenCodeGo: HTTP ${redirectResponse.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
+        );
+      }
+      throw new OpenCodeGoFetchError(
+        `OpenCodeGo RPC [${serverId.slice(0, 8)}] HTTP ${redirectResponse.status}`,
+      );
+    }
+    return redirectResponse.text();
+  }
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
@@ -157,7 +192,6 @@ async function tryFetchSubscriptionUsage(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       attempts.push(`[${serverId.slice(0, 6)}:GET=err:${msg}]`);
-      if (err instanceof OpenCodeGoResponseError) throw err;
       if (err instanceof OpenCodeGoFetchError && err.detail.includes("Cookie expired")) {
         throw err;
       }
@@ -188,8 +222,6 @@ async function tryFetchBillingUsage(
     return {
       rollingUsageRatio: ratio,
       monthlyUsageRatio: ratio,
-      rollingResetSeconds: 0,
-      monthlyResetSeconds: 0,
       zenBalanceUSD: billing.balanceUSD,
     };
   } catch (err) {
@@ -220,11 +252,6 @@ export async function fetchOpenCodeGoMetrics(
   if (balance !== null) {
     return {
       rollingUsageRatio: 0,
-      weeklyUsageRatio: 0,
-      monthlyUsageRatio: 0,
-      rollingResetSeconds: 0,
-      weeklyResetSeconds: 0,
-      monthlyResetSeconds: 0,
       zenBalanceUSD: balance,
     };
   }

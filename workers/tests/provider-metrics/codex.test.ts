@@ -346,4 +346,68 @@ describe("fetchCodexMetrics", () => {
       fetchCodexMetrics("token", undefined, mockFetch, undefined, mockBrowserBinding),
     ).rejects.toThrow(/Browser rendering returned non-JSON response/);
   });
+
+  it("sends X-Proxy-Secret header when proxySecret is provided", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      return new Response(
+        JSON.stringify(
+          url.endsWith("rate-limit-reset-credits")
+            ? MOCK_RESET_CREDITS_RESPONSE
+            : MOCK_USAGE_RESPONSE,
+        ),
+        { status: 200 },
+      );
+    });
+
+    await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      "https://proxy.example.com",
+      undefined,
+      new Date(),
+      "my-secret-proxy-key",
+    );
+
+    for (const [, init] of mockFetch.mock.calls as [string, RequestInit][]) {
+      const headers = new Headers(init.headers);
+      expect(headers.get("X-Proxy-Secret")).toBe("my-secret-proxy-key");
+    }
+  });
+
+  it("classifies weekly window correctly even when less than 24 hours remain", async () => {
+    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify(MOCK_RESET_CREDITS_RESPONSE), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          plan_type: "plus",
+          rate_limit: {
+            primary_window: {
+              used_percent: 75,
+              reset_at: 1786247604,
+              limit_window_seconds: 604800, // 7-day window
+            },
+          },
+        }),
+        { status: 200 },
+      );
+    });
+
+    // Injected 'now' is only 1 hour before reset_at (1786247604 - 3600 = 1786244004)
+    const now = new Date((1786247604 - 3600) * 1000);
+    const result = await fetchCodexMetrics(
+      "token",
+      undefined,
+      mockFetch,
+      undefined,
+      undefined,
+      now,
+    );
+
+    expect(result.weeklyUsageRatio).toBeCloseTo(0.75);
+    expect(result.weeklyResetTimestampSeconds).toBe(1786247604);
+    expect(result.sessionUsageRatio).toBeUndefined();
+  });
 });

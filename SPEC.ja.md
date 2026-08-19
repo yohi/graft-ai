@@ -108,7 +108,7 @@ push を妨げません。HTTP 401 と 403 は即時失敗（cookie/key 期限�
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 
-Cron `*/5 * * * *` で実行する Worker です。設定した ISO 8601 のアンカー時刻と
+Cron `* * * * *` で実行する Worker です。設定した ISO 8601 のアンカー時刻と
 公式に文書化されたリセット間隔から、session と weekly のレート制限リセット
 メトリクスを派生します。Ollama Cloud のダッシュボードをスクレイピングしたり、
 実際の使用量を推測したりはしません。結果は OTLP/v1 JSON で Grafana Cloud

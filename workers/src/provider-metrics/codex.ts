@@ -219,36 +219,40 @@ async function fetchViaBrowserRendering(
   }
 }
 
-function classifyCodexWindow(
-  window: WindowSnapshot | null,
-  nowUnixSeconds: number,
-): "weekly" | "session" | null {
+function classifyCodexWindow(window: WindowSnapshot | null): "weekly" | "session" | null {
   if (!window) return null;
   if (window.limitWindowSeconds !== undefined) {
     return window.limitWindowSeconds >= 86400 * 3 ? "weekly" : "session";
   }
-  return window.resetAt - nowUnixSeconds > 86400 ? "weekly" : "session";
+  return null;
 }
 
 function normalizeCodexWindows(
   primary: WindowSnapshot | null,
   secondary: WindowSnapshot | null,
-  nowUnixSeconds: number,
 ): { sessionWindow: WindowSnapshot | null; weeklyWindow: WindowSnapshot | null } {
-  const windows = [primary, secondary].filter((w): w is WindowSnapshot => w !== null);
   let sessionWindow: WindowSnapshot | null = null;
   let weeklyWindow: WindowSnapshot | null = null;
 
-  for (const win of windows) {
-    const type = classifyCodexWindow(win, nowUnixSeconds);
-    if (type === "weekly" && !weeklyWindow) {
-      weeklyWindow = win;
-    } else if (type === "session" && !sessionWindow) {
-      sessionWindow = win;
-    } else if (!sessionWindow) {
-      sessionWindow = win;
-    } else if (!weeklyWindow) {
-      weeklyWindow = win;
+  const primaryType = classifyCodexWindow(primary);
+  const secondaryType = classifyCodexWindow(secondary);
+
+  if (primaryType === "weekly") {
+    weeklyWindow = primary;
+  } else if (primaryType === "session") {
+    sessionWindow = primary;
+  }
+
+  if (secondaryType === "weekly" && !weeklyWindow) {
+    weeklyWindow = secondary;
+  } else if (secondaryType === "session" && !sessionWindow) {
+    sessionWindow = secondary;
+  }
+
+  if (primary && !sessionWindow && !weeklyWindow) {
+    sessionWindow = primary;
+    if (secondary) {
+      weeklyWindow = secondary;
     }
   }
 
@@ -261,7 +265,8 @@ export async function fetchCodexMetrics(
   fetchFn: typeof fetch = fetch,
   proxyUrlOrBaseUrl?: string,
   browserBinding?: Fetcher,
-  now: Date = new Date(),
+  _now: Date = new Date(),
+  proxySecret?: string,
 ): Promise<CodexFetchResult> {
   const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
@@ -276,6 +281,9 @@ export async function fetchCodexMetrics(
   };
   if (accountId) {
     headers["ChatGPT-Account-Id"] = accountId;
+  }
+  if (proxySecret) {
+    headers["X-Proxy-Secret"] = proxySecret;
   }
 
   let data: CodexUsageResponse;
@@ -309,11 +317,9 @@ export async function fetchCodexMetrics(
   }
 
   const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
-  const nowUnixSeconds = Math.floor(now.getTime() / 1000);
   const { sessionWindow, weeklyWindow } = normalizeCodexWindows(
     data.primaryWindow,
     data.secondaryWindow,
-    nowUnixSeconds,
   );
 
   return {

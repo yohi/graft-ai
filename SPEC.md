@@ -122,7 +122,7 @@ logs an error and exits without pushing.
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 
-A scheduled Worker (cron `*/5 * * * *`) derives session and weekly rate-limit
+A scheduled Worker (cron `* * * * *`) derives session and weekly rate-limit
 reset metrics from a configured ISO 8601 anchor and documented reset intervals.
 It does not scrape the Ollama Cloud dashboard or attempt to infer actual usage.
 The resulting metrics are pushed to Grafana Cloud Prometheus via OTLP/v1 JSON.

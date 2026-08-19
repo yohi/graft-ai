@@ -42,7 +42,7 @@ series、50GB logs）の制約内で動作するように最適化されてい�
   Prometheus に送ります。
 - **Ollama Cloud:** 設定されたアンカー時刻と間隔から session / weekly
   レート制限リセット時刻を派生させ、Grafana Cloud Metrics に push します。
-- **Provider Metrics Worker:** 5分ごとに Codex、OpenAI API、OpenCodeGo の使用量を取得し、
+- **Provider Metrics Worker:** 毎分 Codex、OpenAI API、OpenCodeGo の使用量を取得し、
   OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
 
 ### スケジュール実行 Worker
@@ -60,6 +60,7 @@ npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.
 npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
 npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
 npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc       # optional（住宅用プロキシ・Cloudflare Tunnel 連携推奨）
+npx wrangler secret put CODEX_PROXY_SECRET --config wrangler.provider-metrics.jsonc    # optional（プロキシ共有シークレット認証用）
 npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
 npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
 npx wrangler secret put OLLAMA_SESSION_COOKIE --config wrangler.provider-metrics.jsonc    # optional（Ollama Cloud 使用率・リアルタイムリセット追跡用）
@@ -72,12 +73,13 @@ cd ..
 > **Codex の Cloudflare WAF チャレンジ（403）に関する注意事項:**
 > `chatgpt.com` への直接リクエストは、データセンター IP（Cloudflare Workers を含む）からのアクセス時に Cloudflare Turnstile / Managed Challenge（403 Forbidden）でブロックされる場合があります。これを完全無料で安定して回避するため、自宅マシン（Raspberry Pi や PC 等）で [`deploy/codex-proxy/`](./deploy/codex-proxy/) の軽量プロキシと Cloudflare Tunnel を起動し、発行された URL を `CODEX_PROXY_URL` に設定することを推奨します。ワンライナー起動や systemd / Docker 永続化の手順は [`deploy/codex-proxy/README.md`](./deploy/codex-proxy/README.md) を参照してください。
 
-Secret ではない履歴期間は `workers/wrangler.provider-metrics.jsonc` で設定します。
+Secret ではない設定値（履歴期間やカスタム Base URL 等）は `workers/wrangler.provider-metrics.jsonc` の `vars` で設定します。
 
 ```jsonc
 {
   "vars": {
-    "OPENAI_API_HISTORY_DAYS": "1"
+    "OPENAI_API_HISTORY_DAYS": "1",
+    "CODEX_API_BASE_URL": "https://chatgpt.com" // optional（カスタムエンドポイント利用時）
   }
 }
 ```

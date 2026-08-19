@@ -293,7 +293,7 @@ function extractFromDomText(html: string): Record<string, unknown>[] | null {
 
   const rolling = extractPeriodFromDomText(
     text,
-    /(?:ローリング利用量|ローリング|Rolling\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]*?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
+    /(?:ローリング利用量|ローリング|Rolling\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]{0,200}?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
   );
   if (rolling) {
     record["rollingUsagePercent"] = rolling.percent;
@@ -302,7 +302,7 @@ function extractFromDomText(html: string): Record<string, unknown>[] | null {
 
   const weekly = extractPeriodFromDomText(
     text,
-    /(?:週間利用量|週間|Weekly\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]*?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
+    /(?:週間利用量|週間|Weekly\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]{0,200}?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
   );
   if (weekly) {
     record["weeklyUsagePercent"] = weekly.percent;
@@ -311,7 +311,7 @@ function extractFromDomText(html: string): Record<string, unknown>[] | null {
 
   const monthly = extractPeriodFromDomText(
     text,
-    /(?:月間利用量|月間|Monthly\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]*?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
+    /(?:月間利用量|月間|Monthly\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]{0,200}?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
   );
   if (monthly) {
     record["monthlyUsagePercent"] = monthly.percent;
@@ -361,20 +361,13 @@ function parsePercentage(
   records: readonly Record<string, unknown>[],
   keys: readonly string[],
   required: boolean,
-): number {
+): number | undefined {
   const values = findOwnValues(records, keys);
-  if (values.length === 0) {
-    if (required) {
-      throw new OpenCodeGoResponseError(
-        "OpenCodeGo response is missing required rolling usage or reset data",
-      );
-    }
-    return 0;
-  }
+  let selected: number | undefined;
 
-  let selected: number | null = null;
   for (const value of values) {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+    if (typeof value !== "number") continue;
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
       throw new OpenCodeGoResponseError(
         "OpenCodeGo usage percentage must be finite and between 0 and 100",
       );
@@ -382,7 +375,13 @@ function parsePercentage(
     selected ??= value / 100;
   }
 
-  return selected ?? 0;
+  if (selected === undefined && required) {
+    throw new OpenCodeGoResponseError(
+      "OpenCodeGo response is missing required rolling usage or reset data",
+    );
+  }
+
+  return selected;
 }
 
 function parseResetSeconds(
@@ -391,23 +390,11 @@ function parseResetSeconds(
   required: boolean,
 ): number | undefined {
   const values = findOwnValues(records, keys);
-  if (values.length === 0) {
-    if (required) {
-      throw new OpenCodeGoResponseError(
-        "OpenCodeGo response is missing required rolling usage or reset data",
-      );
-    }
-    return undefined;
-  }
+  let selected: number | undefined;
 
-  let selected: number | null = null;
   for (const value of values) {
-    if (
-      typeof value !== "number" ||
-      !Number.isFinite(value) ||
-      !Number.isSafeInteger(value) ||
-      value < 0
-    ) {
+    if (typeof value !== "number") continue;
+    if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value < 0) {
       throw new OpenCodeGoResponseError(
         "OpenCodeGo reset seconds must be a finite non-negative safe integer",
       );
@@ -415,7 +402,13 @@ function parseResetSeconds(
     selected ??= value;
   }
 
-  return selected ?? undefined;
+  if (selected === undefined && required) {
+    throw new OpenCodeGoResponseError(
+      "OpenCodeGo response is missing required rolling usage or reset data",
+    );
+  }
+
+  return selected;
 }
 
 export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
@@ -425,7 +418,12 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   }
 
   const rollingRatio = parsePercentage(records, PERCENT_KEYS, true);
-  const rollingReset = parseResetSeconds(records, RESET_KEYS, true);
+  if (rollingRatio === undefined) {
+    throw new OpenCodeGoResponseError(
+      "OpenCodeGo response is missing required rolling usage or reset data",
+    );
+  }
+  const rollingReset = parseResetSeconds(records, RESET_KEYS, false);
 
   const weeklyRatio = parsePercentage(records, WEEKLY_PERCENT_KEYS, false);
   const weeklyReset = parseResetSeconds(records, WEEKLY_RESET_KEYS, false);
@@ -464,8 +462,20 @@ export function extractWorkspaceId(html: string): string | null {
   return html.match(/(wrk_[a-zA-Z0-9]+)/)?.[1] ?? null;
 }
 
-function scaleUsd(val: unknown): number | null {
-  if (typeof val !== "number" || !Number.isFinite(val) || val < 0) return null;
+function cleanNumericString(raw: string): string {
+  let s = raw.trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function scaleUsd(val: unknown, allowNegative = false): number | null {
+  if (typeof val === "string") {
+    val = Number(cleanNumericString(val));
+  }
+  if (typeof val !== "number" || !Number.isFinite(val)) return null;
+  if (val < 0) return allowNegative ? 0 : null;
   return val > 1000 ? val / USD_SCALE : val;
 }
 
@@ -475,10 +485,11 @@ function parseJsonBilling(text: string): OpenCodeZenBilling | null {
     if (!isRecord(parsed)) return null;
 
     const rawUsage = parsed["monthlyUsage"] ?? parsed["usage"];
-    if (typeof rawUsage !== "number" || !Number.isFinite(rawUsage)) return null;
+    const monthlyUsageUSD = scaleUsd(rawUsage, true);
+    if (monthlyUsageUSD === null) return null;
 
     return {
-      monthlyUsageUSD: rawUsage > 1000 ? rawUsage / USD_SCALE : rawUsage,
+      monthlyUsageUSD,
       monthlyLimitUSD: scaleUsd(parsed["monthlyLimit"] ?? parsed["limit"]),
       balanceUSD: scaleUsd(parsed["balance"] ?? parsed["zenBalance"]),
       hasSubscription: Boolean(parsed["hasSubscription"] ?? parsed["subscription"]),
@@ -493,8 +504,8 @@ function parseRegexBilling(text: string): OpenCodeZenBilling | null {
     /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(text);
   if (!usageMatch?.[1]) return null;
 
-  const rawUsage = Number(usageMatch[1]);
-  if (!Number.isFinite(rawUsage)) return null;
+  const monthlyUsageUSD = scaleUsd(cleanNumericString(usageMatch[1]), true);
+  if (monthlyUsageUSD === null) return null;
 
   const limitMatch =
     /(?:"monthlyLimit"|monthlyLimit)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(text);
@@ -506,9 +517,9 @@ function parseRegexBilling(text: string): OpenCodeZenBilling | null {
     /(?:"hasSubscription"|hasSubscription)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(true|false)/i.exec(text);
 
   return {
-    monthlyUsageUSD: rawUsage > 1000 ? rawUsage / USD_SCALE : rawUsage,
-    monthlyLimitUSD: scaleUsd(limitMatch?.[1] ? Number(limitMatch[1]) : null),
-    balanceUSD: scaleUsd(balanceMatch?.[1] ? Number(balanceMatch[1]) : null),
+    monthlyUsageUSD,
+    monthlyLimitUSD: limitMatch?.[1] ? scaleUsd(cleanNumericString(limitMatch[1])) : null,
+    balanceUSD: balanceMatch?.[1] ? scaleUsd(cleanNumericString(balanceMatch[1])) : null,
     hasSubscription: subMatch !== null && subMatch[1]?.toLowerCase() === "true",
   };
 }
@@ -525,5 +536,5 @@ export function extractZenBalance(text: string): number | null {
     /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(
       text,
     );
-  return match?.[1] ? scaleUsd(Number(match[1])) : null;
+  return match?.[1] ? scaleUsd(cleanNumericString(match[1])) : null;
 }

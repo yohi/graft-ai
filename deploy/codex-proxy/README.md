@@ -11,7 +11,7 @@
 
 ```
 [ graft-ai (Cloudflare Workers) ]
-       │ HTTPS (Cron: 5分毎)
+       │ HTTPS (Cron: 毎分)
        ▼
 [ Cloudflare Tunnel (無料) ]  ← https://codex-proxy.yourdomain.com
        │
@@ -134,14 +134,16 @@ docker compose up -d
 
 ## ⚙️ `graft-ai` への設定
 
-公開されたプロキシ URL を `graft-ai` の Secret に登録します：
+公開されたプロキシ URL（および必要に応じて共有シークレット）を `graft-ai` の Secret に登録します：
 
 ```bash
 cd workers
 npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc
+# 共有シークレットを設定している場合:
+npx wrangler secret put CODEX_PROXY_SECRET --config wrangler.provider-metrics.jsonc
 ```
 
-プロンプトが表示されたら、プロキシの URL を入力します：
+プロンプトが表示されたら、プロキシの URL / シークレットを入力します：
 ```
 Enter a secret value: https://codex-proxy.yourdomain.com
 ```
@@ -153,4 +155,4 @@ Enter a secret value: https://codex-proxy.yourdomain.com
 - **パスホワイトリスト制限:**
   本プロキシは、オープンプロキシ化を防ぐため `/backend-api/wham/*` 宛てのリクエストのみを `chatgpt.com` に転送し、それ以外のパスは `403 Forbidden` で拒否します。
 - **共有シークレット保護（オプション）:**
-  環境変数 `PROXY_SECRET` を設定すると、`X-Proxy-Secret` ヘッダーまたは `?secret=...` クエリパラメータが一致しないリクエストを `401 Unauthorized` で遮断できます。
+  環境変数 `PROXY_SECRET` を設定すると、`X-Proxy-Secret` ヘッダーが一致しないリクエストを `401 Unauthorized` で遮断できます（`graft-ai` の `CODEX_PROXY_SECRET` 設定と連携します）。

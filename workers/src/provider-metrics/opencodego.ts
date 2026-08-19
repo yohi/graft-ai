@@ -138,19 +138,11 @@ async function fetchZenBalance(workspaceId: string, context: FetchContext): Prom
   }
 }
 
-export async function fetchOpenCodeGoMetrics(
-  rawCookie: string,
-  workspaceIdOverride?: string,
-  fetchFn: typeof fetch = fetch,
-): Promise<OpenCodeGoFetchResult> {
-  const cookie = normalizeCookie(rawCookie);
-  const context: FetchContext = { cookie, fetchFn };
-  const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
-
-  // 1. Try SolidStart subscription RPCs
-  let subscriptionAuthError: Error | null = null;
-  const attempts: string[] = [];
-
+async function tryFetchSubscriptionUsage(
+  workspaceId: string,
+  context: FetchContext,
+  attempts: string[],
+): Promise<OpenCodeGoFetchResult | null> {
   for (const serverId of [SUBSCRIPTION_SERVER_ID, LITE_SUBSCRIPTION_SERVER_ID]) {
     try {
       const subscriptionText = await fetchServerRPC(serverId, [workspaceId], context, workspaceId);
@@ -163,24 +155,22 @@ export async function fetchOpenCodeGoMetrics(
         };
       }
     } catch (err) {
-      attempts.push(
-        `[${serverId.slice(0, 6)}:GET=err:${err instanceof Error ? err.message : String(err)}]`,
-      );
-      if (err instanceof OpenCodeGoResponseError) {
-        throw err;
-      }
+      const msg = err instanceof Error ? err.message : String(err);
+      attempts.push(`[${serverId.slice(0, 6)}:GET=err:${msg}]`);
+      if (err instanceof OpenCodeGoResponseError) throw err;
       if (err instanceof OpenCodeGoFetchError && err.detail.includes("Cookie expired")) {
-        subscriptionAuthError = err;
-        break;
+        throw err;
       }
     }
   }
+  return null;
+}
 
-  if (subscriptionAuthError !== null) {
-    throw subscriptionAuthError;
-  }
-
-  // 2. Try Billing RPC (GET)
+async function tryFetchBillingUsage(
+  workspaceId: string,
+  context: FetchContext,
+  attempts: string[],
+): Promise<OpenCodeGoFetchResult | null> {
   try {
     const billingText = await fetchServerRPC(
       BILLING_SERVER_ID,
@@ -190,24 +180,40 @@ export async function fetchOpenCodeGoMetrics(
     );
     attempts.push(`[bill:GET=len:${billingText.length}]`);
     const billing = extractZenBilling(billingText);
-    if (billing !== null) {
-      const limit = billing.monthlyLimitUSD;
-      const usage = billing.monthlyUsageUSD;
-      const ratio = limit !== null && limit > 0 ? Math.max(0, Math.min(1.0, usage / limit)) : 0;
-      return {
-        rollingUsageRatio: ratio,
-        monthlyUsageRatio: ratio,
-        rollingResetSeconds: 0,
-        monthlyResetSeconds: 0,
-        zenBalanceUSD: billing.balanceUSD,
-      };
-    }
+    if (!billing) return null;
+
+    const limit = billing.monthlyLimitUSD;
+    const usage = billing.monthlyUsageUSD;
+    const ratio = limit !== null && limit > 0 ? Math.max(0, Math.min(1.0, usage / limit)) : 0;
+    return {
+      rollingUsageRatio: ratio,
+      monthlyUsageRatio: ratio,
+      rollingResetSeconds: 0,
+      monthlyResetSeconds: 0,
+      zenBalanceUSD: billing.balanceUSD,
+    };
   } catch (err) {
-    attempts.push(`[bill:GET=err:${err instanceof Error ? err.message : String(err)}]`);
-    if (err instanceof OpenCodeGoFetchError && err.detail.includes("Cookie expired")) {
-      throw err;
-    }
+    const msg = err instanceof Error ? err.message : String(err);
+    attempts.push(`[bill:GET=err:${msg}]`);
+    return null;
   }
+}
+
+export async function fetchOpenCodeGoMetrics(
+  rawCookie: string,
+  workspaceIdOverride?: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<OpenCodeGoFetchResult> {
+  const cookie = normalizeCookie(rawCookie);
+  const context: FetchContext = { cookie, fetchFn };
+  const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
+
+  const attempts: string[] = [];
+  const subResult = await tryFetchSubscriptionUsage(workspaceId, context, attempts);
+  if (subResult !== null) return subResult;
+
+  const billResult = await tryFetchBillingUsage(workspaceId, context, attempts);
+  if (billResult !== null) return billResult;
 
   // 3. Try Zen balance as fallback
   const balance = await fetchZenBalance(workspaceId, context);

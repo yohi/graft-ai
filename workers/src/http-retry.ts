@@ -56,6 +56,11 @@ export interface GetWithRetryOptions {
   redirect?: "error" | "follow" | "manual";
 }
 
+function formatRetryError(logLabel: string, maxRetries: number, lastError?: Error): string {
+  const detail = lastError ? ` (${lastError.message})` : "";
+  return `${logLabel} failed after ${maxRetries + 1} attempts${detail}`;
+}
+
 export async function getWithRetry({
   url,
   headers,
@@ -97,9 +102,7 @@ export async function getWithRetry({
   }
 
   if (lastResponse !== undefined) return lastResponse;
-  throw new Error(
-    `${logLabel} failed after ${maxRetries + 1} attempts${lastError ? ` (${lastError.message})` : ""}`,
-  );
+  throw new Error(formatRetryError(logLabel, maxRetries, lastError));
 }
 
 /**

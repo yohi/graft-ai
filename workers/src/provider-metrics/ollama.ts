@@ -26,7 +26,7 @@ const USAGE_LABELS = [...PRIMARY_USAGE_LABELS, "Weekly usage"];
 
 function firstCapture(text: string, regex: RegExp): string | null {
   const match = regex.exec(text);
-  return match && match[1] ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 function parsePlanName(html: string): string | undefined {
@@ -46,14 +46,14 @@ function parseAccountEmail(html: string): string | undefined {
 }
 
 function parsePercent(text: string): number | null {
-  const usedPattern = /(\d+(?:\.\d+)?)\s*%\s*used/i;
+  const usedPattern = /([0-9.]+)\s*%\s*used/i;
   const usedMatch = firstCapture(text, usedPattern);
   if (usedMatch !== null) {
     const val = Number(usedMatch);
     if (Number.isFinite(val)) return val;
   }
 
-  const widthPattern = /width:\s*(\d+(?:\.\d+)?)\s*%/i;
+  const widthPattern = /width:\s*([0-9.]+)\s*%/i;
   const widthMatch = firstCapture(text, widthPattern);
   if (widthMatch !== null) {
     const val = Number(widthMatch);

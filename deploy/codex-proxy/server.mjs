@@ -42,16 +42,17 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 静的マッピングによる転送先 URL の安全な解決
-  const staticTarget = PATH_MAP[url.pathname];
-  if (!staticTarget) {
+  // 完全静的な固定エンドポイント URL の決定（ユーザー入力を含めない）
+  let targetUrlString = "";
+  if (url.pathname === "/backend-api/wham/usage") {
+    targetUrlString = "https://chatgpt.com/backend-api/wham/usage";
+  } else if (url.pathname === "/backend-api/wham/reset-credits") {
+    targetUrlString = "https://chatgpt.com/backend-api/wham/reset-credits";
+  } else {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Forbidden: Path not allowed by proxy whitelist" }));
     return;
   }
-
-  const targetUrl = new URL(staticTarget);
-  targetUrl.search = url.search;
 
   try {
     // Cloudflare Tunnel 等が付与する cf-*, cdn-loop, x-forwarded-* を排除し、必要なヘッダーのみ安全に転送
@@ -69,7 +70,7 @@ const server = http.createServer(async (req, res) => {
     if (req.headers["openai-beta"]) forwardHeaders["OpenAI-Beta"] = req.headers["openai-beta"];
     if (req.headers["originator"]) forwardHeaders["originator"] = req.headers["originator"];
 
-    const upstreamResponse = await fetch(targetUrl.href, {
+    const upstreamResponse = await fetch(targetUrlString, {
       method: req.method,
       headers: forwardHeaders,
     });

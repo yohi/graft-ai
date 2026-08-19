@@ -178,48 +178,48 @@ function extractFromRscHydration(html: string): Record<string, unknown>[] | null
   return records.length === 0 ? null : records;
 }
 
-function extractSolidStartUsageBlocks(text: string): Record<string, unknown>[] | null {
-  const extractBlock = (name: string): Record<string, unknown> | null => {
-    const blockRegex = new RegExp(
-      `(?:${name}|"${name}")\\s*:\\s*(?:\\$R\\[\\d+\\]\\s*=\\s*)?\\{([^}]+)\\}`,
-    );
-    const match = blockRegex.exec(text);
-    if (!match || match[1] === undefined) return null;
-    const body = match[1];
-    const percentMatch = /(?:usagePercent|"usagePercent")\s*:\s*(\d+(?:\.\d+)?)/.exec(body);
-    const resetMatch = /(?:resetInSec|"resetInSec")\s*:\s*(\d+)/.exec(body);
-    const res: Record<string, unknown> = {};
-    if (percentMatch && percentMatch[1] !== undefined) {
-      res[`${name}Percent`] = Number(percentMatch[1]);
-    }
-    if (resetMatch && resetMatch[1] !== undefined) {
-      res[`${name}ResetInSec`] = Number(resetMatch[1]);
-    }
-    return Object.keys(res).length > 0 ? res : null;
-  };
+function extractBlock(text: string, name: string): Record<string, unknown> | null {
+  const blockRegex = new RegExp(
+    String.raw`(?:"?${name}"?)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?\{([^}]+)\}`,
+  );
+  const match = blockRegex.exec(text);
+  if (!match?.[1]) return null;
+  const body = match[1];
+  const percentMatch = /(?:"?usagePercent"?)\s*:\s*(\d+(?:\.\d+)?)/.exec(body);
+  const resetMatch = /(?:"?resetInSec"?)\s*:\s*(\d+)/.exec(body);
+  const res: Record<string, unknown> = {};
+  if (percentMatch?.[1] !== undefined) {
+    res[`${name}Percent`] = Number(percentMatch[1]);
+  }
+  if (resetMatch?.[1] !== undefined) {
+    res[`${name}ResetInSec`] = Number(resetMatch[1]);
+  }
+  return Object.keys(res).length > 0 ? res : null;
+}
 
-  const rolling = extractBlock("rollingUsage");
-  const weekly = extractBlock("weeklyUsage");
-  const monthly = extractBlock("monthlyUsage");
+function extractSolidStartUsageBlocks(text: string): Record<string, unknown>[] | null {
+  const rolling = extractBlock(text, "rollingUsage");
+  const weekly = extractBlock(text, "weeklyUsage");
+  const monthly = extractBlock(text, "monthlyUsage");
 
   const combined: Record<string, unknown> = {};
-  if (rolling) {
-    if (rolling["rollingUsagePercent"] !== undefined)
-      combined["rollingUsagePercent"] = rolling["rollingUsagePercent"];
-    if (rolling["rollingUsageResetInSec"] !== undefined)
-      combined["rollingResetInSec"] = rolling["rollingUsageResetInSec"];
+  if (rolling?.["rollingUsagePercent"] !== undefined) {
+    combined["rollingUsagePercent"] = rolling["rollingUsagePercent"];
   }
-  if (weekly) {
-    if (weekly["weeklyUsagePercent"] !== undefined)
-      combined["weeklyUsagePercent"] = weekly["weeklyUsagePercent"];
-    if (weekly["weeklyUsageResetInSec"] !== undefined)
-      combined["weeklyResetInSec"] = weekly["weeklyUsageResetInSec"];
+  if (rolling?.["rollingUsageResetInSec"] !== undefined) {
+    combined["rollingResetInSec"] = rolling["rollingUsageResetInSec"];
   }
-  if (monthly) {
-    if (monthly["monthlyUsagePercent"] !== undefined)
-      combined["monthlyUsagePercent"] = monthly["monthlyUsagePercent"];
-    if (monthly["monthlyUsageResetInSec"] !== undefined)
-      combined["monthlyResetInSec"] = monthly["monthlyUsageResetInSec"];
+  if (weekly?.["weeklyUsagePercent"] !== undefined) {
+    combined["weeklyUsagePercent"] = weekly["weeklyUsagePercent"];
+  }
+  if (weekly?.["weeklyUsageResetInSec"] !== undefined) {
+    combined["weeklyResetInSec"] = weekly["weeklyUsageResetInSec"];
+  }
+  if (monthly?.["monthlyUsagePercent"] !== undefined) {
+    combined["monthlyUsagePercent"] = monthly["monthlyUsagePercent"];
+  }
+  if (monthly?.["monthlyUsageResetInSec"] !== undefined) {
+    combined["monthlyResetInSec"] = monthly["monthlyUsageResetInSec"];
   }
   return Object.keys(combined).length > 0 ? [combined] : null;
 }
@@ -248,25 +248,25 @@ function parseDurationText(text: string): number | null {
   let matched = false;
 
   const daysMatch = /(\d+)\s*(?:日|days?|d\b)/i.exec(text);
-  if (daysMatch && daysMatch[1] !== undefined) {
+  if (daysMatch?.[1] !== undefined) {
     seconds += Number(daysMatch[1]) * 86400;
     matched = true;
   }
 
   const hoursMatch = /(\d+)\s*(?:時間|hours?|h\b)/i.exec(text);
-  if (hoursMatch && hoursMatch[1] !== undefined) {
+  if (hoursMatch?.[1] !== undefined) {
     seconds += Number(hoursMatch[1]) * 3600;
     matched = true;
   }
 
   const minsMatch = /(\d+)\s*(?:分|mins?|minutes?|m\b)/i.exec(text);
-  if (minsMatch && minsMatch[1] !== undefined) {
+  if (minsMatch?.[1] !== undefined) {
     seconds += Number(minsMatch[1]) * 60;
     matched = true;
   }
 
   const secsMatch = /(\d+)\s*(?:秒|secs?|seconds?|s\b)/i.exec(text);
-  if (secsMatch && secsMatch[1] !== undefined) {
+  if (secsMatch?.[1] !== undefined) {
     seconds += Number(secsMatch[1]);
     matched = true;
   }
@@ -279,7 +279,7 @@ function extractPeriodFromDomText(
   labelRegex: RegExp,
 ): { percent: number; resetSec?: number } | null {
   const match = labelRegex.exec(text);
-  if (!match || match[1] === undefined) return null;
+  if (!match?.[1]) return null;
   const percent = Number(match[1]);
   const durationText = match[2];
   const resetSec =
@@ -324,10 +324,10 @@ function extractFromDomText(html: string): Record<string, unknown>[] | null {
 function extractFromTextFallback(html: string): Record<string, unknown>[] | null {
   const usageMatch =
     /"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/i.exec(html);
-  if (!usageMatch || usageMatch[1] === undefined) return null;
+  if (!usageMatch?.[1]) return null;
   const resetMatch = /"resetInSec(?:onds)?"\s*:\s*(\d+)/i.exec(html);
   const record: Record<string, unknown> = { usagePercent: Number(usageMatch[1]) };
-  if (resetMatch && resetMatch[1] !== undefined) record["resetInSec"] = Number(resetMatch[1]);
+  if (resetMatch?.[1] !== undefined) record["resetInSec"] = Number(resetMatch[1]);
   return [record];
 }
 
@@ -379,7 +379,7 @@ function parsePercentage(
         "OpenCodeGo usage percentage must be finite and between 0 and 100",
       );
     }
-    if (selected === null) selected = value / 100;
+    selected ??= value / 100;
   }
 
   return selected ?? 0;
@@ -412,7 +412,7 @@ function parseResetSeconds(
         "OpenCodeGo reset seconds must be a finite non-negative safe integer",
       );
     }
-    if (selected === null) selected = value;
+    selected ??= value;
   }
 
   return selected ?? undefined;
@@ -436,9 +436,14 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   const isMonthlyCapped = monthlyRatio !== undefined && monthlyRatio >= 1.0;
   const isWeeklyCapped = weeklyRatio !== undefined && weeklyRatio >= 1.0;
 
+  let effectiveWeeklyRatio: number | undefined;
+  if (weeklyRatio !== undefined) {
+    effectiveWeeklyRatio = isMonthlyCapped ? 1.0 : weeklyRatio;
+  }
+
   return {
     rollingUsageRatio: isMonthlyCapped || isWeeklyCapped ? 1.0 : rollingRatio,
-    weeklyUsageRatio: weeklyRatio !== undefined ? (isMonthlyCapped ? 1.0 : weeklyRatio) : undefined,
+    weeklyUsageRatio: effectiveWeeklyRatio,
     monthlyUsageRatio: monthlyRatio,
     rollingResetSeconds: isMonthlyCapped || isWeeklyCapped ? undefined : rollingReset,
     weeklyResetSeconds: isMonthlyCapped ? undefined : weeklyReset,
@@ -485,16 +490,16 @@ function parseJsonBilling(text: string): OpenCodeZenBilling | null {
 
 function parseRegexBilling(text: string): OpenCodeZenBilling | null {
   const usageMatch =
-    /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?)/.exec(text);
-  if (!usageMatch || usageMatch[1] === undefined) return null;
+    /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(text);
+  if (!usageMatch?.[1]) return null;
 
   const rawUsage = Number(usageMatch[1]);
   if (!Number.isFinite(rawUsage)) return null;
 
   const limitMatch =
-    /(?:"monthlyLimit"|monthlyLimit)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?)/.exec(text);
+    /(?:"monthlyLimit"|monthlyLimit)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(text);
   const balanceMatch =
-    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?)/.exec(
+    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(
       text,
     );
   const subMatch =
@@ -517,7 +522,7 @@ export function extractZenBalance(text: string): number | null {
   if (billing && billing.balanceUSD !== null) return billing.balanceUSD;
 
   const match =
-    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(
+    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?([^\s,;{}]+)/.exec(
       text,
     );
   return match?.[1] ? scaleUsd(Number(match[1])) : null;

@@ -219,46 +219,40 @@ async function fetchViaBrowserRendering(
   }
 }
 
+function classifyCodexWindow(
+  window: WindowSnapshot | null,
+  nowUnixSeconds: number,
+): "weekly" | "session" | null {
+  if (!window) return null;
+  if (window.limitWindowSeconds !== undefined) {
+    return window.limitWindowSeconds >= 86400 * 3 ? "weekly" : "session";
+  }
+  return window.resetAt - nowUnixSeconds > 86400 ? "weekly" : "session";
+}
+
 function normalizeCodexWindows(
   primary: WindowSnapshot | null,
   secondary: WindowSnapshot | null,
   nowUnixSeconds: number,
 ): { sessionWindow: WindowSnapshot | null; weeklyWindow: WindowSnapshot | null } {
-  const isWeekly = (window: WindowSnapshot): boolean => {
-    if (window.limitWindowSeconds !== undefined) {
-      return window.limitWindowSeconds >= 86400 * 3; // >= 3 days
-    }
-    // If interval > 24 hours from now, it is weekly
-    return window.resetAt - nowUnixSeconds > 86400;
-  };
+  const windows = [primary, secondary].filter((w): w is WindowSnapshot => w !== null);
+  let sessionWindow: WindowSnapshot | null = null;
+  let weeklyWindow: WindowSnapshot | null = null;
 
-  if (primary !== null && secondary !== null) {
-    const primaryWeekly = isWeekly(primary);
-    const secondaryWeekly = isWeekly(secondary);
-    if (!primaryWeekly && secondaryWeekly) {
-      return { sessionWindow: primary, weeklyWindow: secondary };
+  for (const win of windows) {
+    const type = classifyCodexWindow(win, nowUnixSeconds);
+    if (type === "weekly" && !weeklyWindow) {
+      weeklyWindow = win;
+    } else if (type === "session" && !sessionWindow) {
+      sessionWindow = win;
+    } else if (!sessionWindow) {
+      sessionWindow = win;
+    } else if (!weeklyWindow) {
+      weeklyWindow = win;
     }
-    if (primaryWeekly && !secondaryWeekly) {
-      return { sessionWindow: secondary, weeklyWindow: primary };
-    }
-    return { sessionWindow: primary, weeklyWindow: secondary };
   }
 
-  if (primary !== null && secondary === null) {
-    if (isWeekly(primary)) {
-      return { sessionWindow: null, weeklyWindow: primary };
-    }
-    return { sessionWindow: primary, weeklyWindow: null };
-  }
-
-  if (primary === null && secondary !== null) {
-    if (isWeekly(secondary)) {
-      return { sessionWindow: null, weeklyWindow: secondary };
-    }
-    return { sessionWindow: secondary, weeklyWindow: null };
-  }
-
-  return { sessionWindow: null, weeklyWindow: null };
+  return { sessionWindow, weeklyWindow };
 }
 
 export async function fetchCodexMetrics(

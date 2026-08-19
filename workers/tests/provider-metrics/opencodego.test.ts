@@ -395,4 +395,26 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(result.monthlyUsageRatio).toBeCloseTo(0.2);
     expect(result.zenBalanceUSD).toBeCloseTo(5.0);
   });
+
+  it.each([401, 403])(
+    "rethrows subscription HTTP %i authentication error when billing fallback returns no info",
+    async (status) => {
+      const mockFetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes("_server") && url.includes("def399")) {
+          return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+        }
+        if (url.includes("7abeebee")) {
+          return new Response("Unauthorized", { status });
+        }
+        if (url.includes("c83b78a6")) {
+          return new Response("Unauthorized", { status });
+        }
+        return new Response("{}", { status: 200 });
+      });
+
+      await expect(fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch)).rejects.toThrow(
+        new RegExp(`OpenCodeGo: HTTP ${status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`),
+      );
+    },
+  );
 });

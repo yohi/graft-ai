@@ -124,6 +124,7 @@ export async function fetchOpenCodeGoMetrics(
   // 1. Fetch subscription usage via SolidStart server RPC
   let subscriptionText = "";
   let subscriptionFetchFailed = false;
+  let subscriptionError: unknown = null;
   try {
     subscriptionText = await fetchServerRPC(
       SUBSCRIPTION_SERVER_ID,
@@ -131,8 +132,9 @@ export async function fetchOpenCodeGoMetrics(
       context,
       workspaceId,
     );
-  } catch {
+  } catch (err) {
     subscriptionFetchFailed = true;
+    subscriptionError = err;
   }
 
   // 2. If subscription payload is present and not null, try parsing usage
@@ -171,6 +173,10 @@ export async function fetchOpenCodeGoMetrics(
     }
   } catch {
     // Both failed
+  }
+
+  if (subscriptionError !== null) {
+    throw subscriptionError;
   }
 
   if (subscriptionText.length > 0 && !isNullPayload(subscriptionText)) {

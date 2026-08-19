@@ -365,38 +365,50 @@ export function extractZenBilling(text: string): OpenCodeZenBilling | null {
   };
 }
 
-function findBillingInObject(value: unknown): OpenCodeZenBilling | null {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findBillingInObject(item);
-      if (found !== null) return found;
-    }
-    return null;
+function findBillingInArray(items: readonly unknown[]): OpenCodeZenBilling | null {
+  for (const item of items) {
+    const found = findBillingInObject(item);
+    if (found !== null) return found;
   }
-  if (!isRecord(value)) return null;
+  return null;
+}
 
-  if (typeof value["monthlyUsage"] === "number") {
-    const rawUsage = value["monthlyUsage"];
-    const rawLimit = typeof value["monthlyLimit"] === "number" ? value["monthlyLimit"] : null;
-    const rawBalance = typeof value["balance"] === "number" ? value["balance"] : null;
-    const hasSub = value["subscription"] !== null && value["subscription"] !== undefined;
+function extractBillingRecord(record: Record<string, unknown>): OpenCodeZenBilling | null {
+  if (typeof record["monthlyUsage"] !== "number") return null;
 
-    return {
-      monthlyUsageUSD: rawUsage / USD_SCALE,
-      monthlyLimitUSD: rawLimit,
-      balanceUSD: rawBalance !== null ? rawBalance / USD_SCALE : null,
-      hasSubscription: hasSub,
-    };
-  }
+  const rawUsage = record["monthlyUsage"];
+  const rawLimit = typeof record["monthlyLimit"] === "number" ? record["monthlyLimit"] : null;
+  const rawBalance = typeof record["balance"] === "number" ? record["balance"] : null;
+  const hasSub = record["subscription"] !== null && record["subscription"] !== undefined;
 
-  for (const [key, child] of Object.entries(value)) {
+  return {
+    monthlyUsageUSD: rawUsage / USD_SCALE,
+    monthlyLimitUSD: rawLimit,
+    balanceUSD: rawBalance !== null ? rawBalance / USD_SCALE : null,
+    hasSubscription: hasSub,
+  };
+}
+
+function findBillingInChildren(record: Record<string, unknown>): OpenCodeZenBilling | null {
+  for (const [key, child] of Object.entries(record)) {
     if (!UNSAFE_TRAVERSAL_KEYS.has(key)) {
       const found = findBillingInObject(child);
       if (found !== null) return found;
     }
   }
-
   return null;
+}
+
+function findBillingInObject(value: unknown): OpenCodeZenBilling | null {
+  if (Array.isArray(value)) {
+    return findBillingInArray(value);
+  }
+  if (!isRecord(value)) return null;
+
+  const direct = extractBillingRecord(value);
+  if (direct !== null) return direct;
+
+  return findBillingInChildren(value);
 }
 
 export function extractZenBalance(html: string): number | null {

@@ -146,15 +146,26 @@ async function fetchViaBrowserRendering(
   const browser = await launcher.launch(browserBinding);
   try {
     const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({
-      Authorization: `Bearer ${accessToken}`,
-      ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
-      "OpenAI-Beta": "codex-1",
-      originator: "Codex Desktop",
-      Accept: "application/json",
+    const targetUrl = `${baseUrl}/backend-api/wham/usage`;
+
+    await page.setRequestInterception(true);
+    page.on("request", (interceptedRequest) => {
+      if (interceptedRequest.url() === targetUrl) {
+        const headers = {
+          ...interceptedRequest.headers(),
+          Authorization: `Bearer ${accessToken}`,
+          ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+          "OpenAI-Beta": "codex-1",
+          originator: "Codex Desktop",
+          Accept: "application/json",
+        };
+        interceptedRequest.continue({ headers });
+      } else {
+        interceptedRequest.continue();
+      }
     });
 
-    const response = await page.goto(`${baseUrl}/backend-api/wham/usage`, {
+    const response = await page.goto(targetUrl, {
       waitUntil: "networkidle0",
       timeout: 30000,
     });
@@ -210,7 +221,6 @@ export async function fetchCodexMetrics(
   }
 
   let data: CodexUsageResponse;
-  let resetCredits: CodexFetchResult["resetCredits"];
 
   const response = await getWithRetry({
     url: `${baseUrl}/backend-api/wham/usage`,
@@ -238,8 +248,9 @@ export async function fetchCodexMetrics(
   } else {
     const body: unknown = await response.json();
     data = parseUsageResponse(body);
-    resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
   }
+
+  const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
 
   return {
     sessionUsageRatio: data.primaryWindow.usedPercent / 100,

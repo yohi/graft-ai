@@ -115,8 +115,8 @@ func run() error {
 	err = serveUntilSignal(server)
 	queue.Close()
 	forwarderWg.Wait()
-	stopForwarders()
 	backendDispatcher.Close()
+	stopForwarders()
 	return err
 }
 

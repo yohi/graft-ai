@@ -251,8 +251,21 @@ function normalizeCodexWindows(
 
   if (primary && !sessionWindow && !weeklyWindow) {
     sessionWindow = primary;
-    if (secondary) {
+  }
+
+  if (secondary) {
+    if (!weeklyWindow && sessionWindow !== secondary) {
       weeklyWindow = secondary;
+    } else if (!sessionWindow && weeklyWindow !== secondary) {
+      sessionWindow = secondary;
+    }
+  }
+
+  if (primary) {
+    if (!sessionWindow && weeklyWindow !== primary) {
+      sessionWindow = primary;
+    } else if (!weeklyWindow && sessionWindow !== primary) {
+      weeklyWindow = primary;
     }
   }
 

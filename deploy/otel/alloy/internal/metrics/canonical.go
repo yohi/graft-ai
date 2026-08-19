@@ -19,10 +19,13 @@ const (
 var DurationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, math.Inf(1)}
 
 type MetricSample struct {
-	Name    string
-	Value   float64
-	Labels  map[string]string
-	Buckets []float64
+	Name              string
+	Value             float64
+	Labels            map[string]string
+	Buckets           []float64
+	BucketCounts      []uint64
+	Count             uint64
+	TimestampUnixNano uint64
 }
 
 type NormalizedMetrics struct {
@@ -57,15 +60,20 @@ func (CanonicalMetrics) Normalize(span redaction.RedactedSpan) NormalizedMetrics
 	} else if span.EndUnixNano >= span.StartUnixNano && span.EndUnixNano > 0 {
 		duration = float64(span.EndUnixNano-span.StartUnixNano) / 1_000_000_000
 	}
-	samples := []MetricSample{{Name: RequestsMetric, Value: 1, Labels: cloneLabels(labels)}}
+	timestamp := span.EndUnixNano
+	if timestamp == 0 {
+		timestamp = span.StartUnixNano
+	}
+	samples := []MetricSample{{Name: RequestsMetric, Value: 1, Labels: cloneLabels(labels), TimestampUnixNano: timestamp}}
 	if isError(span) {
-		samples = append(samples, MetricSample{Name: ErrorsMetric, Value: 1, Labels: cloneLabels(labels)})
+		samples = append(samples, MetricSample{Name: ErrorsMetric, Value: 1, Labels: cloneLabels(labels), TimestampUnixNano: timestamp})
 	}
 	samples = append(samples, MetricSample{
-		Name:    DurationMetric,
-		Value:   duration,
-		Labels:  cloneLabels(labels),
-		Buckets: append([]float64(nil), DurationBuckets...),
+		Name:              DurationMetric,
+		Value:             duration,
+		Labels:            cloneLabels(labels),
+		Buckets:           append([]float64(nil), DurationBuckets...),
+		TimestampUnixNano: timestamp,
 	})
 	return NormalizedMetrics{Samples: samples}
 }

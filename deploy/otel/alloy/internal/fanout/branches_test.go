@@ -71,7 +71,7 @@ func TestFanOut_excludes_sampled_out_trace_from_tempo_and_loki_but_keeps_metrics
 	}
 }
 
-func TestFanOut_returns_projector_drop_reason_without_finalizing(t *testing.T) {
+func TestFanOut_keeps_metrics_and_tempo_when_payload_field_is_invalid(t *testing.T) {
 	span := requestSpan("root", true)
 	span.Attributes["duration_ms"] = json.RawMessage(`"not-a-number"`)
 	trace := selector.Trace{
@@ -86,11 +86,11 @@ func TestFanOut_returns_projector_drop_reason_without_finalizing(t *testing.T) {
 	}
 
 	result, err := NewFanOut(sampler).Trace(trace, 1_000_000)
-	if err == nil {
-		t.Fatal("Trace returned nil error for an invalid projected numeric field")
+	if err != nil {
+		t.Fatalf("Trace returned error for an invalid projected numeric field: %v", err)
 	}
-	if len(result.Loki) != 0 {
-		t.Fatalf("Loki records = %d, want none when projection fails", len(result.Loki))
+	if len(result.Tempo) != 1 || len(result.Metrics.Samples) == 0 {
+		t.Fatalf("result = %#v, want Tempo and metrics despite payload field drop", result)
 	}
 }
 

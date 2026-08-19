@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -16,6 +17,11 @@ const (
 type Span struct {
 	TraceID            string
 	SpanID             string
+	ParentSpanID       string
+	Name               string
+	Kind               string
+	StatusCode         string
+	StatusMessage      string
 	StartUnixNano      uint64
 	EndUnixNano        uint64
 	Attributes         map[string]json.RawMessage
@@ -40,6 +46,8 @@ func NewRedactor() Redactor {
 
 func (Redactor) Redact(span Span) (RedactedSpan, RedactionStatus) {
 	redacted := RedactedSpan{Span: cloneSpan(span)}
+	redacted.Name = redactString(redacted.Name)
+	redacted.StatusMessage = redactString(redacted.StatusMessage)
 	status := RedactionStatus{}
 	for key, value := range redacted.Attributes {
 		if isPayloadKey(key) {
@@ -66,6 +74,11 @@ func cloneSpan(span Span) Span {
 	return Span{
 		TraceID:            span.TraceID,
 		SpanID:             span.SpanID,
+		ParentSpanID:       span.ParentSpanID,
+		Name:               span.Name,
+		Kind:               span.Kind,
+		StatusCode:         span.StatusCode,
+		StatusMessage:      span.StatusMessage,
 		StartUnixNano:      span.StartUnixNano,
 		EndUnixNano:        span.EndUnixNano,
 		Attributes:         cloneAttributes(span.Attributes),
@@ -96,10 +109,8 @@ func isSecretKey(key string) bool {
 		if lower == target {
 			return false
 		}
-		for _, alias := range aliases {
-			if lower == alias {
-				return false
-			}
+		if slices.Contains(aliases, lower) {
+			return false
 		}
 	}
 	for _, marker := range []string{"authorization", "api_key", "api-key", "apikey", "secret", "token", "password", "credential"} {

@@ -15,7 +15,7 @@ func TestReceiver_limits_active_request_bodies_to_100(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
-	identity, err := NewSourceIdentity([]string{"127.0.0.0/8"}, []byte("hmac-key"))
+	identity, err := NewSourceIdentity([]string{"127.0.0.1/32"}, []byte("hmac-key"))
 	if err != nil {
 		t.Fatalf("new source identity: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestReceiver_rejects_rate_limited_requests_before_concurrency(t *testing.T)
 	if err != nil {
 		t.Fatalf("new authenticator: %v", err)
 	}
-	identity, err := NewSourceIdentity([]string{"127.0.0.0/8"}, []byte("hmac-key"))
+	identity, err := NewSourceIdentity([]string{"127.0.0.1/32"}, []byte("hmac-key"))
 	if err != nil {
 		t.Fatalf("new source identity: %v", err)
 	}

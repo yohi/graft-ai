@@ -62,14 +62,12 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 	remaining := maxBytes - len(baseSerialized)
 
 	var promptRoot, completionRoot *jsonNode
-	var promptOriginalSize, completionOriginalSize int
 	if hasPrompt {
 		promptRoot, err = decodeNode(originalPrompt)
 		if err != nil {
 			return dropPayload(finalized, metadata, maxBytes)
 		}
 		promptRoot.prepareForTruncation()
-		promptOriginalSize = promptRoot.encodedSize
 	}
 	if hasCompletion {
 		completionRoot, err = decodeNode(originalCompletion)
@@ -77,7 +75,6 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 			return dropPayload(finalized, metadata, maxBytes)
 		}
 		completionRoot.prepareForTruncation()
-		completionOriginalSize = completionRoot.encodedSize
 	}
 
 	var promptTarget, completionTarget int
@@ -89,14 +86,8 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 			completionTarget = remaining
 		}
 	case 2:
-		total := promptOriginalSize + completionOriginalSize
-		if total == 0 {
-			promptTarget = remaining / 2
-			completionTarget = remaining - promptTarget
-		} else {
-			promptTarget = remaining * promptOriginalSize / total
-			completionTarget = remaining * completionOriginalSize / total
-		}
+		promptTarget = remaining / 2
+		completionTarget = remaining - promptTarget
 	}
 	if promptTarget < 0 {
 		promptTarget = 0
@@ -105,7 +96,7 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 		completionTarget = 0
 	}
 
-	for step := 0; step < 3; step++ {
+	for range 3 {
 		candidate := cloneFields(metadata)
 		if hasPrompt {
 			candidate["prompt"], _ = promptRoot.truncate(promptTarget)
@@ -126,16 +117,9 @@ func (s Sizer) Finalize(record JSONLogRecord) (JSONLogRecord, DropReason) {
 		if promptTarget+completionTarget <= over+1 {
 			break
 		}
-		// Reduce both budgets proportionally to their share of the overflow.
 		if hasPrompt && hasCompletion {
-			promptOver := over * promptOriginalSize / (promptOriginalSize + completionOriginalSize)
-			if promptOver < 1 {
-				promptOver = 1
-			}
-			completionOver := over - promptOver
-			if completionOver < 1 {
-				completionOver = 1
-			}
+			promptOver := (over + 1) / 2
+			completionOver := over + 1 - promptOver
 			promptTarget -= promptOver
 			completionTarget -= completionOver
 		} else if hasPrompt {
@@ -164,8 +148,9 @@ func dropPayload(record JSONLogRecord, metadata map[string]json.RawMessage, maxB
 
 func cloneRecord(record JSONLogRecord) JSONLogRecord {
 	return JSONLogRecord{
-		Fields: cloneFields(record.Fields),
-		Labels: cloneLabels(record.Labels),
+		Fields:            cloneFields(record.Fields),
+		Labels:            cloneLabels(record.Labels),
+		TimestampUnixNano: record.TimestampUnixNano,
 	}
 }
 
@@ -202,15 +187,6 @@ const truncatedSuffix = "[TRUNCATED]"
 
 func TruncatedSuffix() string {
 	return truncatedSuffix
-}
-
-func truncateJSON(value json.RawMessage, maxBytes int) (json.RawMessage, bool) {
-	node, err := decodeNode(value)
-	if err != nil {
-		return cloneRaw(value), false
-	}
-	node.prepareForTruncation()
-	return node.truncate(maxBytes)
 }
 
 func (n *jsonNode) prepareForTruncation() {
@@ -278,9 +254,7 @@ func (n *jsonNode) truncate(maxBytes int) (json.RawMessage, bool) {
 		over := n.encodedSize - maxBytes
 		currentBytes := node.encodedSize
 		targetBytes := currentBytes - over - 1
-		if targetBytes < suffixBytes {
-			targetBytes = suffixBytes
-		}
+		targetBytes = max(targetBytes, suffixBytes)
 		clean, changed := truncateString(node.text, targetBytes)
 		if !changed {
 			continue

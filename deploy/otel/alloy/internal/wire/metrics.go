@@ -20,7 +20,7 @@ func EncodeMetrics(normalized metrics.NormalizedMetrics) ([]byte, error) {
 	if len(normalized.Samples) == 0 {
 		return nil, nil
 	}
-	aggregated, timestamp, err := aggregateSamples(normalized.Samples)
+	aggregated, startTime, endTime, err := aggregateSamples(normalized.Samples)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func EncodeMetrics(normalized metrics.NormalizedMetrics) ([]byte, error) {
 		}},
 	}
 	for _, sample := range aggregated {
-		metric, err := metricProto(sample, timestamp)
+		metric, err := metricProto(sample, startTime, endTime)
 		if err != nil {
 			return nil, err
 		}
@@ -55,15 +55,21 @@ type aggregatedSample struct {
 	BucketCounts []uint64
 }
 
-func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint64, error) {
-	var timestamp uint64
+func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint64, uint64, error) {
+	var startTime, endTime uint64
 	for _, sample := range samples {
-		if sample.TimestampUnixNano > timestamp {
-			timestamp = sample.TimestampUnixNano
+		if sample.TimestampUnixNano == 0 {
+			continue
+		}
+		if startTime == 0 || sample.TimestampUnixNano < startTime {
+			startTime = sample.TimestampUnixNano
+		}
+		if sample.TimestampUnixNano > endTime {
+			endTime = sample.TimestampUnixNano
 		}
 	}
-	if timestamp == 0 {
-		timestamp = uint64(time.Now().UnixNano())
+	if endTime == 0 {
+		endTime = uint64(time.Now().UnixNano())
 	}
 
 	groups := make(map[string]*aggregatedSample)
@@ -87,7 +93,7 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint6
 			continue
 		}
 		if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
-			return nil, 0, fmt.Errorf("metric %q has non-finite duration", sample.Name)
+			return nil, 0, 0, fmt.Errorf("metric %q has non-finite duration", sample.Name)
 		}
 		group.Value += sample.Value
 		group.Count++
@@ -106,7 +112,7 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, uint6
 	for _, key := range order {
 		result = append(result, *groups[key])
 	}
-	return result, timestamp, nil
+	return result, startTime, endTime, nil
 }
 
 func sampleKey(sample metrics.MetricSample) string {
@@ -129,7 +135,7 @@ func labelsKey(labels map[string]string) string {
 	return builder.String()
 }
 
-func metricProto(sample aggregatedSample, timestamp uint64) (*metricspb.Metric, error) {
+func metricProto(sample aggregatedSample, startTime, endTime uint64) (*metricspb.Metric, error) {
 	labels := make([]*commonpb.KeyValue, 0, len(sample.Labels))
 	keys := make([]string, 0, len(sample.Labels))
 	for key := range sample.Labels {
@@ -147,9 +153,10 @@ func metricProto(sample aggregatedSample, timestamp uint64) (*metricspb.Metric, 
 				IsMonotonic:            true,
 				AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
 				DataPoints: []*metricspb.NumberDataPoint{{
-					Attributes:   labels,
-					TimeUnixNano: timestamp,
-					Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: sample.Value},
+					Attributes:        labels,
+					StartTimeUnixNano: startTime,
+					TimeUnixNano:      endTime,
+					Value:             &metricspb.NumberDataPoint_AsDouble{AsDouble: sample.Value},
 				}},
 			}},
 		}, nil
@@ -164,12 +171,13 @@ func metricProto(sample aggregatedSample, timestamp uint64) (*metricspb.Metric, 
 		Data: &metricspb.Metric_Histogram{Histogram: &metricspb.Histogram{
 			AggregationTemporality: metricspb.AggregationTemporality_AGGREGATION_TEMPORALITY_DELTA,
 			DataPoints: []*metricspb.HistogramDataPoint{{
-				Attributes:     labels,
-				TimeUnixNano:   timestamp,
-				Count:          sample.Count,
-				Sum:            &sum,
-				BucketCounts:   bucketCounts,
-				ExplicitBounds: sample.Buckets[:len(sample.Buckets)-1],
+				Attributes:        labels,
+				StartTimeUnixNano: startTime,
+				TimeUnixNano:      endTime,
+				Count:             sample.Count,
+				Sum:               &sum,
+				BucketCounts:      bucketCounts,
+				ExplicitBounds:    sample.Buckets[:len(sample.Buckets)-1],
 			}},
 		}},
 	}, nil

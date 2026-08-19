@@ -118,13 +118,13 @@ describe("fetchOpenCodeGoMetrics", () => {
     }
   });
 
-  it("does not follow redirects for Cookie-authenticated requests", async () => {
+  it("sets follow redirects for RPC requests", async () => {
     const mockFetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
-      expect(init.redirect).toBe("manual");
+      expect(init.redirect).toBe("follow");
       if (url.includes("_server") && url.includes("def399")) {
         return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
       }
-      if (url.includes("7abeebee")) {
+      if (url.includes("c7389bd0") || url.includes("7abeebee")) {
         return new Response(MOCK_USAGE_HTML, { status: 200 });
       }
       return new Response(MOCK_ZEN_HTML, { status: 200 });

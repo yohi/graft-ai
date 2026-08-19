@@ -3,6 +3,7 @@ import type {
   OpenAIFetchResult,
   CodexFetchResult,
   OpenCodeGoFetchResult,
+  OllamaFetchResult,
 } from "./types";
 import { postWithRetry, validatePrometheusConfig } from "../http-retry";
 
@@ -17,6 +18,7 @@ interface MetricResults {
   openai?: OpenAIFetchResult;
   codex?: CodexFetchResult;
   openCodeGo?: OpenCodeGoFetchResult;
+  ollama?: OllamaFetchResult;
 }
 
 function attr(key: string, value: string): Record<string, unknown> {
@@ -108,9 +110,34 @@ function buildMetrics(results: MetricResults, nowUnixNano: string): Record<strin
       metrics.push(
         gaugeMetric("opencodego_reset_seconds_remaining", periodAttr, remaining, nowUnixNano),
       );
+      const resetTimestamp = Math.floor(Date.now() / 1000) + remaining;
+      metrics.push(
+        gaugeMetric("opencodego_reset_timestamp_seconds", periodAttr, resetTimestamp, nowUnixNano),
+      );
     }
     if (g.zenBalanceUSD !== null) {
       metrics.push(gaugeMetric("opencodego_zen_balance_usd", [], g.zenBalanceUSD, nowUnixNano));
+    }
+  }
+
+  if (results.ollama) {
+    const o = results.ollama;
+    for (const [period, ratio, reset] of [
+      ["session", o.sessionUsageRatio, o.sessionResetTimestampSeconds],
+      ["weekly", o.weeklyUsageRatio, o.weeklyResetTimestampSeconds],
+    ] as [string, number | undefined, number | undefined][]) {
+      const periodAttr = [attr("period", period)];
+      if (ratio !== undefined) {
+        metrics.push(gaugeMetric("ollama_cloud_usage_ratio", periodAttr, ratio, nowUnixNano));
+      }
+      if (reset !== undefined) {
+        metrics.push(
+          gaugeMetric("ollama_cloud_reset_timestamp_seconds", periodAttr, reset, nowUnixNano),
+        );
+      }
+    }
+    if (o.plan) {
+      metrics.push(gaugeMetric("ollama_cloud_plan_info", [attr("plan", o.plan)], 1, nowUnixNano));
     }
   }
 

@@ -1,27 +1,32 @@
+// workers/src/provider-metrics/opencodego.ts
+
 import type { OpenCodeGoFetchResult } from "./types";
 import {
   extractWorkspaceId,
   extractZenBalance,
   extractZenBilling,
   parseOpenCodeGoUsage,
+  OpenCodeGoResponseError,
 } from "./opencodego-parser";
 import { getWithRetry } from "../http-retry";
 
 const BASE_URL = "https://opencode.ai";
 const WORKSPACES_SERVER_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
+const LITE_SUBSCRIPTION_SERVER_ID =
+  "c7389bd0e731f80f49593e5ee53835475f4e28594dd6bd83eb229bab753498cd";
 const SUBSCRIPTION_SERVER_ID = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4";
 const BILLING_SERVER_ID = "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d";
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
-const TIMEOUT_MS = 20000;
+const TIMEOUT_MS = 8000;
 
 type FetchContext = {
   readonly cookie: string;
   readonly fetchFn: typeof fetch;
 };
 
-class OpenCodeGoFetchError extends Error {
+export class OpenCodeGoFetchError extends Error {
   readonly name = "OpenCodeGoFetchError";
 
   constructor(readonly detail: string) {
@@ -30,7 +35,10 @@ class OpenCodeGoFetchError extends Error {
 }
 
 function normalizeCookie(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = raw
+    .trim()
+    .replace(/^[\x27"]+|[\x27"]+$/g, "")
+    .trim();
   if (trimmed.includes("=")) {
     return trimmed;
   }
@@ -43,7 +51,16 @@ function serverInstanceHeader(): string {
 
 function isNullPayload(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed === "null" || trimmed.endsWith("=[],null)") || trimmed.endsWith("=[], null)");
+  return (
+    trimmed === "" ||
+    trimmed === "null" ||
+    trimmed === "{}" ||
+    trimmed === "[]" ||
+    trimmed.endsWith("=[],null)") ||
+    trimmed.endsWith("=[], null)") ||
+    trimmed.endsWith("=[],void 0)") ||
+    trimmed.endsWith("=[], void 0)")
+  );
 }
 
 async function fetchServerRPC(
@@ -61,22 +78,24 @@ async function fetchServerRPC(
       ? `${BASE_URL}/_server?id=${serverId}&args=${encodeURIComponent(JSON.stringify(args))}`
       : `${BASE_URL}/_server?id=${serverId}`;
 
+  const headers: Record<string, string> = {
+    Cookie: context.cookie,
+    "X-Server-Id": serverId,
+    "X-Server-Instance": serverInstanceHeader(),
+    "User-Agent": USER_AGENT,
+    Origin: BASE_URL,
+    Referer: referer,
+    Accept: "text/javascript, application/json;q=0.9, */*;q=0.8",
+  };
+
   const response = await getWithRetry({
     url,
-    headers: {
-      Cookie: context.cookie,
-      "X-Server-Id": serverId,
-      "X-Server-Instance": serverInstanceHeader(),
-      "User-Agent": USER_AGENT,
-      Origin: BASE_URL,
-      Referer: referer,
-      Accept: "text/javascript, application/json;q=0.9, */*;q=0.8",
-    },
+    headers,
     fetchFn: context.fetchFn,
     logLabel: `OpenCodeGo RPC [${serverId.slice(0, 8)}]`,
     isRetryableStatus: (status) => status === 429 || status >= 500,
     perAttemptTimeoutMs: TIMEOUT_MS,
-    redirect: "manual",
+    redirect: "follow",
   });
 
   if (!response.ok) {
@@ -86,7 +105,9 @@ async function fetchServerRPC(
         `OpenCodeGo: HTTP ${response.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
       );
     }
-    throw new OpenCodeGoFetchError(`OpenCodeGo RPC failed: HTTP ${response.status}`);
+    throw new OpenCodeGoFetchError(
+      `OpenCodeGo RPC [${serverId.slice(0, 8)}] HTTP ${response.status}`,
+    );
   }
 
   return response.text();
@@ -95,6 +116,7 @@ async function fetchServerRPC(
 async function fetchWorkspaceId(context: FetchContext): Promise<string> {
   const text = await fetchServerRPC(WORKSPACES_SERVER_ID, null, context);
   const workspaceId = extractWorkspaceId(text);
+
   if (workspaceId === null) {
     throw new OpenCodeGoFetchError(
       `OpenCodeGo: Could not extract workspace ID from response (response length: ${text.length})`,
@@ -121,36 +143,40 @@ export async function fetchOpenCodeGoMetrics(
   const context: FetchContext = { cookie, fetchFn };
   const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
 
-  // 1. Fetch subscription usage via SolidStart server RPC
-  let subscriptionText = "";
-  let subscriptionFetchFailed = false;
-  let subscriptionError: unknown = null;
-  try {
-    subscriptionText = await fetchServerRPC(
-      SUBSCRIPTION_SERVER_ID,
-      [workspaceId],
-      context,
-      workspaceId,
-    );
-  } catch (err) {
-    subscriptionFetchFailed = true;
-    subscriptionError = err;
-  }
+  // 1. Try SolidStart subscription RPCs
+  let subscriptionAuthError: Error | null = null;
+  const attempts: string[] = [];
 
-  // 2. If subscription payload is present and not null, try parsing usage
-  if (!subscriptionFetchFailed && !isNullPayload(subscriptionText)) {
+  for (const serverId of [SUBSCRIPTION_SERVER_ID, LITE_SUBSCRIPTION_SERVER_ID]) {
     try {
-      const usage = parseOpenCodeGoUsage(subscriptionText);
-      return {
-        ...usage,
-        zenBalanceUSD: await fetchZenBalance(workspaceId, context),
-      };
-    } catch {
-      // Fall through to pay-as-you-go / billing fallback
+      const subscriptionText = await fetchServerRPC(serverId, [workspaceId], context, workspaceId);
+      attempts.push(`[${serverId.slice(0, 6)}:GET=len:${subscriptionText.length}]`);
+      if (!isNullPayload(subscriptionText)) {
+        const usage = parseOpenCodeGoUsage(subscriptionText);
+        return {
+          ...usage,
+          zenBalanceUSD: await fetchZenBalance(workspaceId, context),
+        };
+      }
+    } catch (err) {
+      attempts.push(
+        `[${serverId.slice(0, 6)}:GET=err:${err instanceof Error ? err.message : String(err)}]`,
+      );
+      if (err instanceof OpenCodeGoResponseError) {
+        throw err;
+      }
+      if (err instanceof OpenCodeGoFetchError && err.detail.includes("Cookie expired")) {
+        subscriptionAuthError = err;
+        break;
+      }
     }
   }
 
-  // 3. Fallback: Fetch pay-as-you-go / Zen billing usage
+  if (subscriptionAuthError !== null) {
+    throw subscriptionAuthError;
+  }
+
+  // 2. Try Billing RPC (GET)
   try {
     const billingText = await fetchServerRPC(
       BILLING_SERVER_ID,
@@ -158,6 +184,7 @@ export async function fetchOpenCodeGoMetrics(
       context,
       workspaceId,
     );
+    attempts.push(`[bill:GET=len:${billingText.length}]`);
     const billing = extractZenBilling(billingText);
     if (billing !== null) {
       const limit = billing.monthlyLimitUSD;
@@ -171,20 +198,28 @@ export async function fetchOpenCodeGoMetrics(
         zenBalanceUSD: billing.balanceUSD,
       };
     }
-  } catch {
-    // Both failed
+  } catch (err) {
+    attempts.push(`[bill:GET=err:${err instanceof Error ? err.message : String(err)}]`);
+    if (err instanceof OpenCodeGoFetchError && err.detail.includes("Cookie expired")) {
+      throw err;
+    }
   }
 
-  if (subscriptionError !== null) {
-    throw subscriptionError;
-  }
-
-  if (subscriptionText.length > 0 && !isNullPayload(subscriptionText)) {
-    // If we have non-null subscriptionText, parse it to throw the detailed error with snippet
-    parseOpenCodeGoUsage(subscriptionText);
+  // 3. Try Zen balance as fallback
+  const balance = await fetchZenBalance(workspaceId, context);
+  if (balance !== null) {
+    return {
+      rollingUsageRatio: 0,
+      weeklyUsageRatio: 0,
+      monthlyUsageRatio: 0,
+      rollingResetSeconds: 0,
+      weeklyResetSeconds: 0,
+      monthlyResetSeconds: 0,
+      zenBalanceUSD: balance,
+    };
   }
 
   throw new OpenCodeGoFetchError(
-    `OpenCodeGo: Could not resolve subscription or billing usage for workspace ${workspaceId}`,
+    `OpenCodeGo: Could not resolve subscription or billing usage for workspace ${workspaceId} (attempts: ${attempts.join(", ")})`,
   );
 }

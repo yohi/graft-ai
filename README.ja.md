@@ -49,8 +49,8 @@ series、50GB logs）の制約内で動作するように最適化されてい�
 
 | Worker | Trigger | Responsibility |
 | :--- | :--- | :--- |
-| `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
-| `graft-ai-ollama-cloud` | Cron `*/5 * * * *` | session / weekly リセットメトリクスを計算し、Grafana Cloud Prometheus に push |
+| `graft-ai-provider-metrics` | Cron `* * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
+| `graft-ai-ollama-cloud` | Cron `* * * * *` | session / weekly リセットメトリクスを計算し、Grafana Cloud Prometheus に push |
 
 #### `graft-ai-provider-metrics` の secrets
 
@@ -62,6 +62,7 @@ npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.json
 npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc       # optional（住宅用プロキシ・Cloudflare Tunnel 連携推奨）
 npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
 npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
+npx wrangler secret put OLLAMA_SESSION_COOKIE --config wrangler.provider-metrics.jsonc    # optional（Ollama Cloud 使用率・リアルタイムリセット追跡用）
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc

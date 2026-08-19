@@ -72,6 +72,12 @@ function providerResponse(input: RequestInfo | URL): Response {
   if (url.includes("opencode.ai")) {
     return new Response('{"zenBalance":10.0}', { status: 200 });
   }
+  if (url.includes("ollama.com")) {
+    return new Response(
+      '<html><body><div id="header-email">user@ollama.com</div><span>Cloud Usage</span><span>Pro</span><h3>Session usage</h3><div style="width: 25%">25% used</div><span data-time="2026-08-19T06:00:00Z"></span></body></html>',
+      { status: 200, headers: { "Content-Type": "text/html" } },
+    );
+  }
   if (url.includes("/v1/metrics")) {
     return new Response("", { status: 200 });
   }
@@ -239,5 +245,38 @@ describe("provider-metrics scheduled handler", () => {
     );
     expect(prometheusCalls.length).toBeGreaterThan(0);
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("Prometheus push failed"));
+  });
+
+  it("fetches Ollama metrics when OLLAMA_SESSION_COOKIE is configured", async () => {
+    const mockFetch = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+        providerResponse(input),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    const envWithOllama = {
+      ...baseEnv,
+      OLLAMA_SESSION_COOKIE: "ollama_session=test123",
+    } satisfies ProviderMetricsEnv;
+
+    await worker.scheduled(scheduledEvent, envWithOllama, ctx);
+
+    const ollamaCalls = mockFetch.mock.calls.filter(([input]) =>
+      urlOf(input).includes("ollama.com"),
+    );
+    expect(ollamaCalls).toHaveLength(1);
+
+    const prometheusCalls = mockFetch.mock.calls.filter(([input]) =>
+      urlOf(input).includes("/v1/metrics"),
+    );
+    const firstPrometheusCall = prometheusCalls[0];
+    if (firstPrometheusCall === undefined) {
+      throw new Error("Expected a Prometheus metrics request");
+    }
+    const body = firstPrometheusCall[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected a serialized Prometheus metrics payload");
+    }
+    expect(body).toContain('"ollama_cloud_usage_ratio"');
   });
 });

@@ -15,12 +15,22 @@
     "timezone": "browser",
     "schemaVersion": 39,
     "version": 3,
-    "refresh": "5m",
+    "refresh": "1m",
     "time": {
       "from": "now-24h",
       "to": "now"
     },
-    "timepicker": {},
+    "timepicker": {
+      "refresh_intervals": [
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ]
+    },
     "templating": {
       "list": []
     },
@@ -96,7 +106,8 @@
             },
             "expr": "sum(openai_api_cost_usd)",
             "legendFormat": "Total Cost",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -141,7 +152,8 @@
             },
             "expr": "sum(openai_api_requests)",
             "legendFormat": "Requests",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -186,7 +198,8 @@
             },
             "expr": "sum(openai_api_input_tokens)",
             "legendFormat": "Input Tokens",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           },
           {
             "datasource": {
@@ -195,7 +208,8 @@
             },
             "expr": "sum(openai_api_output_tokens)",
             "legendFormat": "Output Tokens",
-            "refId": "B"
+            "refId": "B",
+            "instant": true
           }
         ]
       },
@@ -240,7 +254,8 @@
             },
             "expr": "sum(openai_api_cached_tokens)",
             "legendFormat": "Cached Tokens",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -312,9 +327,10 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "codex_usage_ratio{period=\"session\"}",
+            "expr": "max(codex_usage_ratio{period=\"session\"})",
             "legendFormat": "Session Usage",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -323,7 +339,7 @@
         "type": "gauge",
         "title": "Codex Weekly Usage",
         "gridPos": {
-          "x": 6,
+          "x": 12,
           "y": 6,
           "w": 6,
           "h": 4
@@ -373,18 +389,19 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "codex_usage_ratio{period=\"weekly\"}",
+            "expr": "max(codex_usage_ratio{period=\"weekly\"})",
             "legendFormat": "Weekly Usage",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
       {
         "id": 7,
-        "type": "stat",
+        "type": "gauge",
         "title": "Codex Session Reset In",
         "gridPos": {
-          "x": 12,
+          "x": 6,
           "y": 6,
           "w": 6,
           "h": 4
@@ -400,17 +417,35 @@
             ]
           },
           "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
-            "color": {
-              "mode": "palette-classic"
-            },
+            "min": 0,
+            "max": 18000,
             "noValue": "-",
-            "unit": "dthms"
+            "unit": "dthms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 3600
+                },
+                {
+                  "color": "green",
+                  "value": 9000
+                }
+              ]
+            }
           }
         },
         "targets": [
@@ -419,15 +454,16 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "clamp_min(codex_reset_timestamp_seconds{period=\"session\"} - time(), 0)",
+            "expr": "max(clamp_min(codex_reset_timestamp_seconds{period=\"session\"} - time(), 0))",
             "legendFormat": "Session Reset",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
       {
         "id": 8,
-        "type": "stat",
+        "type": "gauge",
         "title": "Codex Weekly Reset In",
         "gridPos": {
           "x": 18,
@@ -446,17 +482,35 @@
             ]
           },
           "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
-            "color": {
-              "mode": "palette-classic"
-            },
+            "min": 0,
+            "max": 604800,
             "noValue": "-",
-            "unit": "dtdhms"
+            "unit": "dtdhms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 120960
+                },
+                {
+                  "color": "green",
+                  "value": 302400
+                }
+              ]
+            }
           }
         },
         "targets": [
@@ -465,9 +519,10 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "clamp_min(codex_reset_timestamp_seconds{period=\"weekly\"} - time(), 0)",
+            "expr": "max(clamp_min(codex_reset_timestamp_seconds{period=\"weekly\"} - time(), 0))",
             "legendFormat": "Weekly Reset",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -485,9 +540,9 @@
         "panels": []
       },
       {
-        "id": 9,
-        "type": "stat",
-        "title": "Ollama Session Reset In",
+        "id": 11,
+        "type": "gauge",
+        "title": "Ollama Session Usage",
         "gridPos": {
           "x": 0,
           "y": 11,
@@ -505,33 +560,32 @@
             ]
           },
           "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
-            "color": {
-              "mode": "thresholds"
-            },
+            "min": 0,
+            "max": 1,
+            "noValue": "-",
             "thresholds": {
               "mode": "absolute",
               "steps": [
                 {
-                  "color": "red",
+                  "color": "green",
                   "value": null
                 },
                 {
                   "color": "yellow",
-                  "value": 3600
+                  "value": 0.75
                 },
                 {
-                  "color": "green",
-                  "value": 14400
+                  "color": "red",
+                  "value": 0.9
                 }
               ]
             },
-            "unit": "dthms"
+            "unit": "percentunit"
           }
         },
         "targets": [
@@ -540,78 +594,17 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "ollama_cloud_reset_seconds_remaining{period=\"session\"}",
-            "legendFormat": "Session",
-            "refId": "A"
+            "expr": "max(ollama_cloud_usage_ratio{period=\"session\"})",
+            "legendFormat": "Session Usage",
+            "refId": "A",
+            "instant": true
           }
         ]
       },
       {
-        "id": 10,
-        "type": "stat",
-        "title": "Ollama Weekly Reset In",
-        "gridPos": {
-          "x": 6,
-          "y": 11,
-          "w": 6,
-          "h": 4
-        },
-        "datasource": {
-          "type": "prometheus",
-          "uid": "grafanacloud-prom"
-        },
-        "options": {
-          "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
-          },
-          "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
-        },
-        "fieldConfig": {
-          "defaults": {
-            "color": {
-              "mode": "thresholds"
-            },
-            "thresholds": {
-              "mode": "absolute",
-              "steps": [
-                {
-                  "color": "red",
-                  "value": null
-                },
-                {
-                  "color": "yellow",
-                  "value": 86400
-                },
-                {
-                  "color": "green",
-                  "value": 172800
-                }
-              ]
-            },
-            "unit": "dtdhms"
-          }
-        },
-        "targets": [
-          {
-            "datasource": {
-              "type": "prometheus",
-              "uid": "grafanacloud-prom"
-            },
-            "expr": "ollama_cloud_reset_seconds_remaining{period=\"weekly\"}",
-            "legendFormat": "Weekly",
-            "refId": "A"
-          }
-        ]
-      },
-      {
-        "id": 11,
+        "id": 12,
         "type": "gauge",
-        "title": "Ollama Session Progress",
+        "title": "Ollama Weekly Usage",
         "gridPos": {
           "x": 12,
           "y": 11,
@@ -634,11 +627,9 @@
         },
         "fieldConfig": {
           "defaults": {
-            "color": {
-              "mode": "thresholds"
-            },
             "min": 0,
             "max": 1,
+            "noValue": "-",
             "thresholds": {
               "mode": "absolute",
               "steps": [
@@ -665,16 +656,82 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "ollama_cloud_reset_progress_ratio{period=\"session\"}",
-            "legendFormat": "Session",
-            "refId": "A"
+            "expr": "max(ollama_cloud_usage_ratio{period=\"weekly\"})",
+            "legendFormat": "Weekly Usage",
+            "refId": "A",
+            "instant": true
           }
         ]
       },
       {
-        "id": 12,
+        "id": 9,
         "type": "gauge",
-        "title": "Ollama Weekly Progress",
+        "title": "Ollama Session Reset In",
+        "gridPos": {
+          "x": 6,
+          "y": 11,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 18000,
+            "noValue": "-",
+            "unit": "dthms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 3600
+                },
+                {
+                  "color": "green",
+                  "value": 9000
+                }
+              ]
+            }
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(clamp_min(ollama_cloud_reset_timestamp_seconds{period=\"session\"} - time(), 0))",
+            "legendFormat": "Session Reset",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "type": "gauge",
+        "title": "Ollama Weekly Reset In",
         "gridPos": {
           "x": 18,
           "y": 11,
@@ -697,29 +754,30 @@
         },
         "fieldConfig": {
           "defaults": {
+            "min": 0,
+            "max": 604800,
+            "noValue": "-",
+            "unit": "dtdhms",
             "color": {
               "mode": "thresholds"
             },
-            "min": 0,
-            "max": 1,
             "thresholds": {
               "mode": "absolute",
               "steps": [
                 {
-                  "color": "green",
+                  "color": "red",
                   "value": null
                 },
                 {
                   "color": "yellow",
-                  "value": 0.75
+                  "value": 120960
                 },
                 {
-                  "color": "red",
-                  "value": 0.9
+                  "color": "green",
+                  "value": 302400
                 }
               ]
-            },
-            "unit": "percentunit"
+            }
           }
         },
         "targets": [
@@ -728,9 +786,10 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "ollama_cloud_reset_progress_ratio{period=\"weekly\"}",
-            "legendFormat": "Weekly",
-            "refId": "A"
+            "expr": "max(clamp_min(ollama_cloud_reset_timestamp_seconds{period=\"weekly\"} - time(), 0))",
+            "legendFormat": "Weekly Reset",
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -750,7 +809,7 @@
       {
         "id": 13,
         "type": "gauge",
-        "title": "OpenCodeGo Rolling Usage",
+        "title": "OpenCodeGo Session Usage",
         "gridPos": {
           "x": 0,
           "y": 16,
@@ -802,9 +861,10 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "opencodego_usage_ratio{period=\"rolling\"}",
-            "legendFormat": "Rolling Usage",
-            "refId": "A"
+            "expr": "max(opencodego_usage_ratio{period=\"rolling\"})",
+            "legendFormat": "Session Usage",
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -813,7 +873,7 @@
         "type": "gauge",
         "title": "OpenCodeGo Weekly Usage",
         "gridPos": {
-          "x": 6,
+          "x": 12,
           "y": 16,
           "w": 6,
           "h": 4
@@ -863,18 +923,81 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "opencodego_usage_ratio{period=\"weekly\"}",
+            "expr": "max(opencodego_usage_ratio{period=\"weekly\"})",
             "legendFormat": "Weekly Usage",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "type": "gauge",
+        "title": "OpenCodeGo Monthly Usage",
+        "gridPos": {
+          "x": 0,
+          "y": 20,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "noValue": "-",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 0.75
+                },
+                {
+                  "color": "red",
+                  "value": 0.9
+                }
+              ]
+            },
+            "unit": "percentunit"
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(opencodego_usage_ratio{period=\"monthly\"})",
+            "legendFormat": "Monthly Usage",
+            "refId": "A",
+            "instant": true
           }
         ]
       },
       {
         "id": 15,
-        "type": "stat",
-        "title": "OpenCodeGo Rolling Reset In",
+        "type": "gauge",
+        "title": "OpenCodeGo Session Reset In",
         "gridPos": {
-          "x": 12,
+          "x": 6,
           "y": 16,
           "w": 6,
           "h": 4
@@ -890,17 +1013,35 @@
             ]
           },
           "orientation": "auto",
-          "textMode": "auto",
-          "colorMode": "background",
-          "graphMode": "area"
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
         },
         "fieldConfig": {
           "defaults": {
-            "color": {
-              "mode": "palette-classic"
-            },
+            "min": 0,
+            "max": 18000,
             "noValue": "-",
-            "unit": "dthms"
+            "unit": "dthms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 3600
+                },
+                {
+                  "color": "green",
+                  "value": 9000
+                }
+              ]
+            }
           }
         },
         "targets": [
@@ -909,16 +1050,17 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "opencodego_reset_seconds_remaining{period=\"rolling\"}",
-            "legendFormat": "Rolling Reset",
-            "refId": "A"
+            "expr": "max(clamp_min(opencodego_reset_timestamp_seconds{period=\"rolling\"} - time(), 0) or opencodego_reset_seconds_remaining{period=\"rolling\"})",
+            "legendFormat": "Session Reset",
+            "refId": "A",
+            "instant": true
           }
         ]
       },
       {
-        "id": 16,
-        "type": "stat",
-        "title": "OpenCodeGo Zen Balance",
+        "id": 18,
+        "type": "gauge",
+        "title": "OpenCodeGo Weekly Reset In",
         "gridPos": {
           "x": 18,
           "y": 16,
@@ -936,9 +1078,139 @@
             ]
           },
           "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 604800,
+            "noValue": "-",
+            "unit": "dtdhms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 120960
+                },
+                {
+                  "color": "green",
+                  "value": 302400
+                }
+              ]
+            }
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(clamp_min(opencodego_reset_timestamp_seconds{period=\"weekly\"} - time(), 0) or opencodego_reset_seconds_remaining{period=\"weekly\"})",
+            "legendFormat": "Weekly Reset",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "type": "gauge",
+        "title": "OpenCodeGo Monthly Reset In",
+        "gridPos": {
+          "x": 6,
+          "y": 20,
+          "w": 6,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 2592000,
+            "noValue": "-",
+            "unit": "dtdhms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "red",
+                  "value": null
+                },
+                {
+                  "color": "yellow",
+                  "value": 518400
+                },
+                {
+                  "color": "green",
+                  "value": 1296000
+                }
+              ]
+            }
+          }
+        },
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "grafanacloud-prom"
+            },
+            "expr": "max(clamp_min(opencodego_reset_timestamp_seconds{period=\"monthly\"} - time(), 0) or opencodego_reset_seconds_remaining{period=\"monthly\"})",
+            "legendFormat": "Monthly Reset",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "type": "stat",
+        "title": "OpenCodeGo Zen Balance",
+        "gridPos": {
+          "x": 12,
+          "y": 20,
+          "w": 12,
+          "h": 4
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "grafanacloud-prom"
+        },
+        "options": {
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ]
+          },
+          "orientation": "auto",
           "textMode": "auto",
           "colorMode": "background",
-          "graphMode": "area"
+          "graphMode": "none"
         },
         "fieldConfig": {
           "defaults": {
@@ -971,9 +1243,10 @@
               "type": "prometheus",
               "uid": "grafanacloud-prom"
             },
-            "expr": "opencodego_zen_balance_usd",
+            "expr": "max(opencodego_zen_balance_usd)",
             "legendFormat": "Zen Balance",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       }

@@ -7,6 +7,7 @@ const TIMEOUT_MS = 30000;
 type WindowSnapshot = {
   readonly usedPercent: number;
   readonly resetAt: number;
+  readonly limitWindowSeconds?: number;
 };
 
 type CodexUsageResponse = {
@@ -57,7 +58,20 @@ function parseWindow(value: unknown, path: string): WindowSnapshot | null {
     invalidResponse(`${path}.reset_at must be a non-negative integer`);
   }
 
-  return { usedPercent, resetAt };
+  let limitWindowSeconds: number | undefined;
+  if (value["limit_window_seconds"] !== undefined && value["limit_window_seconds"] !== null) {
+    limitWindowSeconds = parseFiniteNumber(
+      value["limit_window_seconds"],
+      `${path}.limit_window_seconds`,
+    );
+  } else if (value["reset_after_seconds"] !== undefined && value["reset_after_seconds"] !== null) {
+    limitWindowSeconds = parseFiniteNumber(
+      value["reset_after_seconds"],
+      `${path}.reset_after_seconds`,
+    );
+  }
+
+  return { usedPercent, resetAt, limitWindowSeconds };
 }
 
 function parseCreditsRemaining(value: unknown): number | null {
@@ -205,12 +219,55 @@ async function fetchViaBrowserRendering(
   }
 }
 
+function normalizeCodexWindows(
+  primary: WindowSnapshot | null,
+  secondary: WindowSnapshot | null,
+  nowUnixSeconds: number,
+): { sessionWindow: WindowSnapshot | null; weeklyWindow: WindowSnapshot | null } {
+  const isWeekly = (window: WindowSnapshot): boolean => {
+    if (window.limitWindowSeconds !== undefined) {
+      return window.limitWindowSeconds >= 86400 * 3; // >= 3 days
+    }
+    // If interval > 24 hours from now, it is weekly
+    return window.resetAt - nowUnixSeconds > 86400;
+  };
+
+  if (primary !== null && secondary !== null) {
+    const primaryWeekly = isWeekly(primary);
+    const secondaryWeekly = isWeekly(secondary);
+    if (!primaryWeekly && secondaryWeekly) {
+      return { sessionWindow: primary, weeklyWindow: secondary };
+    }
+    if (primaryWeekly && !secondaryWeekly) {
+      return { sessionWindow: secondary, weeklyWindow: primary };
+    }
+    return { sessionWindow: primary, weeklyWindow: secondary };
+  }
+
+  if (primary !== null && secondary === null) {
+    if (isWeekly(primary)) {
+      return { sessionWindow: null, weeklyWindow: primary };
+    }
+    return { sessionWindow: primary, weeklyWindow: null };
+  }
+
+  if (primary === null && secondary !== null) {
+    if (isWeekly(secondary)) {
+      return { sessionWindow: null, weeklyWindow: secondary };
+    }
+    return { sessionWindow: secondary, weeklyWindow: null };
+  }
+
+  return { sessionWindow: null, weeklyWindow: null };
+}
+
 export async function fetchCodexMetrics(
   accessToken: string,
   accountId?: string,
   fetchFn: typeof fetch = fetch,
   proxyUrlOrBaseUrl?: string,
   browserBinding?: Fetcher,
+  now: Date = new Date(),
 ): Promise<CodexFetchResult> {
   const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
@@ -258,12 +315,18 @@ export async function fetchCodexMetrics(
   }
 
   const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
+  const nowUnixSeconds = Math.floor(now.getTime() / 1000);
+  const { sessionWindow, weeklyWindow } = normalizeCodexWindows(
+    data.primaryWindow,
+    data.secondaryWindow,
+    nowUnixSeconds,
+  );
 
   return {
-    sessionUsageRatio: data.primaryWindow ? data.primaryWindow.usedPercent / 100 : undefined,
-    weeklyUsageRatio: data.secondaryWindow ? data.secondaryWindow.usedPercent / 100 : undefined,
-    sessionResetTimestampSeconds: data.primaryWindow ? data.primaryWindow.resetAt : undefined,
-    weeklyResetTimestampSeconds: data.secondaryWindow ? data.secondaryWindow.resetAt : undefined,
+    sessionUsageRatio: sessionWindow ? sessionWindow.usedPercent / 100 : undefined,
+    weeklyUsageRatio: weeklyWindow ? weeklyWindow.usedPercent / 100 : undefined,
+    sessionResetTimestampSeconds: sessionWindow ? sessionWindow.resetAt : undefined,
+    weeklyResetTimestampSeconds: weeklyWindow ? weeklyWindow.resetAt : undefined,
     creditsRemaining: data.creditsRemaining,
     resetCredits,
     plan: data.plan,

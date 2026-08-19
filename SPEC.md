@@ -71,8 +71,8 @@ Loki.
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
-A scheduled Worker (cron `*/5 * * * *`) that fetches usage metrics from Codex,
-OpenAI API, and OpenCodeGo and pushes them to Grafana Cloud Prometheus via
+A scheduled Worker (cron `* * * * *`) that fetches usage metrics from Codex,
+OpenAI API, and OpenCodeGo, and pushes them to Grafana Cloud Prometheus via
 OTLP/v1 JSON.
 
 **Providers:**
@@ -100,12 +100,17 @@ OTLP/v1 JSON.
   RPC endpoint.
 - When `OPENCODEGO_WORKSPACE_ID` is unset, the workspace ID is auto-fetched from
   the OpenCodeGo `_server` endpoint before scraping the usage page.
+- **Ollama Cloud:** HTML scraping of `ollama.com/settings` (Session Cookie)
+- Extracts Plan tier (`Free`, `Pro`, `Max`), Session/Hourly usage percent,
+  Weekly usage percent, and `data-time` ISO reset timestamps. When session or
+  weekly blocks are absent, their metrics are omitted.
 
 **Metrics pushed:**
 
 - `openai_api_cost_usd{line_item}`, `openai_api_{input,output,cached}_tokens{model}`, `openai_api_requests{model}`
 - `codex_usage_ratio{period}`, `codex_reset_timestamp_seconds{period}`, `codex_credits_remaining`, `codex_reset_credits`, `codex_reset_credits_available_count`, `codex_plan_info{plan}`
 - `opencodego_usage_ratio{period}`, `opencodego_reset_seconds_remaining{period}`, `opencodego_zen_balance_usd`
+- `ollama_cloud_usage_ratio{period}`, `ollama_cloud_reset_timestamp_seconds{period}`, `ollama_cloud_plan_info{plan}`
 
 **Error handling:** Each provider fetch is independent; a single failure does
 not prevent other metrics from being pushed. HTTP 401 and 403 responses are

@@ -12,12 +12,22 @@
     "timezone": "browser",
     "schemaVersion": 39,
     "version": 1,
-    "refresh": "5m",
+    "refresh": "1m",
     "time": {
       "from": "now-24h",
       "to": "now"
     },
-    "timepicker": {},
+    "timepicker": {
+      "refresh_intervals": [
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "1d"
+      ]
+    },
     "templating": {
       "list": []
     },
@@ -42,10 +52,10 @@
               "lastNotNull"
             ]
           },
-          "orientation": "auto",
+          "orientation": "vertical",
           "textMode": "auto",
           "colorMode": "background",
-          "graphMode": "area"
+          "graphMode": "none"
         },
         "fieldConfig": {
           "defaults": {
@@ -80,7 +90,8 @@
             },
             "expr": "ollama_cloud_reset_seconds_remaining{period=\"session\"}",
             "legendFormat": "Session",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -104,10 +115,10 @@
               "lastNotNull"
             ]
           },
-          "orientation": "auto",
+          "orientation": "vertical",
           "textMode": "auto",
           "colorMode": "background",
-          "graphMode": "area"
+          "graphMode": "none"
         },
         "fieldConfig": {
           "defaults": {
@@ -142,7 +153,8 @@
             },
             "expr": "ollama_cloud_reset_seconds_remaining{period=\"weekly\"}",
             "legendFormat": "Weekly",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -205,7 +217,8 @@
             },
             "expr": "ollama_cloud_reset_progress_ratio{period=\"session\"}",
             "legendFormat": "Session",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -268,7 +281,8 @@
             },
             "expr": "ollama_cloud_reset_progress_ratio{period=\"weekly\"}",
             "legendFormat": "Weekly",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       },
@@ -334,7 +348,8 @@
             },
             "expr": "ollama_cloud_reset_timestamp_seconds * 1000",
             "legendFormat": "{{period}}",
-            "refId": "A"
+            "refId": "A",
+            "instant": true
           }
         ]
       }

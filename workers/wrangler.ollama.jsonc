@@ -8,7 +8,7 @@
     "enabled": true
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["* * * * *"]
   },
   "vars": {
     "OLLAMA_CLOUD_PLAN": "unknown",

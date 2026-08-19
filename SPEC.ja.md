@@ -63,8 +63,9 @@ Loki に push します。
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
-Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCodeGo
-から使用量メトリクスを取得し、OTLP/v1 JSON で Grafana Cloud Prometheus に push します。
+Cron `* * * * *` で実行する Worker です。Codex、OpenAI API、OpenCodeGo
+の使用量メトリクスを各プロバイダーから取得し、OTLP/JSON 形式で Grafana Cloud
+Prometheus に push します。
 
 **Providers:**
 
@@ -89,12 +90,15 @@ Cron `*/5 * * * *` で実行する Worker です。Codex、OpenAI API、OpenCode
   それらのメトリクスは省略されます。サブスクリプション RPC が null を返した場合（従量課金/Zen ワークスペース等）、Billing RPC エンドポイントにフォールバックします。
 - `OPENCODEGO_WORKSPACE_ID` 未設定時、使用量ページをスクレイピングする前に
   OpenCodeGo の `_server` エンドポイントからワークスペース ID を自動取得します。
+- **Ollama Cloud:** `ollama.com/settings` の HTML scraping（Session Cookie）
+- プラン名（`Free`, `Pro`, `Max` 等）、Session/Hourly 利用率、Weekly 利用率、および `data-time` の ISO リセット日時を抽出します。ウィンドウが存在しない場合は該当メトリクスを省略します。
 
 **Metrics pushed:**
 
 - `openai_api_cost_usd{line_item}`、`openai_api_{input,output,cached}_tokens{model}`、`openai_api_requests{model}`
 - `codex_usage_ratio{period}`、`codex_reset_timestamp_seconds{period}`、`codex_credits_remaining`、`codex_reset_credits`、`codex_reset_credits_available_count`、`codex_plan_info{plan}`
 - `opencodego_usage_ratio{period}`、`opencodego_reset_seconds_remaining{period}`、`opencodego_zen_balance_usd`
+- `ollama_cloud_usage_ratio{period}`、`ollama_cloud_reset_timestamp_seconds{period}`、`ollama_cloud_plan_info{plan}`
 
 **Error handling:** Provider ごとの fetch は独立しており、1つの失敗が他のメトリクス
 push を妨げません。HTTP 401 と 403 は即時失敗（cookie/key 期限切れ）として扱い、

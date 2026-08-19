@@ -50,8 +50,8 @@ The current support status and planned roadmap items are summarized below:
 
 | Worker | Trigger | Responsibility |
 | :--- | :--- | :--- |
-| `graft-ai-provider-metrics` | Cron `*/5 * * * *` | Fetches Codex / OpenAI API / OpenCodeGo usage and pushes to Grafana Cloud Prometheus |
-| `graft-ai-ollama-cloud` | Cron `*/5 * * * *` | Derives session / weekly reset metrics and pushes them to Grafana Cloud Prometheus |
+| `graft-ai-provider-metrics` | Cron `* * * * *` | Fetches Codex / OpenAI API / OpenCodeGo usage and pushes to Grafana Cloud Prometheus |
+| `graft-ai-ollama-cloud` | Cron `* * * * *` | Derives session / weekly reset metrics and pushes them to Grafana Cloud Prometheus |
 
 #### `graft-ai-provider-metrics` secrets
 
@@ -63,6 +63,7 @@ npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.json
 npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc       # optional (recommended for residential proxy via Cloudflare Tunnel)
 npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
 npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
+npx wrangler secret put OLLAMA_SESSION_COOKIE --config wrangler.provider-metrics.jsonc    # optional (for Ollama Cloud usage & real-time quota tracking)
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
 npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc

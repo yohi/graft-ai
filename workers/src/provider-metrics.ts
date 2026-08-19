@@ -1,4 +1,5 @@
 import { fetchCodexMetrics } from "./provider-metrics/codex";
+import { fetchOllamaMetrics } from "./provider-metrics/ollama";
 import { fetchOpenAIMetrics } from "./provider-metrics/openai-api";
 import { fetchOpenCodeGoMetrics } from "./provider-metrics/opencodego";
 import { pushProviderMetrics } from "./provider-metrics/prometheus";
@@ -24,6 +25,13 @@ export interface ProviderDiagnosticReport {
       rollingUsageRatio?: number;
       zenBalanceUSD?: number | null;
     };
+    ollama?: {
+      status: "skipped" | "success" | "failed";
+      error?: string;
+      sessionUsageRatio?: number;
+      weeklyUsageRatio?: number;
+      plan?: string;
+    };
   };
   prometheusPush: { status: "skipped" | "success" | "failed"; statusCode?: number };
 }
@@ -42,6 +50,7 @@ export async function collectAndPushProviderMetrics(
       openai: { status: "skipped" },
       codex: { status: "skipped" },
       openCodeGo: { status: "skipped" },
+      ollama: { status: "skipped" },
     },
     prometheusPush: { status: "skipped" },
   };
@@ -64,8 +73,9 @@ export async function collectAndPushProviderMetrics(
   const openAiApiKey = env.OPENAI_ADMIN_API_KEY?.trim();
   const codexAccessToken = env.CODEX_ACCESS_TOKEN?.trim();
   const openCodeGoSessionCookie = env.OPENCODEGO_SESSION_COOKIE?.trim();
+  const ollamaSessionCookie = env.OLLAMA_SESSION_COOKIE?.trim();
 
-  const [openai, codex, openCodeGo] = await Promise.allSettled([
+  const [openai, codex, openCodeGo, ollama] = await Promise.allSettled([
     openAiApiKey !== undefined && openAiApiKey !== "" && historyDays !== undefined
       ? fetchOpenAIMetrics(openAiApiKey, historyDays, fetch, scheduledTime)
       : Promise.resolve(null),
@@ -79,7 +89,10 @@ export async function collectAndPushProviderMetrics(
         )
       : Promise.resolve(null),
     openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""
-      ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID)
+      ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID, fetch)
+      : Promise.resolve(null),
+    ollamaSessionCookie !== undefined && ollamaSessionCookie !== ""
+      ? fetchOllamaMetrics(ollamaSessionCookie, fetch)
       : Promise.resolve(null),
   ] as const);
 
@@ -126,9 +139,27 @@ export async function collectAndPushProviderMetrics(
     report.providers.openCodeGo = { status: "failed", error: err };
   }
 
+  let ollamaResult = null;
+  if (ollama.status === "fulfilled") {
+    ollamaResult = ollama.value;
+    if (ollamaResult !== null) {
+      report.providers.ollama = {
+        status: "success",
+        sessionUsageRatio: ollamaResult.sessionUsageRatio,
+        weeklyUsageRatio: ollamaResult.weeklyUsageRatio,
+        plan: ollamaResult.plan,
+      };
+    }
+  } else {
+    const err = errorMessage(ollama.reason);
+    console.error(`Provider metrics: Ollama fetch failed: ${err}`);
+    report.providers.ollama = { status: "failed", error: err };
+  }
+
   const hasOpenAIMetrics =
     openaiResult !== null && (openaiResult.costs.length > 0 || openaiResult.tokens.length > 0);
-  const hasMetrics = hasOpenAIMetrics || codexResult !== null || openCodeGoResult !== null;
+  const hasMetrics =
+    hasOpenAIMetrics || codexResult !== null || openCodeGoResult !== null || ollamaResult !== null;
 
   if (!hasMetrics) {
     console.error("Provider metrics: No metrics to push (all providers skipped, failed, or empty)");
@@ -139,6 +170,7 @@ export async function collectAndPushProviderMetrics(
     ...(hasOpenAIMetrics && openaiResult !== null ? { openai: openaiResult } : {}),
     ...(codexResult === null ? {} : { codex: codexResult }),
     ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
+    ...(ollamaResult === null ? {} : { ollama: ollamaResult }),
   });
 
   if (pushResult.ok) {

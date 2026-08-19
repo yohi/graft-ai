@@ -5,11 +5,11 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TARGET_ORIGIN = "https://chatgpt.com";
 const PROXY_SECRET = process.env.PROXY_SECRET?.trim();
 
-// 安全のため、転送を許可するパスを完全一致で制限
-const ALLOWED_PATHS = new Set([
-  "/backend-api/wham/usage",
-  "/backend-api/wham/reset-credits",
-]);
+// 安全のため、転送を許可するパスを完全一致の静的マッピングで制限
+const PATH_MAP = {
+  "/backend-api/wham/usage": "https://chatgpt.com/backend-api/wham/usage",
+  "/backend-api/wham/reset-credits": "https://chatgpt.com/backend-api/wham/reset-credits",
+};
 
 const server = http.createServer(async (req, res) => {
   // CORS ヘッダー
@@ -42,14 +42,15 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // パス制限の厳格な完全一致チェック
-  if (!ALLOWED_PATHS.has(url.pathname)) {
+  // 静的マッピングによる転送先 URL の安全な解決
+  const staticTarget = PATH_MAP[url.pathname];
+  if (!staticTarget) {
     res.writeHead(403, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Forbidden: Path not allowed by proxy whitelist" }));
     return;
   }
 
-  const targetUrl = new URL(url.pathname, TARGET_ORIGIN);
+  const targetUrl = new URL(staticTarget);
   targetUrl.search = url.search;
 
   try {

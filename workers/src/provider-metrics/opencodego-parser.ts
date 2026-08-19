@@ -180,13 +180,14 @@ function extractFromRscHydration(html: string): Record<string, unknown>[] | null
 
 function extractSolidStartUsageBlocks(text: string): Record<string, unknown>[] | null {
   const extractBlock = (name: string): Record<string, unknown> | null => {
-    const match = text.match(
-      new RegExp(`(?:${name}|"${name}")\\s*:\\s*(?:\\$R\\[\\d+\\]\\s*=\\s*)?\\{([^}]+)\\}`),
+    const blockRegex = new RegExp(
+      `(?:${name}|"${name}")\\s*:\\s*(?:\\$R\\[\\d+\\]\\s*=\\s*)?\\{([^}]+)\\}`,
     );
+    const match = blockRegex.exec(text);
     if (!match || match[1] === undefined) return null;
     const body = match[1];
-    const percentMatch = body.match(/(?:usagePercent|"usagePercent")\s*:\s*([0-9.]+)/);
-    const resetMatch = body.match(/(?:resetInSec|"resetInSec")\s*:\s*([0-9]+)/);
+    const percentMatch = /(?:usagePercent|"usagePercent")\s*:\s*(\d+(?:\.\d+)?)/.exec(body);
+    const resetMatch = /(?:resetInSec|"resetInSec")\s*:\s*(\d+)/.exec(body);
     const res: Record<string, unknown> = {};
     if (percentMatch && percentMatch[1] !== undefined) {
       res[`${name}Percent`] = Number(percentMatch[1]);
@@ -201,41 +202,30 @@ function extractSolidStartUsageBlocks(text: string): Record<string, unknown>[] |
   const weekly = extractBlock("weeklyUsage");
   const monthly = extractBlock("monthlyUsage");
 
-  if (!rolling && !weekly && !monthly) return null;
-
   const combined: Record<string, unknown> = {};
   if (rolling) {
-    if (rolling["rollingUsagePercent"] !== undefined) {
+    if (rolling["rollingUsagePercent"] !== undefined)
       combined["rollingUsagePercent"] = rolling["rollingUsagePercent"];
-    }
-    if (rolling["rollingUsageResetInSec"] !== undefined) {
+    if (rolling["rollingUsageResetInSec"] !== undefined)
       combined["rollingResetInSec"] = rolling["rollingUsageResetInSec"];
-    }
   }
   if (weekly) {
-    if (weekly["weeklyUsagePercent"] !== undefined) {
+    if (weekly["weeklyUsagePercent"] !== undefined)
       combined["weeklyUsagePercent"] = weekly["weeklyUsagePercent"];
-    }
-    if (weekly["weeklyUsageResetInSec"] !== undefined) {
+    if (weekly["weeklyUsageResetInSec"] !== undefined)
       combined["weeklyResetInSec"] = weekly["weeklyUsageResetInSec"];
-    }
   }
   if (monthly) {
-    if (monthly["monthlyUsagePercent"] !== undefined) {
+    if (monthly["monthlyUsagePercent"] !== undefined)
       combined["monthlyUsagePercent"] = monthly["monthlyUsagePercent"];
-    }
-    if (monthly["monthlyUsageResetInSec"] !== undefined) {
+    if (monthly["monthlyUsageResetInSec"] !== undefined)
       combined["monthlyResetInSec"] = monthly["monthlyUsageResetInSec"];
-    }
   }
   return Object.keys(combined).length > 0 ? [combined] : null;
 }
 
 function extractFromSolidStart(html: string): Record<string, unknown>[] | null {
   const records: Record<string, unknown>[] = [];
-  const direct = extractSolidStartUsageBlocks(html);
-  if (direct !== null) records.push(...direct);
-
   const scriptChunks = html.split(/<\/\s*script\s*>/i);
 
   for (const chunk of scriptChunks) {
@@ -248,21 +238,6 @@ function extractFromSolidStart(html: string): Record<string, unknown>[] | null {
 
     const block = extractSolidStartUsageBlocks(script);
     if (block !== null) records.push(...block);
-
-    const jsonMatches = script.match(
-      /\{[^{}]*"(?:usagePercent|rollingUsagePercent|usedPercent|weeklyUsagePercent|monthlyUsagePercent|usage|utilization|resetInSec)"[^{}]*\}/g,
-    );
-    if (jsonMatches !== null) {
-      for (const raw of jsonMatches) {
-        try {
-          const parsed: unknown = JSON.parse(raw);
-          const found = findUsageRecords(parsed);
-          if (found.length > 0) records.push(...found);
-        } catch {
-          continue;
-        }
-      }
-    }
   }
 
   return records.length === 0 ? null : records;
@@ -272,26 +247,26 @@ function parseDurationText(text: string): number | null {
   let seconds = 0;
   let matched = false;
 
-  const daysMatch = text.match(/(\d+)\s*(?:日|days?|d\b)/i);
-  if (daysMatch) {
+  const daysMatch = /(\d+)\s*(?:日|days?|d\b)/i.exec(text);
+  if (daysMatch && daysMatch[1] !== undefined) {
     seconds += Number(daysMatch[1]) * 86400;
     matched = true;
   }
 
-  const hoursMatch = text.match(/(\d+)\s*(?:時間|hours?|h\b)/i);
-  if (hoursMatch) {
+  const hoursMatch = /(\d+)\s*(?:時間|hours?|h\b)/i.exec(text);
+  if (hoursMatch && hoursMatch[1] !== undefined) {
     seconds += Number(hoursMatch[1]) * 3600;
     matched = true;
   }
 
-  const minsMatch = text.match(/(\d+)\s*(?:分|mins?|minutes?|m\b)/i);
-  if (minsMatch) {
+  const minsMatch = /(\d+)\s*(?:分|mins?|minutes?|m\b)/i.exec(text);
+  if (minsMatch && minsMatch[1] !== undefined) {
     seconds += Number(minsMatch[1]) * 60;
     matched = true;
   }
 
-  const secsMatch = text.match(/(\d+)\s*(?:秒|secs?|seconds?|s\b)/i);
-  if (secsMatch) {
+  const secsMatch = /(\d+)\s*(?:秒|secs?|seconds?|s\b)/i.exec(text);
+  if (secsMatch && secsMatch[1] !== undefined) {
     seconds += Number(secsMatch[1]);
     matched = true;
   }
@@ -299,69 +274,67 @@ function parseDurationText(text: string): number | null {
   return matched ? seconds : null;
 }
 
+function extractPeriodFromDomText(
+  text: string,
+  labelRegex: RegExp,
+): { percent: number; resetSec?: number } | null {
+  const match = labelRegex.exec(text);
+  if (!match || match[1] === undefined) return null;
+  const percent = Number(match[1]);
+  const durationText = match[2];
+  const resetSec =
+    durationText !== undefined ? (parseDurationText(durationText) ?? undefined) : undefined;
+  return { percent, resetSec };
+}
+
 function extractFromDomText(html: string): Record<string, unknown>[] | null {
   const text = html.replace(/<[^>]+>/g, "\n");
   const record: Record<string, unknown> = {};
-  let foundAny = false;
 
-  const rollingMatch = text.match(
+  const rolling = extractPeriodFromDomText(
+    text,
     /(?:ローリング利用量|ローリング|Rolling\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]*?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
   );
-  if (rollingMatch !== null && rollingMatch[1] !== undefined) {
-    record["rollingUsagePercent"] = Number(rollingMatch[1]);
-    const durationText = rollingMatch[2];
-    if (durationText !== undefined) {
-      const sec = parseDurationText(durationText);
-      if (sec !== null) record["rollingResetInSec"] = sec;
-    }
-    foundAny = true;
+  if (rolling) {
+    record["rollingUsagePercent"] = rolling.percent;
+    if (rolling.resetSec !== undefined) record["rollingResetInSec"] = rolling.resetSec;
   }
 
-  const weeklyMatch = text.match(
+  const weekly = extractPeriodFromDomText(
+    text,
     /(?:週間利用量|週間|Weekly\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]*?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
   );
-  if (weeklyMatch !== null && weeklyMatch[1] !== undefined) {
-    record["weeklyUsagePercent"] = Number(weeklyMatch[1]);
-    const durationText = weeklyMatch[2];
-    if (durationText !== undefined) {
-      const sec = parseDurationText(durationText);
-      if (sec !== null) record["weeklyResetInSec"] = sec;
-    }
-    foundAny = true;
+  if (weekly) {
+    record["weeklyUsagePercent"] = weekly.percent;
+    if (weekly.resetSec !== undefined) record["weeklyResetInSec"] = weekly.resetSec;
   }
 
-  const monthlyMatch = text.match(
+  const monthly = extractPeriodFromDomText(
+    text,
     /(?:月間利用量|月間|Monthly\s*Usage)[^\d%]*(\d+(?:\.\d+)?)\s*%[\s\S]*?(?:リセットまで|Resets?\s*in)\s*([^\n\r]+)/i,
   );
-  if (monthlyMatch !== null && monthlyMatch[1] !== undefined) {
-    record["monthlyUsagePercent"] = Number(monthlyMatch[1]);
-    const durationText = monthlyMatch[2];
-    if (durationText !== undefined) {
-      const sec = parseDurationText(durationText);
-      if (sec !== null) record["monthlyResetInSec"] = sec;
-    }
-    foundAny = true;
+  if (monthly) {
+    record["monthlyUsagePercent"] = monthly.percent;
+    if (monthly.resetSec !== undefined) record["monthlyResetInSec"] = monthly.resetSec;
   }
 
-  return foundAny ? [record] : null;
+  return Object.keys(record).length > 0 ? [record] : null;
 }
 
 function extractFromTextFallback(html: string): Record<string, unknown>[] | null {
-  const usageText = html.match(
-    /"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/i,
-  )?.[1];
-  if (usageText === undefined) return null;
-  const resetText = html.match(/"resetInSec(?:onds)?"\s*:\s*(\d+)/i)?.[1];
-  const record: Record<string, unknown> = { usagePercent: Number(usageText) };
-  if (resetText !== undefined) record["resetInSec"] = Number(resetText);
+  const usageMatch =
+    /"(?:usagePercent|rollingUsagePercent|usedPercent)"\s*:\s*(\d+(?:\.\d+)?)/i.exec(html);
+  if (!usageMatch || usageMatch[1] === undefined) return null;
+  const resetMatch = /"resetInSec(?:onds)?"\s*:\s*(\d+)/i.exec(html);
+  const record: Record<string, unknown> = { usagePercent: Number(usageMatch[1]) };
+  if (resetMatch && resetMatch[1] !== undefined) record["resetInSec"] = Number(resetMatch[1]);
   return [record];
 }
 
 function extractUsageRecords(html: string): Record<string, unknown>[] | null {
   return (
-    extractFromNextData(html) ??
-    parseJsonUsage(html.trim()) ??
     extractFromSolidStart(html) ??
+    extractFromNextData(html) ??
     extractFromScriptTags(html) ??
     extractFromRscHydration(html) ??
     extractFromDomText(html) ??
@@ -375,9 +348,8 @@ function findOwnValues(
 ): readonly unknown[] {
   const values: unknown[] = [];
   for (const key of keys) {
-    for (let index = records.length - 1; index >= 0; index--) {
-      const record = records[index];
-      if (record !== undefined && Object.hasOwn(record, key)) {
+    for (const record of records) {
+      if (Object.hasOwn(record, key)) {
         values.push(record[key]);
       }
     }
@@ -388,18 +360,8 @@ function findOwnValues(
 function parsePercentage(
   records: readonly Record<string, unknown>[],
   keys: readonly string[],
-  required: true,
-): number;
-function parsePercentage(
-  records: readonly Record<string, unknown>[],
-  keys: readonly string[],
-  required: false,
-): number | undefined;
-function parsePercentage(
-  records: readonly Record<string, unknown>[],
-  keys: readonly string[],
   required: boolean,
-): number | undefined {
+): number {
   const values = findOwnValues(records, keys);
   if (values.length === 0) {
     if (required) {
@@ -407,43 +369,22 @@ function parsePercentage(
         "OpenCodeGo response is missing required rolling usage or reset data",
       );
     }
-    return undefined;
+    return 0;
   }
+
   let selected: number | null = null;
   for (const value of values) {
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-      const nested = parsePercentage([value as Record<string, unknown>], PERCENT_KEYS, false);
-      if (nested !== undefined) {
-        if (selected === null) selected = nested * 100;
-        continue;
-      }
-    }
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
       throw new OpenCodeGoResponseError(
         "OpenCodeGo usage percentage must be finite and between 0 and 100",
       );
     }
-    if (selected === null) selected = value;
+    if (selected === null) selected = value / 100;
   }
-  if (selected === null) {
-    if (required) {
-      throw new OpenCodeGoResponseError("OpenCodeGo response is missing usage data");
-    }
-    return undefined;
-  }
-  return selected / 100;
+
+  return selected ?? 0;
 }
 
-function parseResetSeconds(
-  records: readonly Record<string, unknown>[],
-  keys: readonly string[],
-  required: true,
-): number;
-function parseResetSeconds(
-  records: readonly Record<string, unknown>[],
-  keys: readonly string[],
-  required: false,
-): number | undefined;
 function parseResetSeconds(
   records: readonly Record<string, unknown>[],
   keys: readonly string[],
@@ -458,15 +399,9 @@ function parseResetSeconds(
     }
     return undefined;
   }
+
   let selected: number | null = null;
   for (const value of values) {
-    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-      const nested = parseResetSeconds([value as Record<string, unknown>], RESET_KEYS, false);
-      if (nested !== undefined) {
-        if (selected === null) selected = nested;
-        continue;
-      }
-    }
     if (
       typeof value !== "number" ||
       !Number.isFinite(value) ||
@@ -479,40 +414,14 @@ function parseResetSeconds(
     }
     if (selected === null) selected = value;
   }
-  if (selected === null) {
-    if (required) {
-      throw new OpenCodeGoResponseError("OpenCodeGo response is missing reset data");
-    }
-    return undefined;
-  }
-  return selected;
+
+  return selected ?? undefined;
 }
 
 export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   const records = extractUsageRecords(html);
   if (records === null || records.length === 0) {
-    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim();
-    const cleanSnippet = html
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120);
-    throw new OpenCodeGoResponseError(
-      `OpenCodeGo: Could not parse usage data from page HTML (title: "${titleMatch ?? "none"}", length: ${html.length}, text: "${cleanSnippet}")`,
-    );
-  }
-
-  // Look for nested rollingUsage / weeklyUsage / monthlyUsage sub-records
-  for (const r of records) {
-    if (r["rollingUsage"] && isRecord(r["rollingUsage"])) {
-      records.push(r["rollingUsage"]);
-    }
-    if (r["weeklyUsage"] && isRecord(r["weeklyUsage"])) {
-      records.push(r["weeklyUsage"]);
-    }
-    if (r["monthlyUsage"] && isRecord(r["monthlyUsage"])) {
-      records.push(r["monthlyUsage"]);
-    }
+    throw new OpenCodeGoResponseError("OpenCodeGo: Could not parse usage data");
   }
 
   const rollingRatio = parsePercentage(records, PERCENT_KEYS, true);
@@ -527,18 +436,12 @@ export function parseOpenCodeGoUsage(html: string): OpenCodeGoUsage {
   const isMonthlyCapped = monthlyRatio !== undefined && monthlyRatio >= 1.0;
   const isWeeklyCapped = weeklyRatio !== undefined && weeklyRatio >= 1.0;
 
-  const effectiveRollingRatio = isMonthlyCapped || isWeeklyCapped ? 1.0 : rollingRatio;
-  const effectiveWeeklyRatio =
-    weeklyRatio !== undefined ? (isMonthlyCapped ? 1.0 : weeklyRatio) : undefined;
-  const effectiveRollingReset = isMonthlyCapped || isWeeklyCapped ? undefined : rollingReset;
-  const effectiveWeeklyReset = isMonthlyCapped ? undefined : weeklyReset;
-
   return {
-    rollingUsageRatio: effectiveRollingRatio,
-    weeklyUsageRatio: effectiveWeeklyRatio,
+    rollingUsageRatio: isMonthlyCapped || isWeeklyCapped ? 1.0 : rollingRatio,
+    weeklyUsageRatio: weeklyRatio !== undefined ? (isMonthlyCapped ? 1.0 : weeklyRatio) : undefined,
     monthlyUsageRatio: monthlyRatio,
-    rollingResetSeconds: effectiveRollingReset,
-    weeklyResetSeconds: effectiveWeeklyReset,
+    rollingResetSeconds: isMonthlyCapped || isWeeklyCapped ? undefined : rollingReset,
+    weeklyResetSeconds: isMonthlyCapped ? undefined : weeklyReset,
     monthlyResetSeconds: monthlyReset,
   };
 }
@@ -556,91 +459,66 @@ export function extractWorkspaceId(html: string): string | null {
   return html.match(/(wrk_[a-zA-Z0-9]+)/)?.[1] ?? null;
 }
 
-export function extractZenBilling(text: string): OpenCodeZenBilling | null {
+function scaleUsd(val: unknown): number | null {
+  if (typeof val !== "number" || !Number.isFinite(val) || val < 0) return null;
+  return val > 1000 ? val / USD_SCALE : val;
+}
+
+function parseJsonBilling(text: string): OpenCodeZenBilling | null {
   try {
     const parsed: unknown = JSON.parse(text);
-    if (isRecord(parsed)) {
-      const usage = parsed["monthlyUsage"] ?? parsed["usage"];
-      const limit = parsed["monthlyLimit"] ?? parsed["limit"];
-      const balance = parsed["balance"] ?? parsed["zenBalance"];
-      if (typeof usage === "number" && Number.isFinite(usage)) {
-        return {
-          monthlyUsageUSD: usage > 1000 ? usage / USD_SCALE : usage,
-          monthlyLimitUSD:
-            typeof limit === "number" && Number.isFinite(limit)
-              ? limit > 1000
-                ? limit / USD_SCALE
-                : limit
-              : null,
-          balanceUSD:
-            typeof balance === "number" && Number.isFinite(balance)
-              ? balance > 1000
-                ? balance / USD_SCALE
-                : balance
-              : null,
-          hasSubscription: Boolean(parsed["hasSubscription"] ?? parsed["subscription"]),
-        };
-      }
-    }
+    if (!isRecord(parsed)) return null;
+
+    const rawUsage = parsed["monthlyUsage"] ?? parsed["usage"];
+    if (typeof rawUsage !== "number" || !Number.isFinite(rawUsage)) return null;
+
+    return {
+      monthlyUsageUSD: rawUsage > 1000 ? rawUsage / USD_SCALE : rawUsage,
+      monthlyLimitUSD: scaleUsd(parsed["monthlyLimit"] ?? parsed["limit"]),
+      balanceUSD: scaleUsd(parsed["balance"] ?? parsed["zenBalance"]),
+      hasSubscription: Boolean(parsed["hasSubscription"] ?? parsed["subscription"]),
+    };
   } catch {
-    // Continue regex
+    return null;
   }
+}
 
-  const monthlyUsageMatch = text.match(
-    /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)/,
-  );
-  if (monthlyUsageMatch === null) return null;
+function parseRegexBilling(text: string): OpenCodeZenBilling | null {
+  const usageMatch =
+    /(?:"monthlyUsage"|monthlyUsage)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?)/.exec(text);
+  if (!usageMatch || usageMatch[1] === undefined) return null;
 
-  const rawUsage = Number(monthlyUsageMatch[1]);
+  const rawUsage = Number(usageMatch[1]);
   if (!Number.isFinite(rawUsage)) return null;
 
-  const monthlyLimitMatch = text.match(
-    /(?:"monthlyLimit"|monthlyLimit)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)/,
-  );
-  const rawLimit = monthlyLimitMatch !== null ? Number(monthlyLimitMatch[1]) : null;
-
-  const balanceMatch = text.match(
-    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)/,
-  );
-  const rawBalance = balanceMatch !== null ? Number(balanceMatch[1]) : null;
-
-  const hasSubscriptionMatch = text.match(
-    /(?:"hasSubscription"|hasSubscription)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(true|false)/i,
-  );
-  const hasSubscription =
-    hasSubscriptionMatch !== null ? hasSubscriptionMatch[1]?.toLowerCase() === "true" : false;
+  const limitMatch =
+    /(?:"monthlyLimit"|monthlyLimit)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?)/.exec(text);
+  const balanceMatch =
+    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?)/.exec(
+      text,
+    );
+  const subMatch =
+    /(?:"hasSubscription"|hasSubscription)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(true|false)/i.exec(text);
 
   return {
     monthlyUsageUSD: rawUsage > 1000 ? rawUsage / USD_SCALE : rawUsage,
-    monthlyLimitUSD:
-      rawLimit !== null && Number.isFinite(rawLimit) && rawLimit >= 0
-        ? rawLimit > 1000
-          ? rawLimit / USD_SCALE
-          : rawLimit
-        : null,
-    balanceUSD:
-      rawBalance !== null && Number.isFinite(rawBalance) && rawBalance >= 0
-        ? rawBalance > 1000
-          ? rawBalance / USD_SCALE
-          : rawBalance
-        : null,
-    hasSubscription,
+    monthlyLimitUSD: scaleUsd(limitMatch?.[1] ? Number(limitMatch[1]) : null),
+    balanceUSD: scaleUsd(balanceMatch?.[1] ? Number(balanceMatch[1]) : null),
+    hasSubscription: subMatch !== null && subMatch[1]?.toLowerCase() === "true",
   };
+}
+
+export function extractZenBilling(text: string): OpenCodeZenBilling | null {
+  return parseJsonBilling(text) ?? parseRegexBilling(text);
 }
 
 export function extractZenBalance(text: string): number | null {
   const billing = extractZenBilling(text);
-  if (billing && billing.balanceUSD !== null) {
-    return billing.balanceUSD;
-  }
-  const match = text.match(
-    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/,
-  );
-  if (match) {
-    const raw = Number(match[1]);
-    if (Number.isFinite(raw) && raw >= 0) {
-      return raw > 1000 ? raw / USD_SCALE : raw;
-    }
-  }
-  return null;
+  if (billing && billing.balanceUSD !== null) return billing.balanceUSD;
+
+  const match =
+    /(?:"balance"|balance|"zenBalance"|zenBalance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(
+      text,
+    );
+  return match?.[1] ? scaleUsd(Number(match[1])) : null;
 }

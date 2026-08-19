@@ -35,10 +35,14 @@ export class OpenCodeGoFetchError extends Error {
 }
 
 function normalizeCookie(raw: string): string {
-  const trimmed = raw
-    .trim()
-    .replace(/^[\x27"]+|[\x27"]+$/g, "")
-    .trim();
+  let trimmed = raw.trim();
+  while (trimmed.startsWith("'") || trimmed.startsWith('"')) {
+    trimmed = trimmed.slice(1);
+  }
+  while (trimmed.endsWith("'") || trimmed.endsWith('"')) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  trimmed = trimmed.trim();
   if (trimmed.includes("=")) {
     return trimmed;
   }

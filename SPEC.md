@@ -87,8 +87,8 @@ OTLP/v1 JSON.
 - When the OpenAI response contains zero cost buckets and zero token buckets,
   the result is treated as empty and excluded from the push payload.
 - **Codex:** `GET https://chatgpt.com/backend-api/wham/usage` (Bearer OAuth Access Token, optional custom base/proxy via `CODEX_PROXY_URL` or `CODEX_API_BASE_URL`)
-- At least one valid window (`primary_window` or `secondary_window`) is required. When `secondary_window` is absent or null (e.g. for single-window plans), its usage ratio and reset timestamp default to 0.
-- When direct requests receive HTTP 403 (Cloudflare WAF Turnstile challenge), the Worker can route through `CODEX_PROXY_URL` (e.g. residential proxy via Cloudflare Tunnel) or fallback to Cloudflare Browser Rendering.
+  - At least one valid window (`primary_window` or `secondary_window`) is required. When `secondary_window` is absent or null (e.g. for single-window plans), its usage ratio and reset timestamp are omitted (`undefined`) to display as hyphens on Grafana dashboards rather than false 0% usage.
+  - When direct requests receive HTTP 403 (Cloudflare WAF Turnstile challenge), the Worker can route through `CODEX_PROXY_URL` (e.g. residential proxy via Cloudflare Tunnel) or fallback to Cloudflare Browser Rendering.
 - `GET .../wham/rate-limit-reset-credits` is a supplementary endpoint. When it
   fails, Codex usage metrics are still pushed; only `codex_reset_credits` and
   `codex_reset_credits_available_count` are omitted.

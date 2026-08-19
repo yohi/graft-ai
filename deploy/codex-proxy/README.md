@@ -26,9 +26,22 @@
 
 ## 🚀 セットアップ手順
 
-以下のいずれかの方法でセットアップできます。
+### ⚡️ 方法 1: ワンライナー起動（最速・事前準備不要）
 
-### 方法 1: Cloudflare Quick Tunnel（最も手軽・即座に試したい場合）
+自宅の PC / Mac / Linux で以下のコマンドを 1 行実行するだけで、プロキシ起動と Cloudflare Tunnel の開通が自動で行われ、URL が発行されます（`cloudflared` が未インストールの場合は一時的に自動取得されます）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yohi/graft-ai/master/deploy/codex-proxy/run.sh | bash
+```
+
+またはリポジトリ内から：
+```bash
+./deploy/codex-proxy/run.sh
+```
+
+---
+
+### 方法 2: 手動 Quick Tunnel 起動
 
 ドメイン設定やアカウント登録なしで、即座に一時的な公開 URL を取得できます。
 

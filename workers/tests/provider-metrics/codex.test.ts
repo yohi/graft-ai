@@ -161,6 +161,28 @@ describe("fetchCodexMetrics", () => {
     expect(result.creditsRemaining).toBeNull();
   });
 
+  it("handles null or missing secondary_window without error", async () => {
+    const responseWithNullSecondary = {
+      plan_type: "plus",
+      rate_limit: {
+        primary_window: {
+          used_percent: 60,
+          reset_at: 1786161204,
+        },
+        secondary_window: null,
+      },
+    };
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(responseWithNullSecondary), { status: 200 }));
+    const result = await fetchCodexMetrics("token", undefined, mockFetch);
+    expect(result.sessionUsageRatio).toBeCloseTo(0.6);
+    expect(result.weeklyUsageRatio).toBe(0);
+    expect(result.sessionResetTimestampSeconds).toBe(1786161204);
+    expect(result.weeklyResetTimestampSeconds).toBe(0);
+    expect(result.plan).toBe("plus");
+  });
+
   it("ignores non-finite reset credits without losing usage metrics", async () => {
     const mockFetch = vi
       .fn()

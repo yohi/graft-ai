@@ -10,8 +10,8 @@ type WindowSnapshot = {
 };
 
 type CodexUsageResponse = {
-  readonly primaryWindow: WindowSnapshot;
-  readonly secondaryWindow: WindowSnapshot;
+  readonly primaryWindow: WindowSnapshot | null;
+  readonly secondaryWindow: WindowSnapshot | null;
   readonly creditsRemaining: number | null;
   readonly plan: string;
 };
@@ -39,9 +39,9 @@ function parseFiniteNumber(value: unknown, path: string): number {
   return value;
 }
 
-function parseWindow(value: unknown, path: string): WindowSnapshot {
-  if (value === undefined) {
-    invalidResponse(`${path} is a required window`);
+function parseWindow(value: unknown, path: string): WindowSnapshot | null {
+  if (value === undefined || value === null) {
+    return null;
   }
   if (!isRecord(value)) {
     invalidResponse(`${path} must be an object`);
@@ -89,9 +89,16 @@ function parseUsageResponse(value: unknown): CodexUsageResponse {
     invalidResponse("plan_type must be a string");
   }
 
+  const primaryWindow = parseWindow(rateLimit["primary_window"], "rate_limit.primary_window");
+  const secondaryWindow = parseWindow(rateLimit["secondary_window"], "rate_limit.secondary_window");
+
+  if (primaryWindow === null && secondaryWindow === null) {
+    invalidResponse("rate_limit must contain at least one valid window");
+  }
+
   return {
-    primaryWindow: parseWindow(rateLimit["primary_window"], "rate_limit.primary_window"),
-    secondaryWindow: parseWindow(rateLimit["secondary_window"], "rate_limit.secondary_window"),
+    primaryWindow,
+    secondaryWindow,
     creditsRemaining: parseCreditsRemaining(value["credits"]),
     plan: planType ?? "unknown",
   };
@@ -253,10 +260,10 @@ export async function fetchCodexMetrics(
   const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
 
   return {
-    sessionUsageRatio: data.primaryWindow.usedPercent / 100,
-    weeklyUsageRatio: data.secondaryWindow.usedPercent / 100,
-    sessionResetTimestampSeconds: data.primaryWindow.resetAt,
-    weeklyResetTimestampSeconds: data.secondaryWindow.resetAt,
+    sessionUsageRatio: data.primaryWindow ? data.primaryWindow.usedPercent / 100 : 0,
+    weeklyUsageRatio: data.secondaryWindow ? data.secondaryWindow.usedPercent / 100 : 0,
+    sessionResetTimestampSeconds: data.primaryWindow ? data.primaryWindow.resetAt : 0,
+    weeklyResetTimestampSeconds: data.secondaryWindow ? data.secondaryWindow.resetAt : 0,
     creditsRemaining: data.creditsRemaining,
     resetCredits,
     plan: data.plan,

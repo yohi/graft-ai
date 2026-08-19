@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # ==============================================================================
 # graft-ai Codex Residential Proxy - Quick One-Liner Runner
-# ==============================================================================
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/yohi/graft-ai/master/deploy/codex-proxy/run.sh | bash
-# Or locally:
-#   ./deploy/codex-proxy/run.sh
 # ==============================================================================
 
 PORT="${PORT:-8080}"
@@ -15,7 +10,19 @@ TMP_DIR=$(mktemp -d)
 PROXY_PID=""
 CLOUDFLARED_PID=""
 
+# 空いているポートを検索
+find_free_port() {
+  local p=$1
+  while command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$p" 2>/dev/null; do
+    p=$((p + 1))
+  done
+  echo "$p"
+}
+
+PORT=$(find_free_port "$PORT")
+
 cleanup() {
+  local exit_code=$?
   echo ""
   echo "🧹 シャットダウン中..."
   if [[ -n "$PROXY_PID" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
@@ -26,21 +33,19 @@ cleanup() {
   fi
   rm -rf "$TMP_DIR"
   echo "✨ 停止しました。"
-  exit 0
+  exit "$exit_code"
 }
 
 trap cleanup INT TERM EXIT
 
-echo "🚀 [1/3] Codex Proxy サーバーを準備中..."
+echo "🚀 [1/3] Codex Proxy サーバーを準備中 (ポート: ${PORT})..."
 
-# Node.js の存在確認
 if ! command -v node >/dev/null 2>&1; then
   echo "❌ エラー: Node.js (v18以上) がインストールされていません。"
   echo "   Node.js をインストールしてから再実行してください。"
   exit 1
 fi
 
-# プロキシスクリプトを一時ファイルに出力
 cat << 'EOF' > "$TMP_DIR/server.mjs"
 import http from "node:http";
 
@@ -150,17 +155,25 @@ echo "🚇 [3/3] トンネルを接続中..."
 CLOUDFLARED_PID=$!
 
 TUNNEL_URL=""
-for i in $(seq 1 30); do
-  FOUND_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$TMP_DIR/cloudflared.log" 2>/dev/null | head -n 1 || true)
-  if [[ -n "$FOUND_URL" ]]; then
-    TUNNEL_URL="$FOUND_URL"
-    break
+for i in {1..30}; do
+  if ! kill -0 "$CLOUDFLARED_PID" 2>/dev/null; then
+    echo "❌ cloudflared プロセスが異常終了しました。"
+    cat "$TMP_DIR/cloudflared.log"
+    exit 1
+  fi
+
+  if [[ -f "$TMP_DIR/cloudflared.log" ]]; then
+    FOUND_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$TMP_DIR/cloudflared.log" | head -n 1 || true)
+    if [[ -n "$FOUND_URL" ]]; then
+      TUNNEL_URL="$FOUND_URL"
+      break
+    fi
   fi
   sleep 1
 done
 
 if [[ -z "$TUNNEL_URL" ]]; then
-  echo "❌ トンネルの作成に失敗しました。"
+  echo "❌ トンネル URL の取得がタイムアウトしました。"
   cat "$TMP_DIR/cloudflared.log"
   exit 1
 fi
@@ -183,5 +196,10 @@ echo "※ このプロセスを実行している間、プロキシが有効に�
 echo "=========================================================================="
 echo ""
 
-# トンネルプロセスが生きている限り待機
-wait "$CLOUDFLARED_PID"
+# トンネルプロセスを待機（エラー発生時はログ出力）
+while kill -0 "$CLOUDFLARED_PID" 2>/dev/null; do
+  sleep 2
+done
+
+echo "⚠️  cloudflared が終了しました。"
+cat "$TMP_DIR/cloudflared.log"

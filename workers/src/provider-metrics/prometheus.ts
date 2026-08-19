@@ -71,10 +71,12 @@ function buildMetrics(results: MetricResults, nowUnixNano: string): Record<strin
     for (const [period, ratio, reset] of [
       ["session", c.sessionUsageRatio, c.sessionResetTimestampSeconds],
       ["weekly", c.weeklyUsageRatio, c.weeklyResetTimestampSeconds],
-    ] as [string, number, number][]) {
-      const periodAttr = [attr("period", period)];
-      metrics.push(gaugeMetric("codex_usage_ratio", periodAttr, ratio, nowUnixNano));
-      metrics.push(gaugeMetric("codex_reset_timestamp_seconds", periodAttr, reset, nowUnixNano));
+    ] as [string, number | undefined, number | undefined][]) {
+      if (ratio !== undefined && reset !== undefined) {
+        const periodAttr = [attr("period", period)];
+        metrics.push(gaugeMetric("codex_usage_ratio", periodAttr, ratio, nowUnixNano));
+        metrics.push(gaugeMetric("codex_reset_timestamp_seconds", periodAttr, reset, nowUnixNano));
+      }
     }
     if (c.creditsRemaining !== null) {
       metrics.push(gaugeMetric("codex_credits_remaining", [], c.creditsRemaining, nowUnixNano));

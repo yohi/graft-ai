@@ -48,14 +48,14 @@ export interface OpenAIFetchResult {
 
 /** Codex fetcher の結果 */
 export interface CodexFetchResult {
-  /** セッション(5h)使用率 0.0–1.0 */
-  sessionUsageRatio: number;
-  /** 週次使用率 0.0–1.0 */
-  weeklyUsageRatio: number;
-  /** セッションリセット Unix 秒 */
-  sessionResetTimestampSeconds: number;
-  /** 週次リセット Unix 秒 */
-  weeklyResetTimestampSeconds: number;
+  /** セッション(5h)使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
+  sessionUsageRatio?: number;
+  /** 週次使用率 0.0–1.0（レスポンスにウィンドウがない場合は undefined） */
+  weeklyUsageRatio?: number;
+  /** セッションリセット Unix 秒（レスポンスにウィンドウがない場合は undefined） */
+  sessionResetTimestampSeconds?: number;
+  /** 週次リセット Unix 秒（レスポンスにウィンドウがない場合は undefined） */
+  weeklyResetTimestampSeconds?: number;
   /** クレジット残高（取得できない場合は null） */
   creditsRemaining: number | null;
   /** リセットクレジット（補助エンドポイントが利用できない場合は undefined） */

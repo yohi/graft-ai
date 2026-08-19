@@ -260,10 +260,10 @@ export async function fetchCodexMetrics(
   const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
 
   return {
-    sessionUsageRatio: data.primaryWindow ? data.primaryWindow.usedPercent / 100 : 0,
-    weeklyUsageRatio: data.secondaryWindow ? data.secondaryWindow.usedPercent / 100 : 0,
-    sessionResetTimestampSeconds: data.primaryWindow ? data.primaryWindow.resetAt : 0,
-    weeklyResetTimestampSeconds: data.secondaryWindow ? data.secondaryWindow.resetAt : 0,
+    sessionUsageRatio: data.primaryWindow ? data.primaryWindow.usedPercent / 100 : undefined,
+    weeklyUsageRatio: data.secondaryWindow ? data.secondaryWindow.usedPercent / 100 : undefined,
+    sessionResetTimestampSeconds: data.primaryWindow ? data.primaryWindow.resetAt : undefined,
+    weeklyResetTimestampSeconds: data.secondaryWindow ? data.secondaryWindow.resetAt : undefined,
     creditsRemaining: data.creditsRemaining,
     resetCredits,
     plan: data.plan,

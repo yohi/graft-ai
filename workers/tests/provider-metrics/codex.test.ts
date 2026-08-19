@@ -177,9 +177,9 @@ describe("fetchCodexMetrics", () => {
       .mockResolvedValue(new Response(JSON.stringify(responseWithNullSecondary), { status: 200 }));
     const result = await fetchCodexMetrics("token", undefined, mockFetch);
     expect(result.sessionUsageRatio).toBeCloseTo(0.6);
-    expect(result.weeklyUsageRatio).toBe(0);
+    expect(result.weeklyUsageRatio).toBeUndefined();
     expect(result.sessionResetTimestampSeconds).toBe(1786161204);
-    expect(result.weeklyResetTimestampSeconds).toBe(0);
+    expect(result.weeklyResetTimestampSeconds).toBeUndefined();
     expect(result.plan).toBe("plus");
   });
 

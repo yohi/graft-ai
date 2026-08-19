@@ -150,12 +150,11 @@ echo "🚇 [3/3] トンネルを接続中..."
 CLOUDFLARED_PID=$!
 
 TUNNEL_URL=""
-for _ in {1..30}; do
-  if grep -q "trycloudflare.com" "$TMP_DIR/cloudflared.log" 2>/dev/null; then
-    TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' "$TMP_DIR/cloudflared.log" | head -n 1)
-    if [[ -n "$TUNNEL_URL" ]]; then
-      break
-    fi
+for i in $(seq 1 30); do
+  FOUND_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$TMP_DIR/cloudflared.log" 2>/dev/null | head -n 1 || true)
+  if [[ -n "$FOUND_URL" ]]; then
+    TUNNEL_URL="$FOUND_URL"
+    break
   fi
   sleep 1
 done

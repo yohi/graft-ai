@@ -1,0 +1,218 @@
+[
+  {
+    "uid": "graft-otel-backend-export-exhausted",
+    "title": "OtelBackendExportExhausted",
+    "ruleGroup": "graft-ai-otel",
+    "folderUID": "general",
+    "orgId": 1,
+    "condition": "B",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "5m",
+    "annotations": {
+      "summary": "An OTel backend has exhausted its export retries"
+    },
+    "labels": {
+      "service": "graft-ai-otel",
+      "severity": "critical"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {"from": 600, "to": 0},
+        "datasourceUid": "otel-prometheus",
+        "model": {
+          "expr": "sum by (backend) (increase(otel_backend_export_exhausted_total[5m]))",
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {"from": 0, "to": 0},
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [{
+            "evaluator": {"params": [1], "type": "gte"},
+            "operator": {"type": "and"},
+            "query": {"params": ["A"]},
+            "reducer": {"params": [], "type": "last"},
+            "type": "query"
+          }],
+          "datasource": {"type": "__expr__", "uid": "-100"},
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "graft-otel-backend-drops",
+    "title": "OtelBackendDrops",
+    "ruleGroup": "graft-ai-otel",
+    "folderUID": "general",
+    "orgId": 1,
+    "condition": "B",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "5m",
+    "annotations": {
+      "summary": "An OTel backend queue dropped telemetry"
+    },
+    "labels": {
+      "service": "graft-ai-otel",
+      "severity": "critical"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {"from": 600, "to": 0},
+        "datasourceUid": "otel-prometheus",
+        "model": {
+          "expr": "sum by (backend) (increase(otel_backend_queue_dropped_total[5m]))",
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {"from": 0, "to": 0},
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [{
+            "evaluator": {"params": [1], "type": "gte"},
+            "operator": {"type": "and"},
+            "query": {"params": ["A"]},
+            "reducer": {"params": [], "type": "last"},
+            "type": "query"
+          }],
+          "datasource": {"type": "__expr__", "uid": "-100"},
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "graft-otel-backend-queue-saturation",
+    "title": "OtelBackendQueueSaturation",
+    "ruleGroup": "graft-ai-otel",
+    "folderUID": "general",
+    "orgId": 1,
+    "condition": "B",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "5m",
+    "annotations": {
+      "summary": "An OTel backend queue is above eighty percent utilization"
+    },
+    "labels": {
+      "service": "graft-ai-otel",
+      "severity": "warning"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {"from": 600, "to": 0},
+        "datasourceUid": "otel-prometheus",
+        "model": {
+          "expr": "max by (backend) (otel_backend_queue_utilization_ratio)",
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {"from": 0, "to": 0},
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [{
+            "evaluator": {"params": [0.8], "type": "gt"},
+            "operator": {"type": "and"},
+            "query": {"params": ["A"]},
+            "reducer": {"params": [], "type": "last"},
+            "type": "query"
+          }],
+          "datasource": {"type": "__expr__", "uid": "-100"},
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "graft-otel-ingress-rate-limited",
+    "title": "OtelIngressRateLimited",
+    "ruleGroup": "graft-ai-otel",
+    "folderUID": "general",
+    "orgId": 1,
+    "condition": "B",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "5m",
+    "annotations": {
+      "summary": "OTel telemetry ingress has been rate limited"
+    },
+    "labels": {
+      "service": "graft-ai-otel",
+      "severity": "warning"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {"from": 600, "to": 0},
+        "datasourceUid": "otel-prometheus",
+        "model": {
+          "expr": "increase(otel_ingress_rate_limited_total[5m])",
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {"from": 0, "to": 0},
+        "datasourceUid": "-100",
+        "model": {
+          "conditions": [{
+            "evaluator": {"params": [1], "type": "gte"},
+            "operator": {"type": "and"},
+            "query": {"params": ["A"]},
+            "reducer": {"params": [], "type": "last"},
+            "type": "query"
+          }],
+          "datasource": {"type": "__expr__", "uid": "-100"},
+          "hide": false,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "classic_conditions"
+        }
+      }
+    ]
+  }
+]

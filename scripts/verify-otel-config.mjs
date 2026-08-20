@@ -31,6 +31,9 @@ for (const service of ["alloy", "tempo", "loki", "prometheus", "cloudflared", "g
 if (!compose.includes("--web.enable-otlp-receiver") || !compose.includes("--enable-feature=otlp-deltatocumulative")) {
   throw new Error("Prometheus OTLP receiver is not enabled with delta-to-cumulative conversion");
 }
+if (!compose.includes("--storage.tsdb.retention.time=14d")) {
+  throw new Error("self-hosted Prometheus retention must be fourteen days");
+}
 if (!tempo.includes("block_retention: 336h") || !loki.includes("retention_period: 168h")) {
   throw new Error("self-hosted OTel retention is not configured to the contract");
 }

@@ -185,6 +185,7 @@ export function parseCliArgs(args = []) {
     "grafana/dashboards/graft-ai-overview.json",
     "grafana/dashboards/graft-ai-ollama-cloud.json",
     "grafana/dashboards/graft-ai-provider-metrics.json",
+    "grafana/dashboards/graft-ai-otel.json",
   ];
 
   return {

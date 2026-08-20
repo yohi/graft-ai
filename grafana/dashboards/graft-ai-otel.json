@@ -3,19 +3,60 @@
     "id": null,
     "uid": "graft-ai-otel-observability",
     "title": "graft-ai — AI Gateway OTel Observability",
-    "description": "Redaction-safe OTel traces, payload logs, and unsampled request metrics.",
+    "description": "Redaction-safe OTel traces and aggregate request, token, cost, and latency signals.",
     "tags": ["graft-ai", "opentelemetry", "ai-gateway"],
     "schemaVersion": 39,
-    "version": 1,
+    "version": 2,
     "time": {"from": "now-6h", "to": "now"},
+    "refresh": "30s",
     "annotations": {"list": []},
+    "templating": {
+      "list": [
+        {
+          "name": "gateway",
+          "label": "Gateway",
+          "type": "query",
+          "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+          "query": "label_values(ai_gateway_requests_total, gateway)",
+          "includeAll": true,
+          "multi": true,
+          "current": {"text": "All", "value": ["$__all"]}
+        },
+        {
+          "name": "model",
+          "label": "Model",
+          "type": "query",
+          "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+          "query": "label_values(ai_gateway_requests_total{gateway=~\"$gateway\"}, model)",
+          "includeAll": true,
+          "multi": true,
+          "current": {"text": "All", "value": ["$__all"]}
+        },
+        {
+          "name": "provider",
+          "label": "Provider",
+          "type": "query",
+          "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+          "query": "label_values(ai_gateway_requests_total{gateway=~\"$gateway\"}, provider)",
+          "includeAll": true,
+          "multi": true,
+          "current": {"text": "All", "value": ["$__all"]}
+        }
+      ]
+    },
     "panels": [
       {
         "id": 1,
         "type": "stat",
         "title": "Total Requests",
         "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
-        "targets": [{"expr": "sum(ai_gateway_requests_total)", "refId": "A"}],
+        "targets": [
+          {
+            "expr": "sum(increase(ai_gateway_requests_total{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__range]))",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
         "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}
       },
       {
@@ -23,24 +64,158 @@
         "type": "stat",
         "title": "Error Rate",
         "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
-        "targets": [{"expr": "sum(rate(ai_gateway_errors_total[5m])) / clamp_min(sum(rate(ai_gateway_requests_total[5m])), 1)", "refId": "A"}],
+        "targets": [
+          {
+            "expr": "100 * sum(rate(ai_gateway_errors_total{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__rate_interval])) / clamp_min(sum(rate(ai_gateway_requests_total{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__rate_interval])), 1)",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "percent"}, "overrides": []},
         "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}
       },
       {
         "id": 3,
         "type": "timeseries",
-        "title": "Request Duration",
+        "title": "Request Rate",
         "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
-        "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(ai_gateway_request_duration_seconds_bucket[5m])))", "refId": "A"}],
+        "targets": [
+          {
+            "expr": "sum by (model, provider) (rate(ai_gateway_requests_total{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__rate_interval]))",
+            "legendFormat": "{{model}} / {{provider}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
         "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
       },
       {
         "id": 4,
-        "type": "logs",
-        "title": "Redacted Payload Logs",
+        "type": "timeseries",
+        "title": "Request Duration",
+        "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.5, sum by (le) (rate(ai_gateway_request_duration_seconds_bucket{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__rate_interval])))",
+            "legendFormat": "p50",
+            "refId": "A"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(ai_gateway_request_duration_seconds_bucket{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__rate_interval])))",
+            "legendFormat": "p95",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+        "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8}
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Input Tokens",
         "datasource": {"type": "loki", "uid": "otel-loki"},
-        "targets": [{"expr": "{gateway=~\".+\"} | json", "refId": "A"}],
-        "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8}
+        "targets": [
+          {
+            "expr": "sum(sum_over_time({gateway=~\"$gateway\"} | json | unwrap input_tokens | __error__=\"\" [$__range]))",
+            "queryType": "range",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+        "gridPos": {"x": 12, "y": 8, "w": 4, "h": 4}
+      },
+      {
+        "id": 6,
+        "type": "stat",
+        "title": "Output Tokens",
+        "datasource": {"type": "loki", "uid": "otel-loki"},
+        "targets": [
+          {
+            "expr": "sum(sum_over_time({gateway=~\"$gateway\"} | json | unwrap output_tokens | __error__=\"\" [$__range]))",
+            "queryType": "range",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+        "gridPos": {"x": 16, "y": 8, "w": 4, "h": 4}
+      },
+      {
+        "id": 7,
+        "type": "stat",
+        "title": "Estimated Cost",
+        "datasource": {"type": "loki", "uid": "otel-loki"},
+        "targets": [
+          {
+            "expr": "sum(sum_over_time({gateway=~\"$gateway\"} | json | unwrap cost_usd | __error__=\"\" [$__range]))",
+            "queryType": "range",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {"defaults": {"unit": "currencyUSD"}, "overrides": []},
+        "gridPos": {"x": 20, "y": 8, "w": 4, "h": 4}
+      },
+      {
+        "id": 8,
+        "type": "timeseries",
+        "title": "Request, Token, and Cost Trends",
+        "datasource": {"type": "loki", "uid": "otel-loki"},
+        "targets": [
+          {
+            "expr": "sum by (gateway) (count_over_time({gateway=~\"$gateway\"} [$__interval]))",
+            "legendFormat": "requests / {{gateway}}",
+            "queryType": "range",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8}
+      },
+      {
+        "id": 9,
+        "type": "table",
+        "title": "Model / Provider Breakdown",
+        "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+        "targets": [
+          {
+            "expr": "sum by (model, provider) (rate(ai_gateway_requests_total{gateway=~\"$gateway\",model=~\"$model\",provider=~\"$provider\"}[$__rate_interval]))",
+            "format": "table",
+            "instant": true,
+            "refId": "A"
+          }
+        ],
+        "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8}
+      },
+      {
+        "id": 10,
+        "type": "traces",
+        "title": "Recent Traces",
+        "datasource": {"type": "tempo", "uid": "otel-tempo"},
+        "targets": [
+          {
+            "limit": 20,
+            "query": "{ span.graft_ai.request_span = true }",
+            "queryType": "traceql",
+            "tableType": "traces",
+            "refId": "A",
+            "datasource": {"type": "tempo", "uid": "otel-tempo"}
+          }
+        ],
+        "links": [
+          {
+            "title": "Open redacted payload in Explore",
+            "url": "/explore?orgId=1&left=%7B%22datasource%22:%22otel-loki%22,%22queries%22:%5B%7B%22expr%22:%22%7Btrace_id%3D%5C%22%24%7B__trace.traceId%7D%5C%22%7D%22%7D%5D%7D",
+            "targetBlank": true
+          }
+        ],
+        "gridPos": {"x": 0, "y": 20, "w": 24, "h": 9}
+      },
+      {
+        "id": 11,
+        "type": "text",
+        "title": "Sampling & Payload Safety",
+        "options": {
+          "mode": "markdown",
+          "content": "**Sampling:** one deterministic trace decision controls Tempo and redacted payload export. Sampled-out traces are absent from both backends.\n\n**Payload:** prompts and completions are redacted before export. `payload_drop_reason` distinguishes unavailable payloads from empty payloads. Full payloads are not shown on this overview."
+        },
+        "gridPos": {"x": 0, "y": 29, "w": 24, "h": 5}
       }
     ]
   },

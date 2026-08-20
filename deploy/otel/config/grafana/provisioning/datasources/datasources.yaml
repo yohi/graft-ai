@@ -21,7 +21,8 @@ datasources:
       tracesToLogsV2:
         datasourceUid: otel-loki
         filterByTraceID: true
-        timeShift: 5m
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
         tags:
           - key: trace_id
             value: trace_id

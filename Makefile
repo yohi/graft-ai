@@ -40,9 +40,8 @@ otel-validate: otel-node-preflight
 	node --test tests/otel-dashboard.test.mjs
 	docker compose -f deploy/otel/docker-compose.yml config >/dev/null
 
-otel-smoke:
+otel-smoke: otel-validate
 	bash deploy/otel/tests/compose-smoke.test.sh
-
 typecheck:
 	cd workers && npm run typecheck:ci
 

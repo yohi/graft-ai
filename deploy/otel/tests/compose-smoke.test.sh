@@ -7,10 +7,9 @@ temp_dir="$(mktemp -d)"
 override_file="${temp_dir}/docker-compose.smoke.override.yml"
 
 cleanup() {
-  docker compose -f "$compose_file" -f "$override_file" --profile smoke down --volumes --remove-orphans >/dev/null 2>&1 || true
-  node -e 'for (const path of process.argv.slice(1)) { try { require("node:fs").unlinkSync(path); } catch {} }' "$override_file" "$temp_dir/otel_ingest_token" "$temp_dir/otel_hmac_key" "$temp_dir/grafana_admin_password" "$temp_dir/cloudflared_token"
-  rmdir "$temp_dir"
+  docker compose -f "$compose_file" -f "$override_file" --project-name graft-ai-otel-smoke --profile smoke down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
+
 trap cleanup EXIT
 
 printf '%s' 'smoke-token' >"$temp_dir/otel_ingest_token"
@@ -21,10 +20,21 @@ cat >"$override_file" <<EOF
 services:
   alloy:
     environment:
-      OTEL_TRUSTED_PROXY_CIDRS: 172.30.0.20/32
+      OTEL_TRUSTED_PROXY_CIDRS: 172.31.0.20/32
   smoke:
     environment:
       OTEL_SMOKE_TOKEN: smoke-token
+      OTEL_SMOKE_RETRY_ATTEMPTS: "60"
+      OTEL_SMOKE_RETRY_DELAY_MS: "2000"
+    networks:
+      otel:
+        ipv4_address: 172.31.0.20
+networks:
+  otel:
+    name: graft-ai-otel-smoke
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
 secrets:
   otel_ingest_token:
     file: ${temp_dir}/otel_ingest_token
@@ -36,4 +46,4 @@ secrets:
     file: ${temp_dir}/cloudflared_token
 EOF
 
-docker compose -f "$compose_file" -f "$override_file" --profile smoke up --build --abort-on-container-exit --exit-code-from smoke smoke
+docker compose -f "$compose_file" -f "$override_file" --project-name graft-ai-otel-smoke --profile smoke up --build --abort-on-container-exit --exit-code-from smoke smoke

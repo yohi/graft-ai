@@ -19,14 +19,17 @@ for (const forbidden of ["0.0.0.0/0", "::/0", "OTEL_INGEST_TOKEN:", "Authorizati
 if (!compose.includes("OTEL_TRUSTED_PROXY_CIDRS: 172.30.0.10/32")) {
   throw new Error("production Compose must trust only the cloudflared address");
 }
-for (const service of ["alloy", "tempo", "loki", "prometheus", "cloudflared"]) {
+for (const service of ["alloy", "tempo", "loki", "prometheus", "cloudflared", "grafana"]) {
   const block = compose.match(new RegExp(`\\n  ${service}:[\\s\\S]*?(?=\\n  [a-z]|\\nvolumes:)`))?.[0] ?? "";
+  if (block === "") {
+    throw new Error(`${service} block not found in OTel Compose`);
+  }
   if (block.includes("\n    ports:")) {
     throw new Error(`${service} must not publish a host port`);
   }
 }
-if (!compose.includes("--enable-feature=otlp-write-receiver")) {
-  throw new Error("Prometheus OTLP receiver is not enabled");
+if (!compose.includes("--web.enable-otlp-receiver") || !compose.includes("--enable-feature=otlp-deltatocumulative")) {
+  throw new Error("Prometheus OTLP receiver is not enabled with delta-to-cumulative conversion");
 }
 if (!tempo.includes("block_retention: 336h") || !loki.includes("retention_period: 168h")) {
   throw new Error("self-hosted OTel retention is not configured to the contract");

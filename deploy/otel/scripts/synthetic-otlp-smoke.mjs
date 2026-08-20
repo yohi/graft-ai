@@ -44,22 +44,33 @@ const body = {
   ],
 };
 
-async function fetchWithRetry(url, init, description) {
+async function fetchWithRetry(url, init, description, validate) {
+  const attempts = Number(process.env.OTEL_SMOKE_RETRY_ATTEMPTS || "20");
+  const delayMs = Number(process.env.OTEL_SMOKE_RETRY_DELAY_MS || "500");
   let lastError;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetch(url, {
         ...init,
         signal: AbortSignal.timeout(3_000),
       });
-      if (response.ok) {
-        return response;
+      if (!response.ok) {
+        lastError = new Error(`${description} returned HTTP ${response.status}`);
+        continue;
       }
-      lastError = new Error(`${description} returned HTTP ${response.status}`);
+      if (validate) {
+        const body = await response.json();
+        if (validate(body)) {
+          return response;
+        }
+        lastError = new Error(`${description} response did not match expected data`);
+        continue;
+      }
+      return response;
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new Error(`${description} did not become ready: ${lastError}`);
 }
@@ -75,16 +86,26 @@ await fetchWithRetry(
     body: JSON.stringify(body),
   },
   "OTel receiver",
+  (json) => json?.reason === "accepted",
 );
 
 await fetchWithRetry(
   `${prometheusUrl}/api/v1/query?query=ai_gateway_requests_total`,
   {},
   "Prometheus query",
+  (json) => json?.data?.result?.length > 0,
 );
 await fetchWithRetry(
   `${lokiUrl}/loki/api/v1/query_range?query=${encodeURIComponent('{gateway="smoke"}')}`,
   {},
   "Loki query",
+  (json) => json?.data?.result?.some((stream) => stream?.stream?.gateway === "smoke"),
 );
-await fetchWithRetry(`${tempoUrl}/api/search?limit=1`, {}, "Tempo query");
+const traceIdHex = "00112233445566778899aabbccddeeff";
+await fetchWithRetry(
+  `${tempoUrl}/api/search?tags=${encodeURIComponent("env=smoke")}&limit=10`,
+  {},
+  "Tempo query",
+  (json) => json?.traces?.some((trace) => trace?.traceID === traceIdHex.replace(/^0+/, "") || trace?.traceID === traceIdHex),
+);
+

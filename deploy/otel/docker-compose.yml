@@ -3,8 +3,6 @@ name: graft-ai-otel
 services:
   grafana:
     image: grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
-    ports:
-      - "3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
@@ -45,7 +43,7 @@ services:
       - otel
 
   tempo:
-    image: grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3
+    image: grafana/tempo:2.7.2
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     volumes:
       - tempo-data:/var/tempo
@@ -67,7 +65,8 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
-      - --enable-feature=otlp-write-receiver
+      - --web.enable-otlp-receiver
+      - --enable-feature=otlp-deltatocumulative
     volumes:
       - prometheus-data:/prometheus
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro

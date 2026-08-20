@@ -32,26 +32,24 @@ func TestReceiver_redacts_and_serializes_before_queue_handoff(t *testing.T) {
 	if !ok {
 		t.Fatal("redacted envelope was not enqueued")
 	}
-	if envelope.ContentType != "application/json" {
-		t.Fatalf("queued content type = %q, want application/json", envelope.ContentType)
-	}
 	if envelope.SamplingRatePPM != 500_000 {
 		t.Fatalf("queued sampling rate ppm = %d, want 500000", envelope.SamplingRatePPM)
 	}
-	if envelope.Span.TraceID != "00112233445566778899aabbccddeeff" {
-		t.Fatalf("queued redacted span trace ID = %q", envelope.Span.TraceID)
+	if len(envelope.Spans) != 1 || envelope.Spans[0].TraceID != "00112233445566778899aabbccddeeff" {
+		t.Fatalf("queued redacted spans = %#v", envelope.Spans)
 	}
-	if strings.Contains(string(envelope.Span.Attributes["gen_ai.prompt_json"]), "sk-live-secret") {
+	redactedPrompt := string(envelope.Spans[0].Attributes["gen_ai.prompt_json"])
+	if strings.Contains(redactedPrompt, "sk-live-secret") {
 		t.Fatalf("raw credential reached queued redacted span")
 	}
-	if !json.Valid(envelope.Payload) {
-		t.Fatalf("queued payload is invalid JSON: %s", envelope.Payload)
+	if !json.Valid(envelope.Spans[0].Attributes["gen_ai.prompt_json"]) {
+		t.Fatalf("queued redacted prompt is invalid JSON: %s", redactedPrompt)
 	}
-	if strings.Contains(string(envelope.Payload), "sk-live-secret") || strings.Contains(string(envelope.Payload), "Bearer prompt-secret") {
-		t.Fatalf("raw credential reached queue: %s", envelope.Payload)
+	if strings.Contains(redactedPrompt, "Bearer prompt-secret") {
+		t.Fatalf("raw credential reached queue: %s", redactedPrompt)
 	}
-	if !strings.Contains(string(envelope.Payload), "[REDACTED]") {
-		t.Fatalf("redacted marker is missing: %s", envelope.Payload)
+	if !strings.Contains(redactedPrompt, "[REDACTED]") {
+		t.Fatalf("redacted marker is missing: %s", redactedPrompt)
 	}
 }
 

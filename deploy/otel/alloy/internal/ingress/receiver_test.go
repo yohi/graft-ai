@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/redaction"
 )
 
 func TestReceiver_accepts_protobuf_and_enqueues_asynchronously(t *testing.T) {
@@ -21,7 +23,7 @@ func TestReceiver_accepts_protobuf_and_enqueues_asynchronously(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	envelope, ok := queue.Dequeue(request.Context())
-	if !ok || envelope.TraceID != "00112233445566778899aabbccddeeff" {
+	if !ok || len(envelope.Spans) != 1 || envelope.Spans[0].TraceID != "00112233445566778899aabbccddeeff" {
 		t.Fatalf("envelope = %#v, ok = %v", envelope, ok)
 	}
 }
@@ -38,7 +40,7 @@ func TestReceiver_accepts_json_and_preserves_content_type(t *testing.T) {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	envelope, ok := queue.Dequeue(request.Context())
-	if !ok || envelope.ContentType != "application/json" {
+	if !ok || len(envelope.Spans) != 1 {
 		t.Fatalf("envelope = %#v, ok = %v", envelope, ok)
 	}
 }
@@ -184,12 +186,40 @@ func TestReceiver_enqueues_multiple_spans_from_one_request(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
+	envelope, ok := queue.Dequeue(request.Context())
+	if !ok || len(envelope.Spans) != 2 {
+		t.Fatalf("envelope = %#v, ok = %v, want one request envelope with two spans", envelope, ok)
+	}
 	wantTraceIDs := []string{"00112233445566778899aabbccddeeff", "ffeeddccbbaa99887766554433221100"}
-	for _, want := range wantTraceIDs {
-		envelope, ok := queue.Dequeue(request.Context())
-		if !ok || envelope.TraceID != want {
-			t.Fatalf("envelope = %#v, ok = %v, want %q", envelope, ok, want)
+	for index, want := range wantTraceIDs {
+		if envelope.Spans[index].TraceID != want {
+			t.Fatalf("span %d trace ID = %q, want %q", index, envelope.Spans[index].TraceID, want)
 		}
+	}
+}
+
+func TestReceiver_drops_whole_request_when_queue_lacks_capacity_for_envelope(t *testing.T) {
+	receiver, queue := newTestReceiver(t, 1)
+	if !queue.Enqueue(Envelope{Spans: []redaction.RedactedSpan{{Span: redaction.Span{TraceID: "existing"}}}}) {
+		t.Fatal("failed to seed ingress queue")
+	}
+	body := validMultiSpanOTLPBody(t, "protobuf")
+	request := newIngestRequest(t, "http://example.test/v1/traces", body, "application/x-protobuf", "")
+	response := httptest.NewRecorder()
+
+	receiver.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("X-OTel-Drop-Reason") != "capacity" {
+		t.Fatalf("status = %d, drop reason = %q, want 200/capacity", response.Code, response.Header().Get("X-OTel-Drop-Reason"))
+	}
+	first, ok := queue.Dequeue(request.Context())
+	if !ok || len(first.Spans) != 1 || first.Spans[0].TraceID != "existing" {
+		t.Fatalf("queue retained = %#v, ok = %v, want existing envelope only", first, ok)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, ok := queue.Dequeue(ctx); ok {
+		t.Fatal("part of rejected request remained in queue")
 	}
 }
 
@@ -205,7 +235,7 @@ func TestReceiver_records_partial_acceptance_when_some_spans_are_dropped(t *test
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
 	envelope, ok := queue.Dequeue(request.Context())
-	if !ok || envelope.TraceID != "00112233445566778899aabbccddeeff" {
+	if !ok || len(envelope.Spans) != 1 || envelope.Spans[0].TraceID != "00112233445566778899aabbccddeeff" {
 		t.Fatalf("valid envelope = %#v, ok = %v", envelope, ok)
 	}
 	if got := receiver.Metrics().Accepted; got != 1 {

@@ -49,6 +49,7 @@ func EncodeMetrics(normalized metrics.NormalizedMetrics, startTime, endTime uint
 type aggregatedSample struct {
 	Name         string
 	Labels       map[string]string
+	Kind         metrics.MetricKind
 	Buckets      []float64
 	Value        float64
 	Count        uint64
@@ -65,10 +66,19 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, error
 			group = &aggregatedSample{
 				Name:    sample.Name,
 				Labels:  sample.Labels,
+				Kind:    sample.Kind,
 				Buckets: sample.Buckets,
 			}
 			groups[key] = group
 			order = append(order, key)
+		}
+		if sample.Kind == metrics.Gauge {
+			if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				return nil, fmt.Errorf("metric %q has non-finite gauge", sample.Name)
+			}
+			group.Value = sample.Value
+			group.Count = 1
+			continue
 		}
 		if len(sample.Buckets) == 0 {
 			group.Value += sample.Value
@@ -101,7 +111,7 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, error
 }
 
 func sampleKey(sample metrics.MetricSample) string {
-	return sample.Name + "\x00" + labelsKey(sample.Labels)
+	return sample.Name + "\x00" + string(rune(sample.Kind)) + "\x00" + labelsKey(sample.Labels)
 }
 
 func labelsKey(labels map[string]string) string {
@@ -131,6 +141,19 @@ func metricProto(sample aggregatedSample, startTime, endTime uint64) (*metricspb
 		labels = append(labels, &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: sample.Labels[key]}}})
 	}
 	if len(sample.Buckets) == 0 {
+		if sample.Kind == metrics.Gauge {
+			return &metricspb.Metric{
+				Name: sample.Name,
+				Unit: "1",
+				Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+					DataPoints: []*metricspb.NumberDataPoint{{
+						Attributes:   labels,
+						TimeUnixNano: endTime,
+						Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: sample.Value},
+					}},
+				}},
+			}, nil
+		}
 		return &metricspb.Metric{
 			Name: sample.Name,
 			Unit: "1",

@@ -8,6 +8,7 @@ import (
 type IngressMetrics struct {
 	mu            sync.Mutex
 	accepted      uint64
+	requestBytes  uint64
 	rateLimited   uint64
 	capacityDrops uint64
 	sizeDrops     uint64
@@ -16,6 +17,7 @@ type IngressMetrics struct {
 
 type MetricsSnapshot struct {
 	Accepted      uint64
+	RequestBytes  uint64
 	RateLimited   uint64
 	CapacityDrops uint64
 	SizeDrops     uint64
@@ -33,6 +35,15 @@ func (m *IngressMetrics) Accepted() {
 func (m *IngressMetrics) AcceptedN(n int) {
 	m.mu.Lock()
 	m.accepted += uint64(n)
+	m.mu.Unlock()
+}
+
+func (m *IngressMetrics) RequestBytes(n int) {
+	if n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.requestBytes += uint64(n)
 	m.mu.Unlock()
 }
 
@@ -67,6 +78,7 @@ func (m *IngressMetrics) Snapshot() MetricsSnapshot {
 	maps.Copy(rejections, m.rejections)
 	return MetricsSnapshot{
 		Accepted:      m.accepted,
+		RequestBytes:  m.requestBytes,
 		RateLimited:   m.rateLimited,
 		CapacityDrops: m.capacityDrops,
 		SizeDrops:     m.sizeDrops,

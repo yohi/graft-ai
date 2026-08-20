@@ -38,6 +38,9 @@ func TestFanOut_sends_metrics_before_sampling_and_keeps_branch_local_copies(t *t
 		if _, ok := span.Attributes[redaction.PromptAttribute]; ok {
 			t.Fatalf("Tempo branch retained prompt payload")
 		}
+		if _, ok := span.Attributes["graft_ai.request_span"]; !ok {
+			t.Fatal("Tempo branch dropped graft_ai.request_span marker")
+		}
 	}
 	if _, ok := result.Loki[0].Fields["prompt"]; !ok {
 		t.Fatalf("Loki branch lost redacted prompt")

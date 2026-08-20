@@ -80,7 +80,7 @@ func tempoCopy(span redaction.RedactedSpan) redaction.RedactedSpan {
 
 func isTempoAttribute(key string) bool {
 	switch strings.ToLower(key) {
-	case "trace_id", "span_id", "request_id", "model", "provider", "status", "status_code", "gateway", "env", "input_tokens", "output_tokens", "total_tokens", "cost_usd", "duration_ms", "payload_truncated", "payload_dropped", "payload_drop_reason":
+	case "trace_id", "span_id", "request_id", "graft_ai.request_span", "model", "provider", "status", "status_code", "gateway", "env", "input_tokens", "output_tokens", "total_tokens", "cost_usd", "duration_ms", "payload_truncated", "payload_dropped", "payload_drop_reason":
 		return true
 	default:
 		return false

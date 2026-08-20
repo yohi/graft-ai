@@ -93,13 +93,18 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("configure trace selector: %w", err)
 	}
+	backends := map[dispatcher.Backend]dispatcher.BackendConfig{
+		dispatcher.Tempo:      {URL: cfg.tempoURL, Headers: authHeader(cfg.tempoAuth), MaxItems: 2_000, MaxBytes: 64 * 1024 * 1024, Retry: tempoRetryPolicy()},
+		dispatcher.Prometheus: {URL: cfg.prometheusURL, Headers: authHeader(cfg.prometheusAuth), MaxItems: 100, MaxBytes: 16 * 1024 * 1024, Retry: dispatcher.DefaultRetryPolicy()},
+	}
+	if cfg.lokiPayloadEnabled {
+		backends[dispatcher.Loki] = dispatcher.BackendConfig{URL: cfg.lokiURL, Headers: authHeader(cfg.lokiAuth), MaxItems: 500, MaxBytes: 64 * 1024 * 1024, Retry: dispatcher.DefaultRetryPolicy()}
+	} else {
+		slog.Warn("disabled Grafana Cloud Loki payload export", "reason", cfg.lokiPayloadDisableReason)
+	}
 	backendDispatcher, err := dispatcher.NewDispatcher(dispatcher.DispatcherConfig{
-		Client: &http.Client{Timeout: 10 * time.Second},
-		Backends: map[dispatcher.Backend]dispatcher.BackendConfig{
-			dispatcher.Tempo:      {URL: cfg.tempoURL, Headers: authHeader(cfg.tempoAuth), MaxItems: 2_000, MaxBytes: 64 * 1024 * 1024, Retry: tempoRetryPolicy()},
-			dispatcher.Loki:       {URL: cfg.lokiURL, Headers: authHeader(cfg.lokiAuth), MaxItems: 500, MaxBytes: 64 * 1024 * 1024, Retry: dispatcher.DefaultRetryPolicy()},
-			dispatcher.Prometheus: {URL: cfg.prometheusURL, Headers: authHeader(cfg.prometheusAuth), MaxItems: 100, MaxBytes: 16 * 1024 * 1024, Retry: dispatcher.DefaultRetryPolicy()},
-		},
+		Client:   &http.Client{Timeout: 10 * time.Second},
+		Backends: backends,
 	})
 	if err != nil {
 		return fmt.Errorf("configure backend dispatcher: %w", err)
@@ -112,7 +117,7 @@ func run() error {
 	var forwarderWg sync.WaitGroup
 	for range defaultPipelineWorkers {
 		forwarderWg.Go(func() {
-			processLoop(forwarderCtx, queue, traceSelector, sampler, backendDispatcher, cfg.samplingRatePPM)
+			processLoop(forwarderCtx, queue, receiver, traceSelector, sampler, backendDispatcher, cfg.samplingRatePPM)
 		})
 	}
 

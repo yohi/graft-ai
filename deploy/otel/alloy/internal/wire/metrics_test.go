@@ -113,6 +113,36 @@ func TestEncodeMetrics_non_request_sample_is_sum_not_histogram(t *testing.T) {
 	}
 }
 
+func TestEncodeMetrics_gauge_uses_gauge_data_points(t *testing.T) {
+	normalized := metrics.NormalizedMetrics{Samples: []metrics.MetricSample{{
+		Name:   "otel_backend_queue_utilization_ratio",
+		Value:  0.75,
+		Labels: map[string]string{"backend": "tempo"},
+		Kind:   metrics.Gauge,
+	}}}
+
+	payload, err := EncodeMetrics(normalized, 1_000_000_000_000, 1_000_003_000_000)
+	if err != nil {
+		t.Fatalf("EncodeMetrics: %v", err)
+	}
+
+	var request collectormetricspb.ExportMetricsServiceRequest
+	if err := proto.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	metric := request.ResourceMetrics[0].ScopeMetrics[0].Metrics[0]
+	if metric.GetGauge() == nil {
+		t.Fatalf("expected Gauge metric, got %T", metric.Data)
+	}
+	point := metric.GetGauge().DataPoints[0]
+	if point.GetAsDouble() != 0.75 {
+		t.Fatalf("gauge value = %v, want 0.75", point.GetAsDouble())
+	}
+	if point.TimeUnixNano != 1_000_003_000_000 {
+		t.Fatalf("TimeUnixNano = %d, want 1_000_003_000_000", point.TimeUnixNano)
+	}
+}
+
 func TestEncodeMetrics_aggregateSamples_no_double_counting(t *testing.T) {
 	normalized := metrics.NormalizedMetrics{Samples: []metrics.MetricSample{
 		{Name: "ai_gateway_requests_total", Value: 1, Labels: map[string]string{"model": "m"}},

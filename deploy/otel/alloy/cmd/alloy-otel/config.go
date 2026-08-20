@@ -14,17 +14,19 @@ import (
 )
 
 type config struct {
-	address         string
-	trustedCIDRs    []string
-	proxySecret     string
-	hmacKeySource   ingress.SecretSource
-	samplingRatePPM uint32
-	tempoURL        string
-	lokiURL         string
-	prometheusURL   string
-	tempoAuth       string
-	lokiAuth        string
-	prometheusAuth  string
+	address                  string
+	trustedCIDRs             []string
+	proxySecret              string
+	hmacKeySource            ingress.SecretSource
+	samplingRatePPM          uint32
+	tempoURL                 string
+	lokiURL                  string
+	lokiPayloadEnabled       bool
+	lokiPayloadDisableReason string
+	prometheusURL            string
+	tempoAuth                string
+	lokiAuth                 string
+	prometheusAuth           string
 }
 
 func loadConfig() (config, error) {
@@ -59,18 +61,21 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	lokiPayloadEnabled, lokiPayloadDisableReason := cloudLogsPayloadDecision(lokiURL)
 	return config{
-		address:         envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
-		trustedCIDRs:    trustedCIDRs,
-		proxySecret:     proxySecret,
-		hmacKeySource:   hmacKeySource,
-		samplingRatePPM: samplingRatePPM,
-		tempoURL:        tempoURL,
-		lokiURL:         lokiURL,
-		prometheusURL:   prometheusURL,
-		tempoAuth:       strings.TrimSpace(os.Getenv("OTEL_TEMPO_AUTHORIZATION")),
-		lokiAuth:        strings.TrimSpace(os.Getenv("OTEL_LOKI_AUTHORIZATION")),
-		prometheusAuth:  strings.TrimSpace(os.Getenv("OTEL_PROMETHEUS_AUTHORIZATION")),
+		address:                  envOrDefault("OTEL_HTTP_ADDR", defaultAddress),
+		trustedCIDRs:             trustedCIDRs,
+		proxySecret:              proxySecret,
+		hmacKeySource:            hmacKeySource,
+		samplingRatePPM:          samplingRatePPM,
+		tempoURL:                 tempoURL,
+		lokiURL:                  lokiURL,
+		lokiPayloadEnabled:       lokiPayloadEnabled,
+		lokiPayloadDisableReason: lokiPayloadDisableReason,
+		prometheusURL:            prometheusURL,
+		tempoAuth:                strings.TrimSpace(os.Getenv("OTEL_TEMPO_AUTHORIZATION")),
+		lokiAuth:                 strings.TrimSpace(os.Getenv("OTEL_LOKI_AUTHORIZATION")),
+		prometheusAuth:           strings.TrimSpace(os.Getenv("OTEL_PROMETHEUS_AUTHORIZATION")),
 	}, nil
 }
 

@@ -16,6 +16,10 @@ const contracts = JSON.parse(
     "utf8",
   ),
 );
+const compose = readFileSync(
+  new URL("../deploy/otel/docker-compose.yml", import.meta.url),
+  "utf8",
+);
 const sampling = JSON.parse(
   readFileSync(
     new URL("../deploy/otel/contracts/sampling-fixtures.json", import.meta.url),
@@ -235,4 +239,8 @@ test("keeps retention duration parsing bounded to positive fourteen days", () =>
   const validDurations = [1, 14].map((days) => days * dayMs);
   assert.deepEqual(validDurations, [dayMs, 14 * dayMs]);
   assert.equal(contracts.retention.maxPayloadRetentionDays * dayMs, 14 * dayMs);
+});
+
+test("pins self-hosted Prometheus retention to fourteen days", () => {
+  assert.match(compose, /--storage\.tsdb\.retention\.time=14d/);
 });

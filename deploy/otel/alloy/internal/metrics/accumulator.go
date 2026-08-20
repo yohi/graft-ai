@@ -11,13 +11,15 @@ import (
 // multiple traces in the same reporting interval can be aggregated into a single
 // DELTA data point per series.
 type Accumulator struct {
-	groups map[string]*accumulatedSeries
-	order  []string
+	groups     map[string]*accumulatedSeries
+	order      []string
+	dataPoints int
 }
 
 type accumulatedSeries struct {
 	name         string
 	labels       map[string]string
+	kind         MetricKind
 	buckets      []float64
 	value        float64
 	count        uint64
@@ -33,21 +35,33 @@ func NewAccumulator() *Accumulator {
 
 // Add incorporates a MetricSample into the accumulator.
 func (a *Accumulator) Add(sample MetricSample) error {
-	key := sample.Name + "\x00" + labelsKey(sample.Labels)
+	key := sample.Name + "\x00" + string(rune(sample.Kind)) + "\x00" + labelsKey(sample.Labels)
 	series, ok := a.groups[key]
 	if !ok {
 		series = &accumulatedSeries{
 			name:    sample.Name,
 			labels:  sample.Labels,
+			kind:    sample.Kind,
 			buckets: sample.Buckets,
 		}
 		a.groups[key] = series
 		a.order = append(a.order, key)
 	}
 
+	if sample.Kind == Gauge {
+		if !isFinite(sample.Value) {
+			return fmt.Errorf("metric %q has non-finite gauge", sample.Name)
+		}
+		series.value = sample.Value
+		series.count = 1
+		a.dataPoints++
+		return nil
+	}
+
 	if len(sample.Buckets) == 0 {
 		series.value += sample.Value
 		series.count++
+		a.dataPoints++
 		return nil
 	}
 
@@ -56,6 +70,7 @@ func (a *Accumulator) Add(sample MetricSample) error {
 	}
 	series.value += sample.Value
 	series.count++
+	a.dataPoints++
 	if len(series.bucketCounts) == 0 {
 		series.bucketCounts = make([]uint64, len(sample.Buckets))
 	}
@@ -66,6 +81,14 @@ func (a *Accumulator) Add(sample MetricSample) error {
 		}
 	}
 	return nil
+}
+
+// DataPoints returns the number of samples accumulated since the last flush.
+func (a *Accumulator) DataPoints() int {
+	if a == nil {
+		return 0
+	}
+	return a.dataPoints
 }
 
 // Flush returns all accumulated series as NormalizedMetrics and resets the
@@ -81,6 +104,7 @@ func (a *Accumulator) Flush(timestampUnixNano uint64) NormalizedMetrics {
 			Name:              series.name,
 			Value:             series.value,
 			Labels:            series.labels,
+			Kind:              series.kind,
 			Buckets:           series.buckets,
 			BucketCounts:      series.bucketCounts,
 			Count:             series.count,
@@ -89,6 +113,7 @@ func (a *Accumulator) Flush(timestampUnixNano uint64) NormalizedMetrics {
 	}
 	a.groups = make(map[string]*accumulatedSeries)
 	a.order = nil
+	a.dataPoints = 0
 	return result
 }
 

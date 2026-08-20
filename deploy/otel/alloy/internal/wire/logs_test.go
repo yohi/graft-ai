@@ -40,3 +40,39 @@ func TestEncodeLoki_replaces_zero_timestamp_with_now(t *testing.T) {
 		t.Fatalf("timestamp %d not in range [%d, %d]", timestamp, before, after)
 	}
 }
+
+func TestEncodeLoki_fills_only_canonical_labels_when_labels_are_missing(t *testing.T) {
+	record := spanlogs.JSONLogRecord{
+		Labels:     map[string]string{"model": "m", "unexpected": "value"},
+		Serialized: []byte(`{"hello":"world"}`),
+	}
+
+	payload, err := EncodeLoki([]spanlogs.JSONLogRecord{record})
+	if err != nil {
+		t.Fatalf("EncodeLoki: %v", err)
+	}
+
+	var decoded struct {
+		Streams []struct {
+			Stream map[string]string `json:"stream"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	labels := decoded.Streams[0].Stream
+	if len(labels) != 4 {
+		t.Fatalf("labels = %#v, want exactly four canonical labels", labels)
+	}
+	for _, key := range []string{"model", "status_code", "env", "gateway"} {
+		if got := labels[key]; got == "" {
+			t.Fatalf("label %q = %q, want non-empty unknown fallback", key, got)
+		}
+	}
+	if _, ok := labels["unexpected"]; ok {
+		t.Fatal("unexpected label was emitted")
+	}
+	if _, ok := labels["service_name"]; ok {
+		t.Fatal("service_name fallback label was emitted")
+	}
+}

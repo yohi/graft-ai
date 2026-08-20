@@ -18,6 +18,8 @@ type lokiPayload struct {
 	Streams []lokiStream `json:"streams"`
 }
 
+var canonicalLokiLabels = []string{"model", "status_code", "env", "gateway"}
+
 func EncodeLoki(records []spanlogs.JSONLogRecord) ([]byte, error) {
 	if len(records) == 0 {
 		return nil, nil
@@ -32,12 +34,8 @@ func EncodeLoki(records []spanlogs.JSONLogRecord) ([]byte, error) {
 			timestamp = uint64(time.Now().UnixNano())
 		}
 		timestampStr := strconv.FormatUint(timestamp, 10)
-		labels := record.Labels
-		if len(labels) == 0 {
-			labels = map[string]string{"service_name": "unknown"}
-		}
 		payload.Streams = append(payload.Streams, lokiStream{
-			Stream: labels,
+			Stream: canonicalLabels(record.Labels),
 			Values: [][2]string{{timestampStr, string(record.Serialized)}},
 		})
 	}
@@ -49,4 +47,16 @@ func EncodeLoki(records []spanlogs.JSONLogRecord) ([]byte, error) {
 		return nil, fmt.Errorf("marshal Loki payload: %w", err)
 	}
 	return encoded, nil
+}
+
+func canonicalLabels(labels map[string]string) map[string]string {
+	canonical := make(map[string]string, len(canonicalLokiLabels))
+	for _, key := range canonicalLokiLabels {
+		value := labels[key]
+		if value == "" {
+			value = "unknown"
+		}
+		canonical[key] = value
+	}
+	return canonical
 }

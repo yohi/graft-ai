@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
 
 install:
 	cd workers && npm install
@@ -6,7 +6,7 @@ install:
 
 fmt:
 	cd workers && npm run fmt
-	cd workers && npx prettier --write "../deploy/otel/contracts/encoding.mjs" "../tests/otel-contracts.test.mjs"
+	cd workers && npx prettier --write "../deploy/otel/contracts/encoding.mjs" "../tests/otel-contracts.test.mjs" "../scripts/deploy-alert-rules.mjs" "../tests/deploy-alert-rules.test.mjs" "../tests/deployment-contracts.test.mjs"
 	$(MAKE) -C deploy/otel/alloy fmt
 	terraform fmt -recursive
 
@@ -22,6 +22,8 @@ test:
 	node scripts/verify-terraform-logpush-fields.mjs
 	node --test tests/verify-terraform-logpush-fields.test.mjs
 	node --test tests/deploy-dashboards.test.mjs
+	node --test tests/deploy-alert-rules.test.mjs
+	node --test tests/deployment-contracts.test.mjs
 	$(MAKE) otel-validate
 	node --test tests/otel-smoke-retry.test.mjs
 	bash tests/setup-free-tier.test.sh
@@ -83,6 +85,9 @@ deploy-provider-metrics:
 
 deploy-dashboards:
 	node scripts/deploy-dashboards.mjs
+
+deploy-alert-rules:
+	node scripts/deploy-alert-rules.mjs
 
 
 .PHONY: validate-grafana plan-grafana apply-grafana

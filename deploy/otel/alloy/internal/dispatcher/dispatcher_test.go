@@ -83,3 +83,31 @@ func TestRetryPolicy_retries_transient_statuses_only(t *testing.T) {
 		t.Fatal("status 400 was retryable")
 	}
 }
+
+func TestDispatcher_records_evicted_items_as_queue_drops(t *testing.T) {
+	dispatcher, err := NewDispatcher(DispatcherConfig{Backends: map[Backend]BackendConfig{
+		Tempo: {URL: "http://tempo.invalid", MaxItems: 1, MaxBytes: 1024},
+	}})
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+	first := Output{Backend: Tempo, TraceID: "first", Payload: []byte("first"), ReceivedAt: time.Unix(1, 0)}
+	second := Output{Backend: Tempo, TraceID: "second", Payload: []byte("second"), ReceivedAt: time.Unix(2, 0)}
+	if result := dispatcher.Handoff(first); result.Dropped {
+		t.Fatalf("first handoff dropped: %s", result.Reason)
+	}
+	result := dispatcher.Handoff(second)
+	if result.Dropped || result.Evicted != 1 {
+		t.Fatalf("second handoff = %#v, want accepted with one eviction", result)
+	}
+	snapshot := dispatcher.SnapshotAt(time.Unix(3, 0))
+	if snapshot.Drops[Tempo] != 1 || snapshot.DropReasons[Tempo]["queue_capacity"] != 1 {
+		t.Fatalf("drop metrics = %#v, want one queue_capacity drop", snapshot)
+	}
+	if snapshot.QueueUtilization[Tempo] != 1 {
+		t.Fatalf("queue utilization = %#v, want full queue", snapshot.QueueUtilization)
+	}
+	if snapshot.QueueOldestAgeSeconds[Tempo] != 1 {
+		t.Fatalf("queue oldest age = %#v, want one second", snapshot.QueueOldestAgeSeconds)
+	}
+}

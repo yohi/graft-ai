@@ -26,6 +26,7 @@ test:
 	node --test tests/otel-smoke-retry.test.mjs
 	bash tests/setup-free-tier.test.sh
 	bash tests/manage-cloudflare-logpush-job.test.sh
+	bash tests/compose-smoke-cleanup.test.sh
 
 otel-node-preflight:
 	@node -e 'const major = Number(process.versions.node.split(".")[0]); if (major < 22) { console.error("Node.js >= 22 is required for OTel contract tests"); process.exit(1); }'

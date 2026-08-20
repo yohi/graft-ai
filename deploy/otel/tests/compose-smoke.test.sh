@@ -8,6 +8,7 @@ override_file="${temp_dir}/docker-compose.smoke.override.yml"
 
 cleanup() {
   docker compose -f "$compose_file" -f "$override_file" --project-name graft-ai-otel-smoke --profile smoke down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf -- "$temp_dir"
 }
 
 trap cleanup EXIT

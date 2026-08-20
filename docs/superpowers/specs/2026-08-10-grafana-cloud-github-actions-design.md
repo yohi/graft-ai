@@ -1,5 +1,12 @@
 # Grafana Cloud + GitHub Actions デプロイパイプライン設計書
 
+> **適用範囲:** この文書は Workers Paid plan の Logpush/Tail Worker と Terraform
+> を含む旧デプロイ設計を記録したものです。現在の production CD は
+> `docs/superpowers/plans/2026-08-13-proxy-only-deploy-workflow.md` に定義された
+> proxy-only構成へ置き換えられており、Proxy/Ollama/Provider Metrics Worker と
+> 明示的に選択した Grafana dashboard を配備します。以下の5 Worker/Terraform自動
+> deploy要件は現行CDの要件ではありません。
+
 ## 1. 背景と目的
 
 `graft-ai` は Cloudflare Workers と Terraform を用いたテレメトリパイプラインである。現在は `make deploy` や各種 `scripts/*.sh` による手動・ローカルデプロイが中心であり、以下の課題がある。

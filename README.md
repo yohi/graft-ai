@@ -172,7 +172,9 @@ graft-ai/
 │       └── graft-ai-otel.json          # OTel traces, payloads, and RED metrics
 ├── scripts/
 │   ├── setup-free-tier.sh   # One-command setup for proxy-only Free Tier mode
-│   └── setup.sh              # Legacy: superseded by setup-free-tier.sh
+│   ├── setup.sh              # Legacy: superseded by setup-free-tier.sh
+│   ├── deploy-dashboards.mjs # Grafana dashboard provisioning API client
+│   └── deploy-alert-rules.mjs # Grafana alert rule provisioning API client
 ├── terraform/        # Terraform: Cloudflare Logpush API helper + optional Grafana resources
 │   ├── main.tf
 │   ├── variables.tf
@@ -186,7 +188,7 @@ graft-ai/
 │   └── scripts/        # synthetic OTLP smoke driver
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
 ├── tests/otel-contracts.test.mjs # Node.js OTel contract regression tests
-├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, setup-free-tier, setup-grafana
+├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, deploy-alert-rules, setup-free-tier, setup-grafana
 └── README.md         # this file
 ```
 
@@ -384,7 +386,8 @@ GitHub Actions workflows drive continuous integration and deployment:
   - Terraform fmt/validate for the Cloudflare and Grafana workspaces
 - `.github/workflows/deploy.yml` runs on `master` push and `workflow_dispatch`:
   - Deploys the Proxy Worker, Ollama Cloud Worker, and Provider Metrics Worker via Wrangler
-  - Deploys Grafana dashboards (`graft-ai-overview.json`, `graft-ai-ollama-cloud.json`) via Grafana HTTP API
+  - Deploys Grafana dashboards (`graft-ai-overview.json`, `graft-ai-ollama-cloud.json`, `graft-ai-provider-metrics.json`, `graft-ai-otel.json`) via Grafana HTTP API
+  - Deploys Grafana alert rules (`graft-ai-ollama-cloud-rules.json`, `graft-ai-otel-rules.json`) via Grafana provisioning API
   - Uses the `production` GitHub environment
 
 Required repository secrets/variables:

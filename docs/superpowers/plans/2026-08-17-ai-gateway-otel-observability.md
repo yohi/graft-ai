@@ -6,9 +6,9 @@
 
 **Goal:** Add an OpenTelemetry observability path for Cloudflare AI Gateway that is independent of Logpush and proxy routing, protects credentials in payloads, exports canonical Tempo/Loki/Prometheus signals, and is reproducible with a self-hosted Grafana stack.
 
-**Architecture:** Cloudflare AI Gateway sends OTLP/HTTP through Cloudflare Tunnel to a pinned custom Grafana Alloy distribution. Custom Alloy code owns ingress validation, fail-closed redaction, request-span election, deterministic sampling, branch-local fan-out, and bounded backend dispatch; stock components are used only where their contracts are sufficient. Tempo stores metadata, Loki stores redacted request payload logs, Prometheus stores unsampled request-span RED metrics, and a separate dashboard joins traces to Loki through `tracesToLogsV2`.
+**Architecture:** Cloudflare AI Gateway sends OTLP/HTTP through Cloudflare Tunnel to a pinned custom Go collector binary (`alloy-otel`). The Go collector owns ingress validation, fail-closed redaction, request-span election, deterministic sampling, branch-local fan-out, and bounded backend dispatch; no stock Grafana Alloy runtime is required. Tempo stores metadata, Loki stores redacted request payload logs, Prometheus stores unsampled request-span RED metrics, and a separate dashboard joins traces to Loki through `tracesToLogsV2`.
 
-**Tech Stack:** Go custom Alloy distribution, Grafana Alloy/OpenTelemetry Collector components, Docker Compose, cloudflared, Grafana, Tempo, Loki, Prometheus, Node.js 22+ ESM contract tests, Vitest, shell tests, Make, and GitHub Actions.
+**Tech Stack:** Go (`go.opentelemetry.io/proto/otlp` and `google.golang.org/protobuf`), custom `alloy-otel` binary, Docker Compose, cloudflared, Grafana, Tempo, Loki, Prometheus, Node.js 22+ ESM contract tests, Vitest, shell tests, Make, and GitHub Actions.
 
 ## Global Constraints
 
@@ -68,7 +68,7 @@ This is a prerequisite gate, not a PR. No implementation PR starts until it pass
 - Create: `tests/fixtures/otel/README.md`
 - Inspect: `docs/superpowers/specs/2026-08-16-ai-gateway-otel-observability-design.md`
 
-**Produces:** A sanitized evidence record for Free Plan exporter availability, real protobuf delivery, `/v1/traces` preservation, and proxy/direct requests. It also records the decision to implement the bounded dispatcher inside custom Alloy so Alloy remains the sole fan-out owner. If a separate dispatcher image is required, amend spec §§3.1, 3.3, 6, and 7 before coding.
+**Produces:** A sanitized evidence record for Free Plan exporter availability, real protobuf delivery, `/v1/traces` preservation, and proxy/direct requests. It also records the decision to implement the bounded dispatcher inside the custom Go `alloy-otel` binary so the collector remains the sole fan-out owner. If a separate dispatcher image is required, amend spec §§3.1, 3.3, 6, and 7 before coding.
 
 - [ ] **Step 1: Configure a non-secret test environment**
 
@@ -134,8 +134,8 @@ Merge in PR1 → PR2 → PR3 → PR4 → PR5 → PR6 → PR7 → PR8 order. Afte
 | Path | Responsibility |
 | --- | --- |
 | `deploy/otel/contracts/` | Shared encoding, status, sampling, metric, payload, and queue contract fixtures |
-| `deploy/otel/alloy/` | Go custom Alloy distribution and focused unit tests |
-| `deploy/otel/config/` | Alloy, Tempo, Loki, Prometheus, and Grafana provisioning |
+| `deploy/otel/alloy/` | Custom Go `alloy-otel` collector and focused unit tests |
+| `deploy/otel/config/` | Tempo, Loki, Prometheus, and Grafana provisioning |
 | `deploy/otel/docker-compose.yml` | Local reference topology and persistent volumes |
 | `deploy/otel/scripts/` | Synthetic OTLP and backend query smoke drivers |
 | `deploy/otel/tests/` | Compose and resource-limit acceptance tests |
@@ -144,7 +144,7 @@ Merge in PR1 → PR2 → PR3 → PR4 → PR5 → PR6 → PR7 → PR8 order. Afte
 | `docs/otel-*.md` | Operator setup, Cloud configuration, retention, and payload safety documentation |
 | `docs/superpowers/acceptance/` | Sanitized real-account and final acceptance evidence |
 
-Stock Alloy alone is insufficient for exact request-span election, recursive fail-closed redaction, fixed SHA-256 sampling, serialized-byte budgeting, and per-backend eviction. An external sidecar would move raw spans across an exporter boundary before redaction and weaken Alloy fan-out ownership. Therefore custom Go components are part of this plan.
+A stock Grafana Alloy distribution alone is insufficient for exact request-span election, recursive fail-closed redaction, fixed SHA-256 sampling, serialized-byte budgeting, and per-backend eviction. An external sidecar would move raw spans across an exporter boundary before redaction and weaken the collector's fan-out ownership. Therefore the custom Go `alloy-otel` binary is the primary collector and dispatcher; no separate Grafana Alloy runtime or sidecar is part of this plan.
 
 ---
 
@@ -209,7 +209,7 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
   gh stack submit --auto --open
   ```
 
-## PR2: Custom Alloy OTLP Ingress
+## PR2: Custom Go OTel Ingress (`alloy-otel`)
 
 **Files:**
 
@@ -267,13 +267,14 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - [ ] **Step 3: Implement receiver and queue**
 
-  Reuse OTLP codecs, retain validation and queue ownership in custom Alloy,
+  Reuse the pinned Go OTLP codecs, retain validation and queue ownership in the
+  custom `alloy-otel` collector,
   preserve `/v1/traces`, reject direct origins before source extraction, accept
   Cloudflare-edge-overwritten `CF-Connecting-IP` only from the configured
   cloudflared peer, discard all other forwarding headers, and construct the
   HTTP server through `NewHTTPServer` with the fixed timeout values.
 
-- [ ] **Step 4: Build a pinned custom Alloy binary**
+- [ ] **Step 4: Build a pinned custom Go `alloy-otel` binary**
 
   Pin Go dependencies, build a static image, expose only the Tunnel-facing OTLP port, and keep backend ports internal.
 
@@ -402,7 +403,7 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - [ ] **Step 3: Implement one dispatcher owner**
 
-  Do not enable stock retry or sending queues in parallel. Custom Alloy owns retries, drops, queues, and logical metrics.
+  Do not enable stock retry or sending queues in parallel. The custom Go `alloy-otel` collector owns retries, drops, queues, and logical metrics.
 
 - [ ] **Step 4: Verify and commit PR5**
 
@@ -419,7 +420,8 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 **Files:**
 
 - Create: `deploy/otel/docker-compose.yml`
-- Create: `deploy/otel/config/{alloy,tempo,loki,prometheus}.yaml`
+- Create: `deploy/otel/config/{tempo,loki}.yaml`
+- Create: `deploy/otel/config/prometheus.yml`
 - Create: `deploy/otel/config/grafana/provisioning/datasources/datasources.yaml`
 - Create: `deploy/otel/config/grafana/provisioning/dashboards/dashboards.yaml`
 - Create: `deploy/otel/env.example`
@@ -432,7 +434,8 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 - Compose publishes only Grafana as
   `127.0.0.1:${GRAFANA_PORT:-3000}:3000`. `cloudflared` opens an outbound Tunnel
   connection and publishes no host port; it reaches
-  `http://alloy:4318/v1/traces` over the internal network. Alloy, Tempo, Loki,
+  `http://alloy:4318/v1/traces` over the internal network. The custom `alloy-otel`
+  collector (Compose service name `alloy`), Tempo, Loki,
   and Prometheus have no host bindings. Grafana disables anonymous access and
   reads its administrator password from a Compose secret file.
 - `synthetic-otlp-smoke.mjs` runs in a profile-only one-shot `smoke` service,
@@ -454,7 +457,7 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
   `cloudflared` and Alloy have no host bindings, Tempo/Loki/Prometheus cannot be
   reached from the host, Prometheus OTLP is enabled, Grafana anonymous access is
   disabled, and credentials are referenced through secret files rather than
-  embedded. The bounded dispatcher is compiled into the custom Alloy service
+  embedded. The bounded dispatcher is compiled into the custom Go `alloy-otel` service
   and is not a seventh Compose service.
 
 - [ ] **Step 2: Write the synthetic smoke driver**
@@ -463,12 +466,12 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
 
 - [ ] **Step 3: Implement the reference stack**
 
-  Configure custom Alloy, Tempo `14d`, Loki `7d`, Prometheus `14d` with OTLP
+  Configure the custom Go `alloy-otel` collector, Tempo `14d`, Loki `7d`, Prometheus `14d` with OTLP
   receiver, Grafana datasources, cloudflared `/v1/traces` passthrough, volumes,
   and health checks. Bind only Grafana to host loopback, set
   `GF_AUTH_ANONYMOUS_ENABLED=false`, and set
   `GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password`; keep
-  cloudflared, Alloy, and every backend free of host port bindings. Resolve
+  cloudflared, the `alloy-otel` collector, and every backend free of host port bindings. Resolve
   actual image digests during implementation and record them in Compose.
   Put cloudflared on a dedicated internal subnet with a fixed service address
   and configure only that address in `OTEL_TRUSTED_PROXY_CIDRS`; reject
@@ -577,7 +580,7 @@ Stock Alloy alone is insufficient for exact request-span election, recursive fai
   Wrangler paths, dashboard JSON, and dashboard deployment defaults remain
   unchanged. Tail Worker assertions cover its fixed four labels, sorted Loki
   values, payload fields, empty-input behavior, and Loki push URL.
-- The acceptance record contains sanitized results for all acceptance items, effective Cloud retention, and the custom Alloy image digest.
+- The acceptance record contains sanitized results for all acceptance items, effective Cloud retention, and the custom Go `alloy-otel` image digest.
 
 - [ ] **Step 1: Write failing static validation tests**
 
@@ -659,7 +662,7 @@ Acceptance items 1-2 are blocked by G0; items 3-7 are covered by PR3/PR4/PR6/PR7
 
 - [ ] Every spec section is mapped above.
 - [ ] Every behavior has named files, interfaces, tests, and commands.
-- [ ] The custom Alloy decision and rejected sidecar boundary are explicit.
+- [ ] The custom Go `alloy-otel` decision and rejected sidecar boundary are explicit.
 - [ ] Eight linear PRs have branch/base names and `gh stack` commands.
 - [ ] No unnamed dependency, tracked secret, floating image, or unspecified backend remains.
 - [ ] Existing Worker, proxy, Logpush, Tail Worker, Terraform, and dashboard behavior has regression protection.

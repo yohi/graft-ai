@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -143,6 +144,38 @@ func TestEncodeMetrics_aggregateSamples_no_double_counting(t *testing.T) {
 				t.Fatalf("errors_total = %v, want 1", value)
 			}
 		}
+	}
+}
+
+func TestEncodeMetrics_preserves_accumulated_histogram_count(t *testing.T) {
+	normalized := metrics.NormalizedMetrics{Samples: []metrics.MetricSample{{
+		Name:         "ai_gateway_request_duration_seconds",
+		Value:        2.15,
+		Labels:       map[string]string{"model": "m", "status_code": "200"},
+		Buckets:      []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 1e308},
+		BucketCounts: []uint64{0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0},
+		Count:        2,
+	}}}
+
+	payload, err := EncodeMetrics(normalized, 1_000_000_000_000, 1_000_003_000_000)
+	if err != nil {
+		t.Fatalf("EncodeMetrics: %v", err)
+	}
+
+	var request collectormetricspb.ExportMetricsServiceRequest
+	if err := proto.Unmarshal(payload, &request); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	point := request.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].GetHistogram().DataPoints[0]
+	if point.Count != 2 {
+		t.Fatalf("Count = %d, want 2", point.Count)
+	}
+	if point.Sum == nil || *point.Sum != 2.15 {
+		t.Fatalf("Sum = %v, want 2.15", point.Sum)
+	}
+	if got, want := point.BucketCounts, []uint64{0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0}; !slices.Equal(got, want) {
+		t.Fatalf("BucketCounts = %v, want %v", got, want)
 	}
 }
 

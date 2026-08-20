@@ -33,7 +33,7 @@ The current support status and planned roadmap items are summarized below:
 | **AI Gateway access log forwarding** | Collect AI Gateway access logs and forward them to Grafana Loki via Workers Logpush | Proxy-only mode does not forward access logs | - |
 | **Ollama Cloud** | Calculate session/weekly rate-limit reset times and push to Grafana Metrics (Prometheus format) | Real-time access logs forwarding | Dynamic auto-detection of rate-limit reset anchors (currently uses static anchors) |
 | **OpenAI (Direct Connect)** | - (only supported via AI Gateway proxy) | Direct cost/token scraping via API keys | Scheduled usage scraping from OpenAI Usage APIs |
-
+| **AI Gateway OTel telemetry** | Receive OTLP through a private Tunnel and export redacted Tempo/Loki/Prometheus signals with custom Alloy | Grafana Cloud acceptance requires tenant-specific endpoints and credentials | - |
 
 ## 🏗️ Architecture
 
@@ -45,6 +45,18 @@ The current support status and planned roadmap items are summarized below:
   configured anchor and intervals, pushes them to Grafana Cloud Metrics.
 - **Provider Metrics Worker:** Fetches Codex, OpenAI API, and OpenCodeGo usage
   every minute and pushes OTLP/v1 metrics to Grafana Cloud Prometheus.
+- **AI Gateway OTel pipeline:** Receives OTLP/HTTP through Cloudflare Tunnel,
+  redacts credentials before queueing, elects request spans, applies one
+  deterministic trace decision, and asynchronously exports Tempo metadata,
+  redacted Loki payload logs, and unsampled Prometheus RED metrics.
+
+The OTel path is independent of Logpush and proxy routing. The self-hosted
+reference stack is in [`deploy/otel/docker-compose.yml`](./deploy/otel/docker-compose.yml);
+it exposes only Grafana on the host and keeps Alloy and all telemetry backends
+on the internal network. Create the local secret files under
+`deploy/otel/secrets/` from `deploy/otel/env.example` before starting the
+stack. Run `make otel-validate` for static checks and `make otel-smoke` for the
+local synthetic end-to-end smoke test.
 
 ### Scheduled Workers
 
@@ -156,7 +168,8 @@ graft-ai/
 ├── grafana/
 │   └── dashboards/
 │       ├── graft-ai-overview.json      # AI Gateway dashboard (13 panels)
-│       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics dashboard
+│       ├── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics dashboard
+│       └── graft-ai-otel.json          # OTel traces, payloads, and RED metrics
 ├── scripts/
 │   ├── setup-free-tier.sh   # One-command setup for proxy-only Free Tier mode
 │   └── setup.sh              # Legacy: superseded by setup-free-tier.sh
@@ -166,7 +179,11 @@ graft-ai/
 │   ├── outputs.tf
 │   ├── grafana/          # Grafana Cloud provider: Access Policy + token (optional)
 │   └── versions.tf
-├── deploy/otel/       # OTel contracts and the custom Alloy distribution
+├── deploy/otel/       # OTel contracts, Alloy, Compose stack, and smoke tools
+│   ├── alloy/          # custom authenticated ingress and backend dispatcher
+│   ├── config/         # Tempo, Loki, Prometheus, and Grafana provisioning
+│   ├── docker-compose.yml
+│   └── scripts/        # synthetic OTLP smoke driver
 ├── tests/fixtures/   # sample AI Gateway NDJSON fixtures
 ├── tests/otel-contracts.test.mjs # Node.js OTel contract regression tests
 ├── Makefile          # convenience targets: install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, setup-free-tier, setup-grafana
@@ -254,6 +271,8 @@ This subsystem supports two modes:
 make typecheck        # TypeScript type check
 make test             # run Vitest suite
 make otel-contracts   # run Node.js OTel contract tests
+make otel-validate    # validate OTel config, dashboard, and Compose wiring
+make otel-smoke        # run the local redacted OTLP/backend smoke test
 make fmt              # format Terraform and Workers sources
 make validate         # terraform validate (Logpush mode only)
 make deploy           # wrangler deploy + terraform apply (Logpush mode only)

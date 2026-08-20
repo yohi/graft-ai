@@ -8,7 +8,10 @@
 
 Transform encrypted Cloudflare AI Gateway access logs into Loki JSON streams and
 push them to Grafana Cloud Loki, while remaining within the Grafana Cloud Free
-Tier limits (14-day retention, 10k active series, 50GB logs).
+Tier limits (14-day retention, 10k active series, 50GB logs). Independently,
+receive Cloudflare AI Gateway OTLP telemetry through a private Tunnel and export
+redaction-safe traces, payload logs, and request metrics to configured Tempo,
+Loki, and Prometheus backends.
 
 > **Note:** Ollama Cloud rate-limit reset metrics and provider usage metrics are
 > documented in this specification and implemented by the scheduled Workers below.
@@ -119,6 +122,23 @@ treated as immediate failures (cookie/key expired) and are not retried. HTTP
 attempts with exponential backoff. Other 4xx responses are not retried. When
 all providers are skipped, misconfigured, or produce no metrics, the Worker
 logs an error and exits without pushing.
+
+### OpenTelemetry Pipeline
+
+The custom Alloy distribution at `deploy/otel/alloy` owns the OTel trust
+boundary and the complete downstream data flow. It accepts authenticated
+OTLP/HTTP only on `/v1/traces`, rejects untrusted TCP peers, redacts
+credentials before queue handoff, groups spans by trace, elects one request
+span, and creates one deterministic sampling decision. Request RED metrics are
+exported for every selected request span; sampled traces are exported as
+payload-free Tempo metadata and redacted Loki JSON through independent bounded
+queues.
+
+The reference topology is `deploy/otel/docker-compose.yml`. It uses
+digest-pinned images, publishes only Grafana to the host, and keeps Alloy and
+all telemetry backends on the internal network. `make otel-validate` checks the
+static topology and dashboard contract, while `make otel-smoke` sends a
+synthetic OTLP request and verifies all three internal backend APIs.
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 
@@ -238,6 +258,9 @@ weekly reset).
 - Terraform provider (optional): `grafana/grafana ~> 3.0` for managing Grafana Cloud Access Policy and token.
 - Worker deployment via Wrangler; Terraform manages only the Logpush job (and optionally Grafana Access Policy).
 - Free Tier proxy mode requires no Terraform; deploy via `scripts/setup-free-tier.sh` or the manual Wrangler commands.
+- OTel telemetry is independent of Logpush and proxy routing; its credentials are supplied through secret files or environment variables and never embedded in URLs, dashboards, or tracked configuration.
+- OTel receiver limits are 8 MiB body size, 5s header timeout, 30s read timeout, 10s write timeout, 100 concurrent requests, and a 1,000-item drop-new ingress queue.
+- OTel Loki labels are limited to `model`, `status_code`, `env`, and `gateway`; trace IDs remain log fields and are not labels.
 - Cloud Access Policy with `logs:write` scope is required for Loki push. Service Account tokens do **not** work for Loki push.
 - Grafana Cloud Free Tier limits apply.
 

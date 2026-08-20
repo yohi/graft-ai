@@ -79,7 +79,11 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, error
 			return nil, fmt.Errorf("metric %q has non-finite duration", sample.Name)
 		}
 		group.Value += sample.Value
-		group.Count++
+		count := sample.Count
+		if count == 0 {
+			count = 1
+		}
+		group.Count += count
 		if len(group.BucketCounts) == 0 {
 			group.BucketCounts = sample.BucketCounts
 			continue

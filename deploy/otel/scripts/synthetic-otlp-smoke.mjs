@@ -56,21 +56,21 @@ async function fetchWithRetry(url, init, description, validate) {
       });
       if (!response.ok) {
         lastError = new Error(`${description} returned HTTP ${response.status}`);
-        continue;
-      }
-      if (validate) {
+      } else if (validate) {
         const body = await response.json();
         if (validate(body)) {
           return response;
         }
         lastError = new Error(`${description} response did not match expected data`);
-        continue;
+      } else {
+        return response;
       }
-      return response;
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
   throw new Error(`${description} did not become ready: ${lastError}`);
 }
@@ -108,4 +108,3 @@ await fetchWithRetry(
   "Tempo query",
   (json) => json?.traces?.some((trace) => trace?.traceID === traceIdHex.replace(/^0+/, "") || trace?.traceID === traceIdHex),
 );
-

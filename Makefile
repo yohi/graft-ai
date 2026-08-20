@@ -23,6 +23,7 @@ test:
 	node --test tests/verify-terraform-logpush-fields.test.mjs
 	node --test tests/deploy-dashboards.test.mjs
 	$(MAKE) otel-validate
+	node --test tests/otel-smoke-retry.test.mjs
 	bash tests/setup-free-tier.test.sh
 	bash tests/manage-cloudflare-logpush-job.test.sh
 

@@ -82,10 +82,16 @@ jobs:
     needs: [checks]
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
     env:
-      TF_TOKEN_app_terraform_io: ${{ secrets.TF_READONLY_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_READONLY_API_TOKEN }}
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_grafana_cloud_loki_url: ${{ secrets.GRAFANA_CLOUD_LOKI_URL }}
+      TF_VAR_grafana_cloud_loki_username: ${{ vars.GRAFANA_CLOUD_LOKI_USERNAME }}
+      TF_VAR_grafana_cloud_access_policy_token: ${{ secrets.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN }}
+      TF_VAR_origin_secret: ${{ secrets.ORIGIN_SECRET }}
+      TF_VAR_rsa_private_key_pem: ${{ secrets.RSA_PRIVATE_KEY_PEM }}
       TF_VAR_workers_subdomain: ${{ vars.WORKERS_SUBDOMAIN }}
       TF_VAR_logpush_dataset: ${{ vars.LOGPUSH_DATASET || 'ai_gateway_events' }}
       TF_VAR_worker_script_name: ${{ vars.WORKER_SCRIPT_NAME || 'graft-ai-aig-logpush' }}

@@ -1,0 +1,49 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "graft-ai-otel-observability",
+    "title": "graft-ai — AI Gateway OTel Observability",
+    "description": "Redaction-safe OTel traces, payload logs, and unsampled request metrics.",
+    "tags": ["graft-ai", "opentelemetry", "ai-gateway"],
+    "schemaVersion": 39,
+    "version": 1,
+    "time": {"from": "now-6h", "to": "now"},
+    "annotations": {"list": []},
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Total Requests",
+        "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+        "targets": [{"expr": "sum(ai_gateway_requests_total)", "refId": "A"}],
+        "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4}
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Error Rate",
+        "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+        "targets": [{"expr": "sum(rate(ai_gateway_errors_total[5m])) / clamp_min(sum(rate(ai_gateway_requests_total[5m])), 1)", "refId": "A"}],
+        "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4}
+      },
+      {
+        "id": 3,
+        "type": "timeseries",
+        "title": "Request Duration",
+        "datasource": {"type": "prometheus", "uid": "otel-prometheus"},
+        "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(ai_gateway_request_duration_seconds_bucket[5m])))", "refId": "A"}],
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+      },
+      {
+        "id": 4,
+        "type": "logs",
+        "title": "Redacted Payload Logs",
+        "datasource": {"type": "loki", "uid": "otel-loki"},
+        "targets": [{"expr": "{gateway=~\".+\"} | json", "refId": "A"}],
+        "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8}
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}

@@ -83,7 +83,6 @@ jobs:
           workingDirectory: workers
           command: deploy --config wrangler.proxy.jsonc --var CF_ACCOUNT_ID:${{ secrets.CLOUDFLARE_ACCOUNT_ID }} --var AI_GATEWAY_ID:${{ vars.CLOUDFLARE_AI_GATEWAY_ID || secrets.CLOUDFLARE_AI_GATEWAY_ID }}
 
-
   deploy-ollama-worker:
     name: Deploy Ollama Cloud Worker
     runs-on: ubuntu-latest
@@ -226,3 +225,9 @@ jobs:
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN || secrets.GRAFANA_API_KEY || secrets.GRAFANA_CLOUD_API_KEY }}
         run: node scripts/deploy-dashboards.mjs
 
+      - name: Deploy alert rules to Grafana Cloud
+        env:
+          GRAFANA_STACK_SLUG: ${{ vars.GRAFANA_STACK_SLUG }}
+          GRAFANA_URL: ${{ vars.GRAFANA_URL || secrets.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN || secrets.GRAFANA_API_KEY || secrets.GRAFANA_CLOUD_API_KEY }}
+        run: node scripts/deploy-alert-rules.mjs

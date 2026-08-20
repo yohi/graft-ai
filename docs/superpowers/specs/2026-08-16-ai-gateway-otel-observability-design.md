@@ -20,7 +20,7 @@ Gateway の trace spans を Grafana Cloud または self-hosted Grafana から�
 - 既存 Logpush Worker、proxy Worker、Tail Worker、および Logpush dashboard
   は変更せず維持する。
 - OTel dashboard は既存 dashboard と分離して新設する。
-- OTel span は Alloy で受信し、redaction 後に signal 別へ分岐する。
+- OTel span は repository 内の custom Go collector binary (`alloy-otel`) で受信し、redaction 後に signal 別へ分岐する。
 - self-hosted の baseline retention は、Tempo の trace metadata を14日、Loki の
   redaction 済み prompt/completion payload を7日、Prometheus の spanmetrics を14日
   とする。これは Compose の明示的な設定値であり、Grafana Cloud の retention を
@@ -50,6 +50,13 @@ Gateway の trace spans を Grafana Cloud または self-hosted Grafana から�
 - payload 保護は明示 credential の redaction に限定し、包括的な PII/DLP は
   提供しない。
 
+この設計でいう `alloy-otel` は `deploy/otel/alloy/cmd/alloy-otel` からビルドする
+custom Go collector を指す。Grafana Alloy distribution や stock Alloy process は
+runtime dependency としない。Compose の service name `alloy` とディレクトリ名
+`deploy/otel/alloy` は既存の内部 network contract と repository layout を維持するために
+残すが、fan-out、redaction、selector、sampling、dispatcher の実装主体はこの custom
+collector binary である。
+
 ## 3. Architecture
 
 ```text
@@ -62,7 +69,8 @@ Client
                              ↓ HTTPS / OTLP-HTTP /v1/traces
                     Cloudflare Tunnel
                              ↓ bearer token
-                       Grafana Alloy
+                  custom Go collector
+                    (alloy-otel)
               ┌──────────────┼──────────────┐
               ↓              ↓              ↓
        Tempo metadata   spanlogs → Loki  spanmetrics → Prometheus
@@ -74,7 +82,7 @@ Client
 
 ### 3.0 OTLP/HTTP connection contract
 
-Cloudflare AI Gateway exporter から Alloy までの公開 endpoint は環境ごとに次の
+Cloudflare AI Gateway exporter から `alloy-otel` までの公開 endpoint は環境ごとに次の
 形式に固定する。`<tunnel-host>`、`<otlp-gateway-host>`、tenant ID は配置時に
 注入する値であり、秘密値ではないが dashboard JSON に埋め込まない。
 
@@ -100,15 +108,15 @@ read-back 不能の場合は acceptance を失敗させる。
 
 | 経路 | 完全な URL 形式 | path の扱い |
 | --- | --- | --- |
-| self-hosted ingress | `https://<tunnel-host>/v1/traces` | cloudflared は `/v1/traces` を Alloy の `http://alloy:4318/v1/traces` へそのまま転送する |
-| Grafana Cloud ingress | `https://<tunnel-host>/v1/traces` | Grafana Cloud でも Cloudflare exporter は同じ公開 Alloy/Tunnel endpoint を使用する |
-| self-hosted Tempo exporter | `http://tempo:4318/v1/traces` | Alloy から内部 network の Tempo へ送る。外部公開しない |
+| self-hosted ingress | `https://<tunnel-host>/v1/traces` | cloudflared は `/v1/traces` を `alloy-otel`（Compose service `alloy`）の `http://alloy:4318/v1/traces` へそのまま転送する |
+| Grafana Cloud ingress | `https://<tunnel-host>/v1/traces` | Grafana Cloud でも Cloudflare exporter は同じ公開 `alloy-otel`/Tunnel endpoint を使用する |
+| self-hosted Tempo exporter | `http://tempo:4318/v1/traces` | `alloy-otel` から内部 network の Tempo へ送る。外部公開しない |
 | Grafana Cloud Tempo exporter | `https://<otlp-gateway-host>/otlp/v1/traces` | region/tenant 固有の host を secret-free な設定値として注入する |
 | self-hosted Prometheus exporter | `http://prometheus:9090/api/v1/otlp/v1/metrics` | Prometheus の OTLP receiver を有効化し、内部 network だけで到達可能にする |
 | Grafana Cloud Prometheus exporter | `https://<otlp-gateway-host>/otlp/v1/metrics` | tenant/region 固有の host と認証を注入する |
 | self-hosted/Grafana Cloud Loki exporter | `http://loki:3100/loki/api/v1/push` / `https://<loki-host>/loki/api/v1/push` | spanlogs を Loki JSON stream に変換して送る。`trace_id` は log field であり label ではない |
 
-Cloudflare exporter と Alloy receiver の ingress contract は OTLP/HTTP とし、
+Cloudflare exporter と `alloy-otel` receiver の ingress contract は OTLP/HTTP とし、
 `application/x-protobuf`（protobuf）と `application/json`（OTLP JSON）の双方を
 明示的に受け付ける。reference environment で Cloudflare exporter が実際に送る形式は
 上記設定で `protobuf` に固定し、JSON は receiver の互換性検証用に限る。Content-Type
@@ -120,9 +128,9 @@ Cloudflare exporter と Alloy receiver の ingress contract は OTLP/HTTP とし
 Cloudflare exporter から Tunnel までの認証は、常に
 `Authorization: Bearer ${OTEL_INGEST_TOKEN}` とする。token は secret file、環境変数、
 または Cloudflare Secrets Store から注入し、query string、dashboard、ログには出さない。
-Alloy から Tempo への Content-Type は `application/x-protobuf` とする。self-hosted Tempo
+`alloy-otel` から Tempo への Content-Type は `application/x-protobuf` とする。self-hosted Tempo
 は内部 network で認証なし、Grafana Cloud Tempo は
-`Authorization: Basic base64(<tempo-tenant-id>:<tempo-access-token>)` を使う。Alloy から
+`Authorization: Basic base64(<tempo-tenant-id>:<tempo-access-token>)` を使う。`alloy-otel` から
 Prometheus も baseline は `application/x-protobuf`、Grafana Cloud は
 `Authorization: Basic base64(<prometheus-user>:<metrics-access-token>)` とする。Loki は
 self-hosted では内部 network、Grafana Cloud では `logs:write` scope の credentials を
@@ -133,9 +141,9 @@ secret として注入し、Loki push JSON は `application/json` とする。�
 Cloudflare AI Gateway が gateway で span を生成するため、request が proxy Worker
 経由か直接アクセスかは OTel 経路の成立条件にしない。
 
-### 3.1 Alloy pipeline and fan-out ownership
+### 3.1 Custom Go collector pipeline and fan-out ownership
 
-Alloy が唯一の fan-out owner であり、processor の破壊的な attribute 除去を
+custom Go collector (`alloy-otel`) が唯一の fan-out owner であり、processor の破壊的な attribute 除去を
 exporter 間で共有しない。処理順序と branch ownership は次のとおりとする。
 
 1. OTLP/HTTP receiver が Tunnel から trace spans を受け、bearer token、path、
@@ -147,7 +155,7 @@ exporter 間で共有しない。処理順序と branch ownership は次のと�
    preflight、numeric invalid の payload status fields はこの時点で確定する。copy は同じ trace_id、
    request_id、model、provider、token、cost、latency、redaction 済み payload を
    初期状態として持ち、以後の branch が他 branch の attribute mutation を見ない。
-4. Alloy の stateful request-span selector が trace_id ごとに最大 `10,000` trace、
+4. `alloy-otel` の stateful request-span selector が trace_id ごとに最大 `10,000` trace、
    最大 `64 MiB` を保持し、last span 受信から `1s` の idle timeout で trace state を
    flush する。`is_request_span` predicate（`span.kind=server` かつ root span、または
    `request_id` を持つ最初の server span）で候補を選び、同じ trace に複数候補がある場合は
@@ -249,11 +257,11 @@ baseline をその値に合わせて変更する。
 
 ### 3.3 Backend responsibilities and ingestion contract
 
-各 backend への送信は Alloy が所有し、endpoint、Content-Type、認証、retention を
+各 backend への送信は custom Go collector (`alloy-otel`) が所有し、endpoint、Content-Type、認証、retention を
 環境設定から明示的に注入する。Grafana Cloud の URL は region/tenant により異なる
 ため、以下の `<...>` を実値へ置換してから smoke test を実行する。
 
-| Backend | Alloy output/exporter | self-hosted endpoint | Grafana Cloud endpoint | 認証 |
+| Backend | custom collector output/dispatcher | self-hosted endpoint | Grafana Cloud endpoint | 認証 |
 | --- | --- | --- | --- | --- |
 | Tempo | `otelcol.exporter.otlphttp` | `http://tempo:4318/v1/traces` | `https://<otlp-gateway-host>/otlp/v1/traces` | self-hosted は内部 network、Cloud は tenant credentials |
 | Loki | `otelcol.exporter.loki` | `http://loki:3100/loki/api/v1/push` | `https://<loki-host>/loki/api/v1/push` | self-hosted は内部 network、Cloud は logs write credentials |
@@ -267,7 +275,7 @@ OTLP metrics を `application/x-protobuf` で送ることに固定する。将�
 を使う環境を追加する場合は、その環境の選択値、Content-Type、configuration、contract
 test を同じ変更で明記し、backend の既定値に依存しない。
 
-Prometheus に公開する canonical metric names と labels は次のとおりとする。Alloy の
+Prometheus に公開する canonical metric names と labels は次のとおりとする。`alloy-otel` の
 spanmetrics connector が生成する vendor/default name は dashboard へ出す前にこの名前へ
 normalize する。spanmetrics 前の transform が `request=true` と
 `error=(span.status=ERROR または status_code >= 400)` を正規化し、request predicate
@@ -352,7 +360,7 @@ sum(
 ```
 
 retention は self-hosted では Tempo `14d`、Loki `7d`、Prometheus `14d` を
-Compose の persistent storage 設定に固定する。Grafana Cloud では Alloy が retention
+Compose の persistent storage 設定に固定する。Grafana Cloud では `alloy-otel` が retention
 を設定しないため、tenant の実効 retention（Logs、Traces、Metrics）を Cloud UI/API
 から取得して検証記録に残す。Cloud 側を7日に変更したり、全 tenant の既定値を30日と
 仮定したりしない。Grafana Cloud Logs payload export は、取得が成功し、値が正の期間として
@@ -365,7 +373,7 @@ URL、認証情報、API response bodyを含めない。Traces/Metrics はtenant
 
 ## 4. Payload protection
 
-Alloy は redaction 前の span を exporter、debug log、内部の payload dump に出さ
+`alloy-otel` は redaction 前の span を exporter、debug log、内部の payload dump に出さ
 ない。対象は次のとおりとする。
 
 - `gen_ai.prompt_json`
@@ -391,7 +399,7 @@ Cloudflare の `cf-aig-collect-log-payload` が OTel attributes に適用され�
 
 OTLP receiver の bearer token、Cloudflare exporter の認証ヘッダー、Grafana
 datasource credentials は secret file、environment、または Cloudflare Secrets
-Store から注入する。リポジトリの Compose、Alloy、dashboard、Terraform 定義へ
+Store から注入する。リポジトリの Compose、`alloy-otel`、dashboard、Terraform 定義へ
 秘密値を埋め込まない。
 
 ## 5. Grafana dashboard
@@ -414,7 +422,7 @@ provisioning で差し替えられるようにする。既存 `graft-ai-overview
 Recent Traces には timestamp、trace ID、request ID、model、provider、input/output
 tokens、cost、latency、status を表示する。payload 全文は overview に常時表示しない。
 
-Recent Traces のデータ契約は次の表に固定する。`normalized.*` は Alloy が span
+Recent Traces のデータ契約は次の表に固定する。`normalized.*` は `alloy-otel` が span
 attributes から作る field 名であり、raw attribute の優先順位も表に含める。Recent
 Traces の行は Tempo の request span metadata を唯一の source とし、Prometheus は
 aggregate panel、Loki は payload data link にだけ使う。Prometheus に trace_id を付けて
@@ -432,11 +440,11 @@ Tempo 行へ join することは禁止する。
 | cost | Cloudflare span / trace signal | `gen_ai.usage.cost` → `cost_usd` | Tempo TraceQL request span metadata | `—` |
 | latency | Cloudflare span / trace signal | span end - start → `duration_ms` | Tempo TraceQL request span duration | `—` |
 | status | span status / HTTP response | `http.response.status_code` → `status_code`; span ERROR → error | Tempo TraceQL request span | `unknown` |
-| payload availability | Alloy status projection | `payload_truncated`, `payload_dropped`, `payload_drop_reason` | Tempo TraceQL request span metadata | `available` |
+| payload availability | `alloy-otel` status projection | `payload_truncated`, `payload_dropped`, `payload_drop_reason` | Tempo TraceQL request span metadata | `available` |
 
-`trace_id` は Cloudflare AI Gateway が生成・伝播した OTLP trace context を Alloy が
-保持する。Alloy は新しい trace ID を生成したり置換したりしない。`request_id` は
-Cloudflare が提供した値を Alloy が正規化するだけで、値がなければ生成しない。したがって
+`trace_id` は Cloudflare AI Gateway が生成・伝播した OTLP trace context を `alloy-otel` が
+保持する。`alloy-otel` は新しい trace ID を生成したり置換したりしない。`request_id` は
+Cloudflare が提供した値を `alloy-otel` が正規化するだけで、値がなければ生成しない。したがって
 request ID が欠損しても trace ID による相関は維持し、request ID 列は `—` とする。
 
 ### Trace to payload workflow
@@ -479,22 +487,22 @@ payload を大量表示しない。
 Docker Compose で次のコンポーネントを起動する。
 
 - Grafana
-- Grafana Alloy
+- custom Go collector (`alloy-otel`; Compose service name: `alloy`)
 - Tempo
 - Loki
 - Prometheus
 - cloudflared
 
-bounded export dispatcher は custom Alloy binary に組み込み、Alloy deployment が
+bounded export dispatcher は `alloy-otel` binary に組み込み、custom collector deployment が
 queue owner として起動する。独立した Compose service にはしない。
 
-Compose は Grafana、Alloy、Tempo、Loki、Prometheus、cloudflared の6 services で構成する。
-Grafana、Alloy、Tempo、Loki、Prometheus、cloudflared の image を immutable
+Compose は Grafana、custom collector（Compose service `alloy`）、Tempo、Loki、Prometheus、cloudflared の6 services で構成する。
+Grafana、custom collector、Tempo、Loki、Prometheus、cloudflared の image を immutable
 digest で pin し、`latest` や floating tag を使わない。digest は実装開始時に固定し、
 receiver の `http` block と exporter の queue/retry fields をその version で contract test
 する。
 
-Alloy の OTLP/HTTP receiver のみを Cloudflare Tunnel から到達可能にする。Tunnel
+custom collector の OTLP/HTTP receiver のみを Cloudflare Tunnel から到達可能にする。Tunnel
 には TLS と bearer token を要求する。receiver の `http` block は §7.1 の有限な
 request limit/timeout を使用する。各 backend は永続 volume を持ち、self-hosted
 baseline として payload 7日、trace metadata と metrics 14日の retention を個別に
@@ -504,11 +512,11 @@ baseline として payload 7日、trace metadata と metrics 14日の retention 
 Compose の host publication は Grafana の
 `127.0.0.1:${GRAFANA_PORT:-3000}:3000` だけとする。cloudflared は outbound Tunnel
 connection を開始し、host port を公開せず、internal network の
-`http://alloy:4318/v1/traces` へ転送する。Alloy、Tempo、Loki、Prometheus には
+`http://alloy:4318/v1/traces` へ転送する。custom collector、Tempo、Loki、Prometheus には
 `ports` を設定せず、host から Tunnel を迂回して receiver/backend へ接続できない構成に
 する。Grafana は `GF_AUTH_ANONYMOUS_ENABLED=false` とし、administrator password を
 `GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password` で Compose
-secret file から読み込む。static Compose test は Alloy/backend/cloudflared の host
+secret file から読み込む。static Compose test は custom collector/backend/cloudflared の host
 binding、loopback 以外の Grafana binding、anonymous access、有効な password file
 参照の欠落を拒否する。
 
@@ -516,7 +524,7 @@ No-external-credentials local smoke は production topology と Tunnel acceptanc
 Compose には profile-only one-shot `smoke` helper を定義し、Node.js driver を Compose
 network 内で実行して `http://alloy:4318/v1/traces`、Prometheus、Loki、Tempo の internal
 endpoints に接続する。この helper は6つの production servicesには数えない。自動 smoke
-では Grafana、Alloy、Tempo、Loki、Prometheus の5 servicesだけを起動し、cloudflared は
+では Grafana、custom collector、Tempo、Loki、Prometheus の5 servicesだけを起動し、cloudflared は
 起動しない。`compose-smoke.test.sh`を唯一のentrypointとし、一時Grafana password、OTLP
 bearer token、HMAC key filesとignored/generated Compose overrideを作る。overrideはsmoke
 helperの固定service addressだけをtrusted peer setへ追加し、全ての`up`、`run`、`down`へ
@@ -544,7 +552,7 @@ config と cloudflared ingress config の静的検証だけを行い、実Tunnel
    確認する。
 9. proxy 経由と AI Gateway 直接アクセスの両方を検証する。
 
-Grafana Cloud では同じ Alloy pipeline と dashboard query を使い、datasource
+Grafana Cloud では同じ `alloy-otel` pipeline と dashboard query を使い、datasource
 provisioning、backend endpoint、authentication、tenant の実効 retention だけを
 差し替える。Grafana Cloud の Logs retention を7日に固定したり、全 tenant の既定値を
 30日とみなしたりせず、Cloud UI/API で確認した実値を受入記録に残す。
@@ -553,7 +561,7 @@ provisioning、backend endpoint、authentication、tenant の実効 retention �
 
 ### 7.1 Receiver limits and rate limiting
 
-Custom Alloy receiver config は `max_request_body_size=8388608` bytes（8 MiB）を設定し、
+custom Go collector receiver config は `max_request_body_size=8388608` bytes（8 MiB）を設定し、
 同じconfigからHTTP boundaryの `http.Server` を構築する。`http.Server`は
 `ReadHeaderTimeout=5s`、`ReadTimeout=30s`、`WriteTimeout=10s` を設定し、
 `Receiver.ServeHTTP`をhandlerへ接続する。receiver handlerのunit testだけではserver-level
@@ -562,7 +570,7 @@ blocked response writerを接続し、各timeoutとtimeout response/connection t
 このfactoryを唯一のtimeout ownerとし、stock receiver HTTP blockや未記載のreverse proxyへ
 timeout責務を重複させない。Cloudflare WAF/Tunnelのrate limitはreceiver timeoutの代替ではない。
 
-Alloy receiver の同時 request 上限は `100`、dispatcher ingress queue は `1,000 items`
+`alloy-otel` receiver の同時 request 上限は `100`、dispatcher ingress queue は `1,000 items`
 とする。production Compose はcloudflaredを専用internal subnetの固定service addressへ置き、
 そのaddressだけを `OTEL_TRUSTED_PROXY_CIDRS` に設定する。`0.0.0.0/0`、`::/0`、Compose
 subnet全体、host-facing CIDRは許可しない。receiverはTCP peerがこのset外ならrequest
@@ -649,15 +657,13 @@ request への同期依存は採用しない。process restart 時に未送信 q
 許容するが、クラッシュ後に失われた個数を遡及して記録できるとは仮定しない。graceful
 shutdown の場合だけ pending item 数を allowlist log に記録する。
 
-queue の owner は Alloy deployment の bounded export dispatcher とする。stock exporter
-の `sending_queue` は、単一 item sizer、FIFO、retry elapsed time など、その component
-が提供する範囲でのみ使用する。以下の per-backend eviction、byte/item の二重上限、
-request span の priority を満たせない場合は、同じ contract を実装する pinned dispatcher
-を reference stack に追加し、unbounded queue や同期送信へ退避しない。redaction・JSON
-serialization 後の handoff は `accepted` または `dropped(reason)` を返し、dispatcher が
-backend retry、queue、drop metric の唯一の owner になる。handoff が `dropped` でも ingress
-は認証済み valid OTLP に `200` を返し、stock exporter の retryable overflow response を
-Cloudflare exporter へ返さない。
+queue の owner は custom collector deployment の bounded export dispatcher とする。
+`alloy-otel` は stock exporter の `sending_queue` に依存せず、per-backend eviction、byte/item
+の二重上限、request span の priority、retry、drop metric を自前の pinned dispatcher で
+管理する。redaction・JSON serialization 後の handoff は `accepted` または
+`dropped(reason)` を返し、dispatcher が backend retry、queue、drop metric の唯一の owner
+になる。handoff が `dropped` でも ingress は認証済み valid OTLP に `200` を返し、backend
+health や overflow を Cloudflare exporter へ返さない。
 
 | Backend | total attempts | per-attempt timeout / backoff | queue type・容量 | overflow / eviction |
 | --- | --- | --- | --- | --- |
@@ -673,7 +679,7 @@ idle timeout `1s` を経過して flush された trace state と定義し、Pro
 場合は monotonic sequence の昇順で対象を決める。したがって oldest と lowest-priority
 の選択が実装ごとに揺れず、retry exhaustion と overflow の結果を再現できる。
 
-次の logical metric names を全 backend に適用し、実装では Alloy の component metric
+次の logical metric names を全 backend に適用し、実装では `alloy-otel` の component metric
 と recording rule または metric transform からこの contract へ map する。backend failure
 log は `backend`、`status_class`、`attempt`、`reason`、`queue_items`、`queue_capacity`
 だけを許可し、headers、request/response body、完全 URL、token、prompt、completion、
@@ -752,7 +758,7 @@ status、成功可否に影響させない。
   retention verification tests。Cloud Logs retention が有効な正の期間かつ14日以下の場合だけ
   payload exportを有効化し、unavailable、lookup failure、invalid、14日超の各fixtureでは
   exportを無効化して対応する固定sanitized reasonを確認する。
-- Compose smoke test: synthetic OTLP spans を実際に Alloy へ送信し、Prometheus の
+- Compose smoke test: synthetic OTLP spans を実際に `alloy-otel` へ送信し、Prometheus の
   `/api/v1/query`、Loki の `/loki/api/v1/query_range`、Tempo の trace detail で同じ
   request の model/provider、RED、numeric payload、redaction 結果を確認すること
 - dashboard JSON、PromQL、LogQL、Tempo `tracesToLogsV2` provisioning、trace 時刻の
@@ -805,6 +811,6 @@ status、成功可否に影響させない。
 対象外とするものは、既存 Logpush mode の廃止、proxy を observability 必須経路に
 すること、Logpush と OTel の完全な field parity、既存 dashboard の UI 互換、
 包括的 PII/DLP、reference stack 以外の backend/collector への展開、無関係な Worker
-や Terraform のリファクタリングである。本文の Alloy、Tempo、Loki、Prometheus、
+や Terraform のリファクタリングである。本文の custom Go collector (`alloy-otel`)、Tempo、Loki、Prometheus、
 bounded export dispatcher、Compose は、この設計と acceptance test が対象とする
 reference stack として固定する。

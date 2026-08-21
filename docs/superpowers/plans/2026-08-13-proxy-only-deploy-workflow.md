@@ -2,9 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close PR #31 and replace its Logpush/Tail-Worker-centric deploy workflow with a proxy-only mode production CD that deploys only the Proxy Worker, Ollama Worker, and Provider Metrics Worker from `master`.
+**Goal:** Close PR #31 and replace its Logpush/Tail-Worker-centric deploy workflow with a
+proxy-only mode production CD that deploys the Proxy Worker, Ollama Worker, Provider Metrics
+Worker, and Grafana dashboards from `master`.
 
-**Architecture:** Use GitHub Actions. Trigger on `master` push and `workflow_dispatch`. Each deployable Worker has its own job. Proxy-only mode intentionally does NOT deploy the Logpush receiver Worker, Tail Worker, Terraform Logpush job, or Terraform Grafana workspace resources. Grafana metrics and alert resources are managed separately and are not part of this Worker-only CD workflow.
+**Architecture:** Use GitHub Actions. Trigger on `master` push and `workflow_dispatch`. Each
+deployable Worker has its own job, and dashboards are deployed through
+`scripts/deploy-dashboards.mjs`. Proxy-only mode intentionally does NOT deploy the Logpush
+receiver Worker, Tail Worker, Terraform Logpush job, Terraform Grafana workspace resources, or
+Grafana alert rules. Alert rules remain separately managed and are not part of this production CD
+workflow.
 
 **Tech Stack:** GitHub Actions YAML, Bash, Wrangler CLI, Terraform CLI.
 

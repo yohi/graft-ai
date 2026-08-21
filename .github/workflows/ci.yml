@@ -106,10 +106,40 @@ jobs:
           terraform_version: "1.10.0"
           terraform_wrapper: false
 
+      - name: Check Terraform plan inputs
+        id: terraform_plan_inputs
+        run: |
+          missing_inputs=""
+          for input_name in \
+            TF_TOKEN_app_terraform_io \
+            TF_VAR_cloudflare_account_id \
+            TF_VAR_cloudflare_api_token \
+            TF_VAR_grafana_cloud_loki_url \
+            TF_VAR_grafana_cloud_loki_username \
+            TF_VAR_grafana_cloud_access_policy_token \
+            TF_VAR_origin_secret \
+            TF_VAR_rsa_private_key_pem \
+            TF_VAR_workers_subdomain
+          do
+            if [[ -z "${!input_name:-}" ]]; then
+              missing_inputs+="${input_name} "
+            fi
+          done
+
+          if [[ -n "$missing_inputs" ]]; then
+            printf '::notice::Terraform plan skipped; missing CI inputs: %s\n' "${missing_inputs% }"
+            printf 'ready=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf 'ready=true\n' >> "$GITHUB_OUTPUT"
+
       - name: Terraform init
         working-directory: terraform
+        if: steps.terraform_plan_inputs.outputs.ready == 'true'
         run: terraform init -input=false
 
       - name: Terraform plan
         working-directory: terraform
+        if: steps.terraform_plan_inputs.outputs.ready == 'true'
         run: terraform plan -input=false -no-color

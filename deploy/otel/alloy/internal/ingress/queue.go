@@ -32,18 +32,13 @@ func NewIngressQueue(capacity int) (*IngressQueue, error) {
 }
 
 func (q *IngressQueue) Enqueue(envelope Envelope) bool {
-	envelope = cloneEnvelope(envelope)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.closed {
+	if q.closed || len(q.items) == cap(q.items) {
 		return false
 	}
-	select {
-	case q.items <- envelope:
-		return true
-	default:
-		return false
-	}
+	q.items <- cloneEnvelope(envelope)
+	return true
 }
 
 func cloneEnvelope(envelope Envelope) Envelope {

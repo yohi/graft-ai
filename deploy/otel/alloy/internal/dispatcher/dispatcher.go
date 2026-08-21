@@ -103,7 +103,7 @@ func (d *Dispatcher) Start(ctx context.Context) {
 func (d *Dispatcher) Handoff(output Output) HandoffResult {
 	queue, ok := d.queues[output.Backend]
 	if !ok {
-		d.recordDrop(output.Backend, "", 1)
+		d.recordDrop(output.Backend, "backend_unconfigured", 1)
 		return HandoffResult{Dropped: true, Reason: "backend_unconfigured"}
 	}
 	result := queue.enqueue(output)

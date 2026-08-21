@@ -111,3 +111,22 @@ func TestDispatcher_records_evicted_items_as_queue_drops(t *testing.T) {
 		t.Fatalf("queue oldest age = %#v, want one second", snapshot.QueueOldestAgeSeconds)
 	}
 }
+
+func TestDispatcher_records_unconfigured_backend_drop_reason(t *testing.T) {
+	dispatcher, err := NewDispatcher(DispatcherConfig{Backends: map[Backend]BackendConfig{
+		Tempo: {URL: "http://tempo.invalid", MaxItems: 1, MaxBytes: 1024},
+	}})
+	if err != nil {
+		t.Fatalf("new dispatcher: %v", err)
+	}
+
+	result := dispatcher.Handoff(Output{Backend: Loki, Payload: []byte("loki")})
+	if !result.Dropped || result.Reason != "backend_unconfigured" {
+		t.Fatalf("handoff result = %#v, want backend_unconfigured drop", result)
+	}
+
+	snapshot := dispatcher.SnapshotAt(time.Unix(3, 0))
+	if snapshot.Drops[Loki] != 1 || snapshot.DropReasons[Loki]["backend_unconfigured"] != 1 {
+		t.Fatalf("drop metrics = %#v, want backend_unconfigured reason", snapshot)
+	}
+}

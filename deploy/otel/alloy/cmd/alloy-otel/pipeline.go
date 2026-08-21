@@ -14,36 +14,146 @@ import (
 	"github.com/yohi/graft-ai/deploy/otel/alloy/internal/wire"
 )
 
-func processLoop(ctx context.Context, queue *ingress.IngressQueue, traceSelector *selector.RequestSelector, sampler sampling.Sampler, backendDispatcher *dispatcher.Dispatcher, ratePPM uint32) {
+const (
+	metricsFlushInterval = time.Second
+	maxMetricsDataPoints = 200
+)
+
+func processLoop(ctx context.Context, queue *ingress.IngressQueue, receiver *ingress.Receiver, traceSelector *selector.RequestSelector, sampler sampling.Sampler, backendDispatcher *dispatcher.Dispatcher, ratePPM uint32) {
 	brancher := fanout.NewFanOut(sampler)
 	ticker := time.NewTicker(selector.DefaultIdle / 2)
 	defer ticker.Stop()
-	metricsTicker := time.NewTicker(30 * time.Second)
+	metricsTicker := time.NewTicker(metricsFlushInterval)
 	defer metricsTicker.Stop()
 	accumulator := metrics.NewAccumulator()
 	accumulatorStart := wire.TimestampNow()
+	previousDispatcherMetrics := dispatcher.MetricsSnapshot{}
+	previousIngressMetrics := ingress.MetricsSnapshot{}
 	for {
 		select {
 		case envelope, ok := <-queue.Items():
 			if !ok {
-				for _, trace := range traceSelector.FlushAll() {
-					dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM, accumulator)
-				}
+				accumulatorStart = dispatchTraces(ctx, brancher, backendDispatcher, traceSelector.FlushAll(), ratePPM, accumulator, accumulatorStart)
+				currentDispatcherMetrics := backendDispatcher.Snapshot()
+				currentIngressMetrics := receiver.Metrics()
+				addDispatcherMetrics(accumulator, currentDispatcherMetrics, previousDispatcherMetrics)
+				addIngressMetrics(accumulator, currentIngressMetrics, previousIngressMetrics)
+				addIngressStateMetrics(accumulator, queue, receiver)
 				flushAccumulator(ctx, accumulator, accumulatorStart, backendDispatcher)
 				return
 			}
-			traceSelector.AddAt(envelope.Span, envelope.ReceivedAt)
-		case now := <-ticker.C:
-			for _, trace := range traceSelector.FlushIdle(now) {
-				dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM, accumulator)
+			for _, span := range envelope.Spans {
+				addSelectorEvictionMetrics(accumulator, traceSelector.AddAt(span, envelope.ReceivedAt))
 			}
+		case now := <-ticker.C:
+			accumulatorStart = dispatchTraces(ctx, brancher, backendDispatcher, traceSelector.FlushIdle(now), ratePPM, accumulator, accumulatorStart)
 		case <-metricsTicker.C:
+			currentDispatcherMetrics := backendDispatcher.Snapshot()
+			currentIngressMetrics := receiver.Metrics()
+			addDispatcherMetrics(accumulator, currentDispatcherMetrics, previousDispatcherMetrics)
+			addIngressMetrics(accumulator, currentIngressMetrics, previousIngressMetrics)
+			addIngressStateMetrics(accumulator, queue, receiver)
 			flushAccumulator(ctx, accumulator, accumulatorStart, backendDispatcher)
 			accumulatorStart = wire.TimestampNow()
-			logDispatcherMetrics(ctx, backendDispatcher.Snapshot())
+			previousDispatcherMetrics = currentDispatcherMetrics
+			previousIngressMetrics = currentIngressMetrics
+			logDispatcherMetrics(ctx, currentDispatcherMetrics)
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func addDispatcherMetrics(accumulator *metrics.Accumulator, current, previous dispatcher.MetricsSnapshot) {
+	for backend, value := range current.Retries {
+		addCounterMetric(accumulator, "otel_backend_export_retries_total", value, previous.Retries[backend], map[string]string{"backend": string(backend)})
+	}
+	for backend, value := range current.FailureStatusClasses {
+		for statusClass, statusValue := range value {
+			addCounterMetric(accumulator, "otel_backend_export_failures_total", statusValue, previous.FailureStatusClasses[backend][statusClass], map[string]string{"backend": string(backend), "status_class": statusClass})
+		}
+	}
+	for backend, value := range current.Exhausted {
+		addCounterMetric(accumulator, "otel_backend_export_exhausted_total", value, previous.Exhausted[backend], map[string]string{"backend": string(backend)})
+	}
+	for backend, value := range current.Drops {
+		labels := map[string]string{"backend": string(backend), "signal": "export", "reason": "total"}
+		addCounterMetric(accumulator, "otel_backend_queue_dropped_total", value, previous.Drops[backend], labels)
+		for reason, reasonValue := range current.DropReasons[backend] {
+			previousReasonValue := previous.DropReasons[backend][reason]
+			addCounterMetric(accumulator, "otel_backend_queue_dropped_total", reasonValue, previousReasonValue, map[string]string{
+				"backend": string(backend),
+				"signal":  "export",
+				"reason":  reason,
+			})
+		}
+	}
+	for backend, value := range current.QueueUtilization {
+		addGaugeMetric(accumulator, "otel_backend_queue_utilization_ratio", value, map[string]string{"backend": string(backend)})
+	}
+	for backend, value := range current.QueueOldestAgeSeconds {
+		addGaugeMetric(accumulator, "otel_backend_queue_oldest_age_seconds", value, map[string]string{"backend": string(backend)})
+	}
+}
+
+func addIngressMetrics(accumulator *metrics.Accumulator, current, previous ingress.MetricsSnapshot) {
+	addCounterMetric(accumulator, "otel_ingress_requests_total", current.Accepted, previous.Accepted, map[string]string{"status": "accepted"})
+	addCounterMetric(accumulator, "otel_ingress_request_bytes_total", current.RequestBytes, previous.RequestBytes, nil)
+	addCounterMetric(accumulator, "otel_ingress_rate_limited_total", current.RateLimited, previous.RateLimited, nil)
+	addCounterMetric(accumulator, "otel_ingress_queue_dropped_total", current.CapacityDrops, previous.CapacityDrops, map[string]string{"reason": "capacity"})
+	addCounterMetric(accumulator, "otel_ingress_queue_dropped_total", current.SizeDrops, previous.SizeDrops, map[string]string{"reason": "size"})
+	for reason, value := range current.Rejections {
+		addCounterMetric(accumulator, "otel_ingress_rejections_total", value, previous.Rejections[reason], map[string]string{"reason": reason})
+	}
+}
+
+func addIngressStateMetrics(accumulator *metrics.Accumulator, queue *ingress.IngressQueue, receiver *ingress.Receiver) {
+	addGaugeMetric(accumulator, "otel_ingress_active_requests", float64(receiver.ActiveRequests()), nil)
+	addGaugeMetric(accumulator, "otel_ingress_queue_items", float64(queue.Len()), map[string]string{"queue": "dispatcher", "unit": "items"})
+	addGaugeMetric(accumulator, "otel_ingress_queue_capacity", float64(queue.Capacity()), map[string]string{"queue": "dispatcher", "unit": "items"})
+}
+
+func addCounterMetric(accumulator *metrics.Accumulator, name string, current, previous uint64, labels map[string]string) {
+	delta := current
+	if current >= previous {
+		delta = current - previous
+	}
+	if delta == 0 {
+		return
+	}
+	_ = accumulator.Add(metrics.MetricSample{Name: name, Value: float64(delta), Labels: labels})
+}
+
+func addGaugeMetric(accumulator *metrics.Accumulator, name string, value float64, labels map[string]string) {
+	_ = accumulator.Add(metrics.MetricSample{Name: name, Value: value, Labels: labels, Kind: metrics.Gauge})
+}
+
+func shouldFlushMetrics(accumulator *metrics.Accumulator) bool {
+	return accumulator.DataPoints() >= maxMetricsDataPoints
+}
+
+func dispatchTraces(ctx context.Context, brancher fanout.FanOut, backendDispatcher *dispatcher.Dispatcher, traces []selector.Trace, ratePPM uint32, accumulator *metrics.Accumulator, accumulatorStart uint64) uint64 {
+	for _, trace := range traces {
+		dispatchTrace(ctx, brancher, backendDispatcher, trace, ratePPM, accumulator)
+		if shouldFlushMetrics(accumulator) {
+			flushAccumulator(ctx, accumulator, accumulatorStart, backendDispatcher)
+			accumulatorStart = wire.TimestampNow()
+		}
+	}
+	return accumulatorStart
+}
+
+func addSelectorEvictionMetrics(accumulator *metrics.Accumulator, evictions []selector.Eviction) {
+	for _, eviction := range evictions {
+		_ = accumulator.Add(metrics.MetricSample{
+			Name:  "otel_backend_queue_dropped_total",
+			Value: 1,
+			Labels: map[string]string{
+				"backend": "selector",
+				"signal":  "trace",
+				"reason":  eviction.Reason,
+			},
+		})
 	}
 }
 
@@ -91,6 +201,9 @@ func dispatchTrace(ctx context.Context, brancher fanout.FanOut, backendDispatche
 		}); result.Dropped {
 			slog.WarnContext(ctx, "dropped Tempo submission", "trace_id", trace.TraceID, "reason", result.Reason)
 		}
+	}
+	if !backendDispatcher.HasBackend(dispatcher.Loki) {
+		return
 	}
 	lokiPayload, err := wire.EncodeLoki(result.Loki)
 	if err != nil {

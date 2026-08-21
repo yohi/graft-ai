@@ -98,7 +98,7 @@ func TestPipeline_acceptsOTLPAndDeliversRedactedSignalsToAllBackends(t *testing.
 	processContext := t.Context()
 	processDone := make(chan struct{})
 	go func() {
-		processLoop(processContext, queue, selectorState, sampler, backendDispatcher, 1_000_000)
+		processLoop(processContext, queue, receiver, selectorState, sampler, backendDispatcher, 1_000_000)
 		close(processDone)
 	}()
 

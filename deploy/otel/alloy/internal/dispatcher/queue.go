@@ -36,6 +36,7 @@ type BackendConfig struct {
 type handoff struct {
 	dropped bool
 	reason  string
+	evicted int
 }
 
 type backendQueue struct {
@@ -71,6 +72,7 @@ func (q *backendQueue) enqueue(output Output) handoff {
 	if q.closed {
 		return handoff{dropped: true, reason: "shutdown_loss"}
 	}
+	evicted := 0
 	for q.units+units > q.config.MaxItems || q.bytes+size > q.config.MaxBytes {
 		if len(q.items) == 0 {
 			return handoff{dropped: true, reason: "queue_capacity"}
@@ -79,6 +81,7 @@ func (q *backendQueue) enqueue(output Output) handoff {
 		q.bytes -= int64(len(q.items[index].Payload))
 		q.units -= q.items[index].Units
 		q.items = append(q.items[:index], q.items[index+1:]...)
+		evicted++
 	}
 	output.Payload = append([]byte(nil), output.Payload...)
 	q.items = append(q.items, output)
@@ -88,7 +91,7 @@ func (q *backendQueue) enqueue(output Output) handoff {
 	case q.signal <- struct{}{}:
 	default:
 	}
-	return handoff{}
+	return handoff{evicted: evicted}
 }
 
 func (q *backendQueue) pop(ctx context.Context) (Output, bool) {
@@ -124,6 +127,31 @@ func (q *backendQueue) close() {
 	case q.signal <- struct{}{}:
 	default:
 	}
+}
+
+type queueSnapshot struct {
+	utilization float64
+	oldestAge   float64
+}
+
+func (q *backendQueue) snapshotAt(now time.Time) queueSnapshot {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return queueSnapshot{}
+	}
+	itemRatio := float64(q.units) / float64(q.config.MaxItems)
+	byteRatio := float64(q.bytes) / float64(q.config.MaxBytes)
+	utilization := itemRatio
+	if byteRatio > utilization {
+		utilization = byteRatio
+	}
+	oldest := q.items[oldestIndex(q.items)].ReceivedAt
+	oldestAge := now.Sub(oldest).Seconds()
+	if oldestAge < 0 {
+		oldestAge = 0
+	}
+	return queueSnapshot{utilization: utilization, oldestAge: oldestAge}
 }
 
 func (q *backendQueue) evictionIndex() int {

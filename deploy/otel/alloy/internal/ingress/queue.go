@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -12,12 +13,9 @@ import (
 var ErrInvalidQueueCapacity = errors.New("otel ingress: invalid queue capacity")
 
 type Envelope struct {
-	TraceID         string
-	Payload         []byte
-	ContentType     string
 	SamplingRatePPM uint32
 	ReceivedAt      time.Time
-	Span            redaction.RedactedSpan
+	Spans           []redaction.RedactedSpan
 }
 
 type IngressQueue struct {
@@ -36,15 +34,37 @@ func NewIngressQueue(capacity int) (*IngressQueue, error) {
 func (q *IngressQueue) Enqueue(envelope Envelope) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.closed {
+	if q.closed || len(q.items) == cap(q.items) {
 		return false
 	}
-	select {
-	case q.items <- envelope:
-		return true
-	default:
-		return false
+	q.items <- cloneEnvelope(envelope)
+	return true
+}
+
+func cloneEnvelope(envelope Envelope) Envelope {
+	cloned := Envelope{
+		SamplingRatePPM: envelope.SamplingRatePPM,
+		ReceivedAt:      envelope.ReceivedAt,
+		Spans:           make([]redaction.RedactedSpan, len(envelope.Spans)),
 	}
+	for index, span := range envelope.Spans {
+		cloned.Spans[index] = cloneRedactedSpan(span)
+	}
+	return cloned
+}
+
+func cloneRedactedSpan(span redaction.RedactedSpan) redaction.RedactedSpan {
+	span.Attributes = cloneRawAttributes(span.Attributes)
+	span.ResourceAttributes = cloneRawAttributes(span.ResourceAttributes)
+	return span
+}
+
+func cloneRawAttributes(attributes map[string]json.RawMessage) map[string]json.RawMessage {
+	cloned := make(map[string]json.RawMessage, len(attributes))
+	for key, value := range attributes {
+		cloned[key] = append(json.RawMessage(nil), value...)
+	}
+	return cloned
 }
 
 func (q *IngressQueue) Dequeue(ctx context.Context) (Envelope, bool) {
@@ -58,6 +78,14 @@ func (q *IngressQueue) Dequeue(ctx context.Context) (Envelope, bool) {
 
 func (q *IngressQueue) Items() <-chan Envelope {
 	return q.items
+}
+
+func (q *IngressQueue) Len() int {
+	return len(q.items)
+}
+
+func (q *IngressQueue) Capacity() int {
+	return cap(q.items)
 }
 
 func (q *IngressQueue) Close() {

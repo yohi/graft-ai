@@ -49,6 +49,7 @@ func EncodeMetrics(normalized metrics.NormalizedMetrics, startTime, endTime uint
 type aggregatedSample struct {
 	Name         string
 	Labels       map[string]string
+	Kind         metrics.MetricKind
 	Buckets      []float64
 	Value        float64
 	Count        uint64
@@ -59,16 +60,31 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, error
 	groups := make(map[string]*aggregatedSample)
 	var order []string
 	for _, sample := range samples {
+		if sample.Kind == metrics.Gauge {
+			if len(sample.Buckets) != 0 {
+				return nil, fmt.Errorf("metric %q gauge cannot have buckets", sample.Name)
+			}
+			if math.IsNaN(sample.Value) || math.IsInf(sample.Value, 0) {
+				return nil, fmt.Errorf("metric %q has non-finite gauge", sample.Name)
+			}
+		}
+
 		key := sampleKey(sample)
 		group, ok := groups[key]
 		if !ok {
 			group = &aggregatedSample{
 				Name:    sample.Name,
 				Labels:  sample.Labels,
+				Kind:    sample.Kind,
 				Buckets: sample.Buckets,
 			}
 			groups[key] = group
 			order = append(order, key)
+		}
+		if sample.Kind == metrics.Gauge {
+			group.Value = sample.Value
+			group.Count = 1
+			continue
 		}
 		if len(sample.Buckets) == 0 {
 			group.Value += sample.Value
@@ -101,7 +117,7 @@ func aggregateSamples(samples []metrics.MetricSample) ([]aggregatedSample, error
 }
 
 func sampleKey(sample metrics.MetricSample) string {
-	return sample.Name + "\x00" + labelsKey(sample.Labels)
+	return sample.Name + "\x00" + string(rune(sample.Kind)) + "\x00" + labelsKey(sample.Labels)
 }
 
 func labelsKey(labels map[string]string) string {
@@ -129,6 +145,19 @@ func metricProto(sample aggregatedSample, startTime, endTime uint64) (*metricspb
 	sort.Strings(keys)
 	for _, key := range keys {
 		labels = append(labels, &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: sample.Labels[key]}}})
+	}
+	if sample.Kind == metrics.Gauge {
+		return &metricspb.Metric{
+			Name: sample.Name,
+			Unit: "1",
+			Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+				DataPoints: []*metricspb.NumberDataPoint{{
+					Attributes:   labels,
+					TimeUnixNano: endTime,
+					Value:        &metricspb.NumberDataPoint_AsDouble{AsDouble: sample.Value},
+				}},
+			}},
+		}, nil
 	}
 	if len(sample.Buckets) == 0 {
 		return &metricspb.Metric{

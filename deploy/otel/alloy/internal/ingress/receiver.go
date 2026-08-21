@@ -121,47 +121,41 @@ func (r *Receiver) ServeHTTP(writer http.ResponseWriter, request *http.Request) 
 		if isBodyTimeout(request, err) {
 			r.reject(writer, http.StatusRequestTimeout, "timeout")
 		} else {
+			r.metrics.SizeDrop()
 			r.reject(writer, http.StatusRequestEntityTooLarge, "body_size")
 		}
 		return
 	}
+	r.metrics.RequestBytes(len(body))
 	spans, err := decodeSpans(body, contentType)
 	if err != nil {
 		r.reject(writer, http.StatusBadRequest, "parse")
 		return
 	}
 
-	var accepted int
+	redactedSpans := make([]redaction.RedactedSpan, 0, len(spans))
+	receivedAt := r.now()
 	for _, span := range spans {
 		redacted, _ := r.redactor.Redact(span)
-		payload, marshalErr := json.Marshal(redacted.Attributes)
-		if marshalErr != nil {
-			payload = []byte("{}")
-		}
-		envelope := Envelope{
-			TraceID:         redacted.TraceID,
-			Payload:         payload,
-			ContentType:     "application/json",
-			SamplingRatePPM: r.samplingRatePPM,
-			Span:            redacted,
-			ReceivedAt:      r.now(),
-		}
-		if !r.queue.Enqueue(envelope) {
-			r.metrics.CapacityDrop()
-			if accepted > 0 {
-				r.metrics.AcceptedN(accepted)
-			}
-			writer.Header().Set("X-OTel-Drop-Reason", "capacity")
-			r.accept(writer, "capacity")
-			return
-		}
-		accepted++
+		redactedSpans = append(redactedSpans, redacted)
 	}
-	if accepted == 0 {
+	if len(redactedSpans) == 0 {
 		r.accept(writer, "accepted")
 		return
 	}
-	r.metrics.AcceptedN(accepted)
+	envelope := Envelope{
+		SamplingRatePPM: r.samplingRatePPM,
+		ReceivedAt:      receivedAt,
+		Spans:           redactedSpans,
+	}
+	if !r.queue.Enqueue(envelope) {
+		r.metrics.CapacityDrop()
+		r.metrics.Accepted()
+		writer.Header().Set("X-OTel-Drop-Reason", "capacity")
+		r.accept(writer, "capacity")
+		return
+	}
+	r.metrics.Accepted()
 	r.accept(writer, "accepted")
 }
 
@@ -178,6 +172,10 @@ func isBodyTimeout(request *http.Request, err error) bool {
 
 func (r *Receiver) Metrics() MetricsSnapshot {
 	return r.metrics.Snapshot()
+}
+
+func (r *Receiver) ActiveRequests() int {
+	return len(r.concurrency)
 }
 
 func (r *Receiver) reject(writer http.ResponseWriter, status int, reason string) {

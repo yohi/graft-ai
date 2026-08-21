@@ -22,11 +22,19 @@ type MetricSample struct {
 	Name              string
 	Value             float64
 	Labels            map[string]string
+	Kind              MetricKind
 	Buckets           []float64
 	BucketCounts      []uint64
 	Count             uint64
 	TimestampUnixNano uint64
 }
+
+type MetricKind uint8
+
+const (
+	Sum MetricKind = iota
+	Gauge
+)
 
 type NormalizedMetrics struct {
 	Samples []MetricSample

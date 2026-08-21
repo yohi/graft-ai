@@ -101,6 +101,7 @@ func addIngressMetrics(accumulator *metrics.Accumulator, current, previous ingre
 	addCounterMetric(accumulator, "otel_ingress_request_bytes_total", current.RequestBytes, previous.RequestBytes, nil)
 	addCounterMetric(accumulator, "otel_ingress_rate_limited_total", current.RateLimited, previous.RateLimited, nil)
 	addCounterMetric(accumulator, "otel_ingress_queue_dropped_total", current.CapacityDrops, previous.CapacityDrops, map[string]string{"reason": "capacity"})
+	addCounterMetric(accumulator, "otel_ingress_queue_dropped_total", current.SizeDrops, previous.SizeDrops, map[string]string{"reason": "size"})
 	for reason, value := range current.Rejections {
 		addCounterMetric(accumulator, "otel_ingress_rejections_total", value, previous.Rejections[reason], map[string]string{"reason": reason})
 	}

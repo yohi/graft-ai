@@ -69,7 +69,16 @@ test("OTel dashboard keeps separate datasources and canonical panels", () => {
   assert.equal(recentTraces.targets?.[0]?.limit, 20);
   assert.equal(recentTraces.targets?.[0]?.datasource?.uid, "otel-tempo");
   const serialized = JSON.stringify(dashboard);
-  assert.doesNotMatch(serialized, /(?:Bearer\s|sk-|api[_-]?key|password\s*[:=])/i);
+  const sensitiveFieldPattern =
+    /(?:Bearer\s|sk-|api[_-]?key|password\s*[:=]|"(?:password|authorization|token|secret|clientSecret)"\s*:)/i;
+  assert.doesNotMatch(serialized, sensitiveFieldPattern);
+  for (const field of ["Authorization", "token", "secret", "clientSecret"]) {
+    assert.match(
+      JSON.stringify({ panels: [{ datasource: { credentials: { [field]: "opaque" } } }] }),
+      sensitiveFieldPattern,
+      `nested ${field} field must be detected`,
+    );
+  }
   assert.match(datasources, /filterByTraceID: true/);
   assert.match(datasources, /spanStartTimeShift: -5m/);
   assert.match(datasources, /spanEndTimeShift: 5m/);

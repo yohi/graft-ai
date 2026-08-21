@@ -9,12 +9,20 @@ import {
   contentTypeForOtelEncoding,
   resolveOtelEncoding,
 } from "../deploy/otel/contracts/encoding.mjs";
+import {
+  extractPrometheusRetentionValues,
+  hasCanonicalPrometheusRetention,
+} from "../scripts/verify-otel-config.mjs";
 
 const contracts = JSON.parse(
   readFileSync(
     new URL("../deploy/otel/contracts/contracts.json", import.meta.url),
     "utf8",
   ),
+);
+const compose = readFileSync(
+  new URL("../deploy/otel/docker-compose.yml", import.meta.url),
+  "utf8",
 );
 const sampling = JSON.parse(
   readFileSync(
@@ -235,4 +243,50 @@ test("keeps retention duration parsing bounded to positive fourteen days", () =>
   const validDurations = [1, 14].map((days) => days * dayMs);
   assert.deepEqual(validDurations, [dayMs, 14 * dayMs]);
   assert.equal(contracts.retention.maxPayloadRetentionDays * dayMs, 14 * dayMs);
+});
+
+test("pins self-hosted Prometheus retention to one fourteen-day command flag", () => {
+  assert.deepEqual(extractPrometheusRetentionValues(compose), ["14d"]);
+  assert.equal(hasCanonicalPrometheusRetention(compose), true);
+});
+
+test("detects invalid or multiple self-hosted Prometheus retention flags", () => {
+  const canonicalFlag = "--storage.tsdb.retention.time=14d";
+  const invalidValue = compose.replace(
+    canonicalFlag,
+    "--storage.tsdb.retention.time=30d",
+  );
+  const malformedValue = compose.replace(
+    canonicalFlag,
+    "--storage.tsdb.retention.time=14days",
+  );
+  const duplicateValue = compose.replace(
+    canonicalFlag,
+    `${canonicalFlag}\n      - ${canonicalFlag}`,
+  );
+  const conflictingValues = compose.replace(
+    canonicalFlag,
+    `${canonicalFlag}\n      - --storage.tsdb.retention.time=30d`,
+  );
+
+  assert.deepEqual(extractPrometheusRetentionValues(invalidValue), ["30d"]);
+  assert.deepEqual(extractPrometheusRetentionValues(malformedValue), [
+    "14days",
+  ]);
+  assert.deepEqual(extractPrometheusRetentionValues(duplicateValue), [
+    "14d",
+    "14d",
+  ]);
+  assert.deepEqual(extractPrometheusRetentionValues(conflictingValues), [
+    "14d",
+    "30d",
+  ]);
+  for (const invalidCompose of [
+    invalidValue,
+    malformedValue,
+    duplicateValue,
+    conflictingValues,
+  ]) {
+    assert.equal(hasCanonicalPrometheusRetention(invalidCompose), false);
+  }
 });

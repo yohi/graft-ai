@@ -4,6 +4,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 const root = resolve(import.meta.dirname, "..");
+const datasources = readFileSync(
+  resolve(root, "deploy/otel/config/grafana/provisioning/datasources/datasources.yaml"),
+  "utf8",
+);
 
 test("OTel dashboard keeps separate datasources and canonical panels", () => {
   const dashboard = JSON.parse(
@@ -11,7 +15,16 @@ test("OTel dashboard keeps separate datasources and canonical panels", () => {
   ).dashboard;
   assert.equal(dashboard.uid, "graft-ai-otel-observability");
   const titles = new Set(dashboard.panels.map((panel) => panel.title));
-  for (const title of ["Total Requests", "Error Rate", "Request Duration", "Redacted Payload Logs"]) {
+  for (const title of [
+    "Total Requests",
+    "Error Rate",
+    "Request Duration",
+    "Input Tokens",
+    "Output Tokens",
+    "Estimated Cost",
+    "Recent Traces",
+    "Sampling & Payload Safety",
+  ]) {
     assert.ok(titles.has(title), `missing panel ${title}`);
   }
   const expectedByTitle = {
@@ -27,8 +40,8 @@ test("OTel dashboard keeps separate datasources and canonical panels", () => {
       datasourceUid: "otel-prometheus",
       targetDatasourceUid: null,
     },
-    "Redacted Payload Logs": {
-      datasourceUid: "otel-loki",
+    "Recent Traces": {
+      datasourceUid: "otel-tempo",
       targetDatasourceUid: null,
     },
   };
@@ -48,6 +61,25 @@ test("OTel dashboard keeps separate datasources and canonical panels", () => {
       );
     }
   }
+  const recentTraces = dashboard.panels.find((panel) => panel.title === "Recent Traces");
+  assert.equal(recentTraces.type, "traces");
+  assert.equal(recentTraces.targets?.[0]?.queryType, "traceql");
+  assert.equal(recentTraces.targets?.[0]?.tableType, "traces");
+  assert.match(recentTraces.targets?.[0]?.query ?? "", /graft_ai\.request_span/);
+  assert.equal(recentTraces.targets?.[0]?.limit, 20);
+  assert.equal(recentTraces.targets?.[0]?.datasource?.uid, "otel-tempo");
   const serialized = JSON.stringify(dashboard);
-  assert.doesNotMatch(serialized, /(?:Bearer |sk-|api[_-]?key|password|token)/i);
+  const sensitiveFieldPattern =
+    /(?:Bearer\s|sk-|api[_-]?key|password\s*[:=]|"(?:password|authorization|token|secret|clientSecret)"\s*:)/i;
+  assert.doesNotMatch(serialized, sensitiveFieldPattern);
+  for (const field of ["Authorization", "token", "secret", "clientSecret"]) {
+    assert.match(
+      JSON.stringify({ panels: [{ datasource: { credentials: { [field]: "opaque" } } }] }),
+      sensitiveFieldPattern,
+      `nested ${field} field must be detected`,
+    );
+  }
+  assert.match(datasources, /filterByTraceID: true/);
+  assert.match(datasources, /spanStartTimeShift: -5m/);
+  assert.match(datasources, /spanEndTimeShift: 5m/);
 });

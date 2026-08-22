@@ -63,7 +63,9 @@ TAIL_WRANGLER="${WORKERS_DIR}/wrangler.tail.jsonc"
 OLLAMA_WRANGLER="${WORKERS_DIR}/wrangler.ollama.jsonc"
 DASHBOARD_JSON="${REPO_ROOT}/grafana/dashboards/graft-ai-overview.json"
 OLLAMA_DASHBOARD_JSON="${REPO_ROOT}/grafana/dashboards/graft-ai-ollama-cloud.json"
+OTEL_DASHBOARD_JSON="${REPO_ROOT}/grafana/dashboards/graft-ai-otel.json"
 OLLAMA_ALERT_RULES_JSON="${REPO_ROOT}/grafana/alerts/graft-ai-ollama-cloud-rules.json"
+OTEL_ALERT_RULES_JSON="${REPO_ROOT}/grafana/alerts/graft-ai-otel-rules.json"
 
 echo -e """
 ${BOLD}${CYAN}
@@ -495,9 +497,25 @@ if [[ -f "$OLLAMA_DASHBOARD_JSON" ]]; then
   fi
 fi
 
-if [[ -f "$OLLAMA_ALERT_RULES_JSON" ]]; then
-  if ! jq -e 'type == "array" and length > 0' "$OLLAMA_ALERT_RULES_JSON" >/dev/null 2>&1; then
-    die "Ollama Cloud Alert Rule JSON は1件以上を含む配列である必要があります: ${OLLAMA_ALERT_RULES_JSON}"
+if [[ -f "$OTEL_DASHBOARD_JSON" ]]; then
+  OTEL_IMPORT_RESULT=$(gcx api /api/dashboards/db -d @"$OTEL_DASHBOARD_JSON" -o json 2>/dev/null || echo "")
+  if [[ "$(echo "$OTEL_IMPORT_RESULT" | jq -r '.status // "unknown"')" == "success" ]]; then
+    success "OTel ダッシュボードをインポートしました。"
+  else
+    warn "OTel ダッシュボードのインポートに失敗しました。"
+  fi
+fi
+
+for ALERT_RULES_JSON in "$OLLAMA_ALERT_RULES_JSON" "$OTEL_ALERT_RULES_JSON"; do
+  [[ -f "$ALERT_RULES_JSON" ]] || continue
+
+  ALERT_RULES_LABEL="Ollama Cloud"
+  if [[ "$ALERT_RULES_JSON" == "$OTEL_ALERT_RULES_JSON" ]]; then
+    ALERT_RULES_LABEL="OTel"
+  fi
+
+  if ! jq -e 'type == "array" and length > 0' "$ALERT_RULES_JSON" >/dev/null 2>&1; then
+    die "${ALERT_RULES_LABEL} Alert Rule JSON は1件以上を含む配列である必要があります: ${ALERT_RULES_JSON}"
   fi
 
   if ! GCX_ORG_ID=$(gcx api /api/org/ -o json 2>/dev/null | jq -er '.id'); then
@@ -509,7 +527,7 @@ if [[ -f "$OLLAMA_ALERT_RULES_JSON" ]]; then
     rule=$(jq --argjson orgId "$GCX_ORG_ID" '.orgId = $orgId' <<< "$rule")
     rule_uid=$(jq -r '.uid // empty' <<< "$rule")
     if [[ -z "$rule_uid" ]]; then
-      warn "Ollama Cloud Alert Rule に uid がないため登録をスキップします。"
+      warn "${ALERT_RULES_LABEL} Alert Rule に uid がないため登録をスキップします。"
       continue
     fi
 
@@ -520,12 +538,12 @@ if [[ -f "$OLLAMA_ALERT_RULES_JSON" ]]; then
     fi
 
     if gcx api "${api_args[@]}" -d "$rule" -o json >/dev/null 2>&1; then
-      success "Ollama Cloud Alert Rule を登録しました。"
+      success "${ALERT_RULES_LABEL} Alert Rule を登録しました。"
     else
-      warn "Ollama Cloud Alert Rule の登録に失敗しました。Grafana Alerting API を確認してください。"
+      warn "${ALERT_RULES_LABEL} Alert Rule の登録に失敗しました。Grafana Alerting API を確認してください。"
     fi
-  done < <(jq -c '.[]' "$OLLAMA_ALERT_RULES_JSON")
-fi
+  done < <(jq -c '.[]' "$ALERT_RULES_JSON")
+done
 
 # =============================================================================
 # 完了サマリー

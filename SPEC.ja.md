@@ -149,11 +149,14 @@ Worker は `progress_ratio = remainder / interval`、
 自己ホスト構成は `deploy/otel/docker-compose.yml` を使用し、Grafana Cloud
 export は `deploy/otel/docker-compose.grafana-cloud.yml` を override として重ねます。
 Cloud endpoint と `Authorization` header は環境変数から渡し、commit 済みの Compose
-ファイルには credential を埋め込みません。Grafana Cloud Access Policy には
-`logs:write`、`metrics:write`、`traces:write` が必要です。Dashboard と alert の
-デプロイ時は `GRAFANA_PROMETHEUS_DATASOURCE_UID`、
-`GRAFANA_LOKI_DATASOURCE_UID`、`GRAFANA_TEMPO_DATASOURCE_UID` で datasource UID
-だけを置換し、expression datasource の `-100` と無関係な UID は保持します。
+ファイルには credential を埋め込みません。Grafana Cloud の telemetry 用 Access
+Policy には `logs:write`、`metrics:write`、`traces:write` が必要です。Loki の
+Logpush/Tail Worker には `logs:write` だけを持つ別のAccess Policyを使用します。
+Dashboard と alert のデプロイ時は `GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID`、
+`GRAFANA_OTEL_LOKI_DATASOURCE_UID`、`GRAFANA_OTEL_TEMPO_DATASOURCE_UID` で
+datasource UIDだけを置換します。`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` の
+場合は3つすべてをGrafana API呼び出し前に必須とし、expression datasourceの
+`-100` と無関係な UID は保持します。
 
 **アラート:** Grafana アラートルール
 （`grafana/alerts/graft-ai-ollama-cloud-rules.json`）は、

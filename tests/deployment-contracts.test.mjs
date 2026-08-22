@@ -11,6 +11,18 @@ const deploy = readFileSync(
 );
 const makefile = readFileSync(resolve(root, "Makefile"), "utf8");
 const setup = readFileSync(resolve(root, "scripts/setup.sh"), "utf8");
+const grafanaMain = readFileSync(
+  resolve(root, "terraform/grafana/main.tf"),
+  "utf8",
+);
+const grafanaReadme = readFileSync(
+  resolve(root, "terraform/grafana/README.md"),
+  "utf8",
+);
+const tfApplyGrafana = readFileSync(
+  resolve(root, "scripts/tf-apply-grafana.sh"),
+  "utf8",
+);
 const alerts = JSON.parse(
   readFileSync(
     resolve(root, "grafana/alerts/graft-ai-otel-rules.json"),
@@ -48,4 +60,73 @@ test("Grafana deployment surfaces publish the OTel alert rules", () => {
   assert.match(makefile, /deploy-alert-rules:/);
   assert.match(setup, /graft-ai-otel\.json/);
   assert.match(setup, /graft-ai-otel-rules\.json/);
+});
+
+test("Grafana Cloud deployment uses OTEL datasource variables in required mode", () => {
+  assert.equal(
+    (deploy.match(/GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED/g) ?? []).length,
+    2,
+  );
+  for (const name of [
+    "GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID",
+    "GRAFANA_OTEL_LOKI_DATASOURCE_UID",
+    "GRAFANA_OTEL_TEMPO_DATASOURCE_UID",
+  ]) {
+    assert.match(deploy, new RegExp(name));
+  }
+  assert.doesNotMatch(
+    deploy,
+    /GRAFANA_(PROMETHEUS|LOKI|TEMPO)_DATASOURCE_UID(?!S_REQUIRED)/,
+  );
+});
+
+test("Terraform separates the Loki-only token from the telemetry token", () => {
+  const lokiPolicyStart = grafanaMain.indexOf(
+    'resource "grafana_cloud_access_policy" "loki_ingest"',
+  );
+  const lokiTokenStart = grafanaMain.indexOf(
+    'resource "grafana_cloud_access_policy_token" "loki_ingest"',
+  );
+  assert.ok(lokiPolicyStart >= 0);
+  assert.ok(lokiTokenStart > lokiPolicyStart);
+
+  const lokiPolicy = grafanaMain.slice(lokiPolicyStart, lokiTokenStart);
+  assert.match(lokiPolicy, /scopes\s*=\s*\["logs:write"\]/);
+  assert.doesNotMatch(lokiPolicy, /metrics:write|traces:write/);
+  assert.match(
+    grafanaMain,
+    /output "grafana_loki_write_token"[\s\S]*grafana_cloud_access_policy_token\.loki_ingest\.token/,
+  );
+  assert.match(
+    grafanaMain,
+    /output "grafana_telemetry_write_token"[\s\S]*grafana_cloud_access_policy_token\.telemetry_write\.token/,
+  );
+});
+
+test("Terraform migration and setup scripts use the current resource addresses", () => {
+  assert.match(
+    grafanaMain,
+    /moved\s*\{[\s\S]*from\s*=\s*grafana_cloud_access_policy\.loki_write[\s\S]*to\s*=\s*grafana_cloud_access_policy\.telemetry_write[\s\S]*\}/,
+  );
+  assert.match(
+    grafanaMain,
+    /moved\s*\{[\s\S]*from\s*=\s*grafana_cloud_access_policy_token\.loki_write[\s\S]*to\s*=\s*grafana_cloud_access_policy_token\.telemetry_write[\s\S]*\}/,
+  );
+  assert.match(setup, /-target=grafana_cloud_access_policy\.telemetry_write/);
+  assert.match(setup, /-target=grafana_cloud_access_policy\.loki_ingest/);
+  assert.match(
+    setup,
+    /terraform output -raw grafana_loki_write_token[\s\S]*terraform output -raw grafana_telemetry_write_token/,
+  );
+  assert.doesNotMatch(setup, /-target=.*\.loki_write/);
+  assert.match(
+    grafanaReadme,
+    /terraform import grafana_cloud_access_policy\.telemetry_write/,
+  );
+  assert.match(
+    grafanaReadme,
+    /terraform import grafana_cloud_access_policy\.loki_ingest/,
+  );
+  assert.match(tfApplyGrafana, /grafana_loki_write_token/);
+  assert.match(tfApplyGrafana, /grafana_telemetry_write_token/);
 });

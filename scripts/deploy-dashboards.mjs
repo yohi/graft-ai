@@ -64,14 +64,29 @@ const DEFAULT_DATASOURCE_UIDS = Object.freeze({
  * @returns {DatasourceUids}
  */
 export function resolveGrafanaDatasourceUids(env = process.env) {
+  const configured = {
+    prometheus: env.GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID?.trim(),
+    loki: env.GRAFANA_OTEL_LOKI_DATASOURCE_UID?.trim(),
+    tempo: env.GRAFANA_OTEL_TEMPO_DATASOURCE_UID?.trim(),
+  };
+  const required =
+    env.GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED?.trim().toLowerCase() === "true";
+
+  if (required) {
+    const missing = Object.entries(configured)
+      .filter(([, uid]) => !uid)
+      .map(([signal]) => `GRAFANA_OTEL_${signal.toUpperCase()}_DATASOURCE_UID`);
+    if (missing.length > 0) {
+      throw new Error(
+        `Grafana Cloud OTel datasource UIDs are required when GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true. Missing: ${missing.join(", ")}`,
+      );
+    }
+  }
+
   return {
-    prometheus:
-      env.GRAFANA_PROMETHEUS_DATASOURCE_UID?.trim() ||
-      DEFAULT_DATASOURCE_UIDS.prometheus,
-    loki:
-      env.GRAFANA_LOKI_DATASOURCE_UID?.trim() || DEFAULT_DATASOURCE_UIDS.loki,
-    tempo:
-      env.GRAFANA_TEMPO_DATASOURCE_UID?.trim() || DEFAULT_DATASOURCE_UIDS.tempo,
+    prometheus: configured.prometheus || DEFAULT_DATASOURCE_UIDS.prometheus,
+    loki: configured.loki || DEFAULT_DATASOURCE_UIDS.loki,
+    tempo: configured.tempo || DEFAULT_DATASOURCE_UIDS.tempo,
   };
 }
 
@@ -307,7 +322,15 @@ export async function main(args = process.argv.slice(2), env = process.env) {
 
   let grafanaUrl;
   let token;
-  const datasourceUids = resolveGrafanaDatasourceUids(env);
+  let datasourceUids;
+  try {
+    datasourceUids = resolveGrafanaDatasourceUids(env);
+  } catch (err) {
+    console.error(
+      `[ERROR] ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
 
   if (!dryRun) {
     try {

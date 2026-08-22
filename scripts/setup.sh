@@ -168,15 +168,21 @@ if [[ -z "${GRAFANA_CLOUD_ACCESS_POLICY_TOKEN:-}" ]]; then
       TF_APPLY_LOG="${REPO_ROOT}/.terraform-apply.log"
       info "Terraform apply で Access Policy + Token を自動構築中..."
       if terraform apply \
-        -target=grafana_cloud_access_policy.loki_write \
-        -target=grafana_cloud_access_policy_token.loki_write \
+        -target=grafana_cloud_access_policy.telemetry_write \
+        -target=grafana_cloud_access_policy_token.telemetry_write \
+        -target=grafana_cloud_access_policy.loki_ingest \
+        -target=grafana_cloud_access_policy_token.loki_ingest \
         -input=false \
         -auto-approve >"$TF_APPLY_LOG" 2>&1; then
 
         GRAFANA_CLOUD_ACCESS_POLICY_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
+        GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN=$(terraform output -raw grafana_telemetry_write_token 2>/dev/null || echo "")
         if [[ -n "$GRAFANA_CLOUD_ACCESS_POLICY_TOKEN" ]]; then
-          success "Terraform による Access Policy Token の自動構築が完了しました。"
+          success "Terraform によるLoki/telemetry用 Access Policy Token の自動構築が完了しました。"
           export GRAFANA_CLOUD_ACCESS_POLICY_TOKEN
+          if [[ -n "$GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN" ]]; then
+            export GRAFANA_CLOUD_PROMETHEUS_ACCESS_POLICY_TOKEN
+          fi
         else
           warn "Terraform は成功しましたが、トークンを出力できませんでした。"
         fi

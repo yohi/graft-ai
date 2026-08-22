@@ -220,7 +220,15 @@ export async function main(args = process.argv.slice(2), env = process.env) {
 
   let grafanaUrl;
   let token;
-  const datasourceUids = resolveGrafanaDatasourceUids(env);
+  let datasourceUids;
+  try {
+    datasourceUids = resolveGrafanaDatasourceUids(env);
+  } catch (error) {
+    console.error(
+      `[ERROR] ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
   if (!parsed.dryRun) {
     try {
       grafanaUrl = resolveGrafanaUrl(env);

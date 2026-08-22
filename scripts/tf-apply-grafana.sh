@@ -75,10 +75,12 @@ cd "$REPO_ROOT/terraform/grafana"
 info "Running terraform init..."
 terraform init -input=false
 
-info "Running terraform apply (Grafana Access Policy + Token)..."
+info "Running terraform apply (Grafana telemetry and Loki policies + tokens)..."
 terraform apply \
   -target=grafana_cloud_access_policy.telemetry_write \
   -target=grafana_cloud_access_policy_token.telemetry_write \
+  -target=grafana_cloud_access_policy.loki_ingest \
+  -target=grafana_cloud_access_policy_token.loki_ingest \
   -auto-approve
 
 ###############################################################################
@@ -88,7 +90,8 @@ info "Reading Terraform outputs..."
 
 LOKI_URL=$(terraform output -raw grafana_loki_url       2>/dev/null || echo "")
 LOKI_USER=$(terraform output -raw grafana_loki_username  2>/dev/null || echo "")
-LOKI_TOKEN=$(terraform output -raw grafana_access_policy_token 2>/dev/null || echo "")
+LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
+TELEMETRY_TOKEN=$(terraform output -raw grafana_telemetry_write_token 2>/dev/null || echo "")
 PROM_URL=$(terraform output -raw grafana_prometheus_url 2>/dev/null || echo "")
 PROM_USER=$(terraform output -raw grafana_prometheus_username 2>/dev/null || echo "")
 OTLP_URL=$(terraform output -raw grafana_otlp_url 2>/dev/null || echo "")
@@ -96,13 +99,15 @@ OTLP_URL=$(terraform output -raw grafana_otlp_url 2>/dev/null || echo "")
 printf '::add-mask::%s\n' "$LOKI_URL"
 printf '::add-mask::%s\n' "$LOKI_USER"
 printf '::add-mask::%s\n' "$LOKI_TOKEN"
+printf '::add-mask::%s\n' "$TELEMETRY_TOKEN"
 printf '::add-mask::%s\n' "$PROM_URL"
 printf '::add-mask::%s\n' "$PROM_USER"
 printf '::add-mask::%s\n' "$OTLP_URL"
 
 [[ -z "$LOKI_URL"   ]] && die "Could not read grafana_loki_url from Terraform output."
 [[ -z "$LOKI_USER"  ]] && die "Could not read grafana_loki_username from Terraform output."
-[[ -z "$LOKI_TOKEN" ]] && die "Could not read grafana_access_policy_token from Terraform output."
+[[ -z "$LOKI_TOKEN" ]] && die "Could not read grafana_loki_write_token from Terraform output."
+[[ -z "$TELEMETRY_TOKEN" ]] && die "Could not read grafana_telemetry_write_token from Terraform output."
 
 success "Grafana output retrieved."
 
@@ -120,10 +125,10 @@ echo "$LOKI_USER"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA
 echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN  --config wrangler.jsonc
 
 if [[ -f wrangler.ollama.jsonc ]]; then
-  echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
+  echo "$TELEMETRY_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
 fi
 if [[ -f wrangler.provider-metrics.jsonc ]]; then
-  echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
+  echo "$TELEMETRY_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
 fi
 
 success "Secrets updated on Workers."

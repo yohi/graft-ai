@@ -4,6 +4,7 @@ import {
   prepareDashboardPayload,
   resolveGrafanaUrl,
   resolveGrafanaToken,
+  resolveGrafanaDatasourceUids,
   deployDashboard,
   parseCliArgs,
   main,
@@ -84,6 +85,85 @@ test("resolveGrafanaToken resolves from available token env vars", () => {
 
 test("resolveGrafanaToken throws when no token is present", () => {
   assert.throws(() => resolveGrafanaToken({}), /Grafana token is missing/);
+});
+
+test("resolveGrafanaDatasourceUids reads and trims Grafana Cloud OTel UID variables", () => {
+  assert.deepEqual(
+    resolveGrafanaDatasourceUids({
+      GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: "  cloud-prom  ",
+      GRAFANA_OTEL_LOKI_DATASOURCE_UID: "cloud-loki",
+      GRAFANA_OTEL_TEMPO_DATASOURCE_UID: " cloud-tempo",
+    }),
+    {
+      prometheus: "cloud-prom",
+      loki: "cloud-loki",
+      tempo: "cloud-tempo",
+    },
+  );
+});
+
+test("resolveGrafanaDatasourceUids preserves self-hosted defaults when required mode is disabled", () => {
+  assert.deepEqual(resolveGrafanaDatasourceUids({}), {
+    prometheus: "otel-prometheus",
+    loki: "otel-loki",
+    tempo: "otel-tempo",
+  });
+  assert.deepEqual(
+    resolveGrafanaDatasourceUids({
+      GRAFANA_OTEL_LOKI_DATASOURCE_UID: " cloud-loki ",
+      GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED: "false",
+    }),
+    {
+      prometheus: "otel-prometheus",
+      loki: "cloud-loki",
+      tempo: "otel-tempo",
+    },
+  );
+});
+
+test("resolveGrafanaDatasourceUids rejects partial required-mode configuration", () => {
+  assert.throws(
+    () =>
+      resolveGrafanaDatasourceUids({
+        GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED: "true",
+        GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: "cloud-prom",
+        GRAFANA_OTEL_LOKI_DATASOURCE_UID: " ",
+        GRAFANA_OTEL_TEMPO_DATASOURCE_UID: "cloud-tempo",
+      }),
+    /Grafana Cloud OTel datasource UIDs are required.*GRAFANA_OTEL_LOKI_DATASOURCE_UID/s,
+  );
+});
+
+test("main fails required-mode UID validation before any Grafana API call", async () => {
+  let fetchCalls = 0;
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const errors = [];
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("fetch must not be called");
+  };
+  console.error = (message) => errors.push(String(message));
+
+  try {
+    const exitCode = await main(["grafana/dashboards/graft-ai-overview.json"], {
+      GRAFANA_URL: "https://grafana.example",
+      GRAFANA_API_KEY: "test-token",
+      GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED: "true",
+      GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: "cloud-prom",
+      GRAFANA_OTEL_LOKI_DATASOURCE_UID: "cloud-loki",
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(fetchCalls, 0);
+    assert.match(
+      errors.join("\n"),
+      /Grafana Cloud OTel datasource UIDs are required/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
 });
 
 test("deployDashboard supports dry-run mode without making HTTP requests", async () => {

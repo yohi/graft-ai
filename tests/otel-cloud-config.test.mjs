@@ -16,9 +16,9 @@ test("resolves self-hosted datasource UID defaults and Cloud overrides", () => {
   });
   assert.deepEqual(
     resolveGrafanaDatasourceUids({
-      GRAFANA_PROMETHEUS_DATASOURCE_UID: "grafanacloud-prom",
-      GRAFANA_LOKI_DATASOURCE_UID: "grafanacloud-logs",
-      GRAFANA_TEMPO_DATASOURCE_UID: "grafanacloud-traces",
+      GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: "grafanacloud-prom",
+      GRAFANA_OTEL_LOKI_DATASOURCE_UID: "grafanacloud-logs",
+      GRAFANA_OTEL_TEMPO_DATASOURCE_UID: "grafanacloud-traces",
     }),
     {
       prometheus: "grafanacloud-prom",

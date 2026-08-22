@@ -21,11 +21,11 @@ the Grafana Cloud workflow supplies all three Cloud UIDs. If Cloud deployment
 is enabled without the three overrides, the deployment scripts fail before
 calling Grafana's API.
 
-Extend the Terraform-managed Cloud Access Policy from `logs:write` and
-`metrics:write` to include `traces:write`. The same least-privilege token can
-then authenticate the three telemetry ingestion paths. Grafana alert
-provisioning remains separate and uses a Grafana Service Account token with
-alert provisioning permissions.
+Extend the Terraform-managed telemetry Cloud Access Policy from `logs:write`
+and `metrics:write` to include `traces:write`. Keep the Loki Logpush/Tail
+token separate and limited to `logs:write`; the telemetry token authenticates
+OTel traces, logs, and metrics. Grafana alert provisioning remains separate
+and uses a Grafana Service Account token with alert provisioning permissions.
 
 ## Data flow
 

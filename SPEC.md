@@ -143,11 +143,15 @@ synthetic OTLP request and verifies all three internal backend APIs.
 Grafana Cloud export uses `deploy/otel/docker-compose.grafana-cloud.yml` as an
 override. It replaces the three Alloy backend endpoints and requires external
 `Authorization` headers through environment interpolation; credentials must
-not be embedded in committed Compose files. The Grafana Cloud Access Policy
-must include `logs:write`, `metrics:write`, and `traces:write`. Dashboard and
-alert deployment replaces only the self-hosted datasource references through
-the `GRAFANA_{PROMETHEUS,LOKI,TEMPO}_DATASOURCE_UID` environment variables;
-expression datasource UID `-100` and unrelated UIDs remain unchanged.
+not be embedded in committed Compose files. The Grafana Cloud telemetry Access
+Policy must include `logs:write`, `metrics:write`, and `traces:write`. Loki
+Logpush and Tail Workers use a separate Access Policy limited to `logs:write`.
+Dashboard and alert deployment replaces only the self-hosted datasource
+references through the
+`GRAFANA_OTEL_{PROMETHEUS,LOKI,TEMPO}_DATASOURCE_UID` environment variables;
+when `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true`, all three must be configured
+before any Grafana API call. Expression datasource UID `-100` and unrelated
+UIDs remain unchanged.
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 

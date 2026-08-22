@@ -75,6 +75,53 @@ test("deploys existing alert rules with PUT and new rules with POST", async () =
   assert.equal(calls[2].options.headers.Authorization, "Bearer test-token");
 });
 
+test("uses a fresh timeout for each request during a slow deployment", async () => {
+  const calls = [];
+  const requestDelayMs = 10;
+  const timeoutMs = 30;
+  const fetchImpl = (url, options = {}) =>
+    new Promise((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(options.signal?.reason ?? new Error("request aborted"));
+      };
+      const timer = setTimeout(() => {
+        options.signal?.removeEventListener("abort", onAbort);
+        calls.push({ url, options });
+        const value = url.endsWith("/api/org/")
+          ? { id: 42 }
+          : url.endsWith("/api/v1/provisioning/alert-rules") &&
+              options.method === "GET"
+            ? []
+            : {};
+        resolve(jsonResponse(value));
+      }, requestDelayMs);
+
+      if (options.signal?.aborted) {
+        onAbort();
+      } else {
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+
+  const result = await deployAlertRuleFile(
+    "grafana/alerts/graft-ai-otel-rules.json",
+    {
+      grafanaUrl: "https://grafana.example",
+      token: "test-token",
+      fetchImpl,
+      timeoutMs,
+    },
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(calls.length, 6);
+  assert.equal(
+    new Set(calls.map(({ options }) => options.signal)).size,
+    calls.length,
+  );
+});
+
 function jsonResponse(value, status = 200) {
   return {
     ok: status >= 200 && status < 300,

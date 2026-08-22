@@ -103,7 +103,7 @@ export async function deployAlertRuleFile(filePath, options = {}) {
   const token = options.token || resolveGrafanaToken();
   const fetchFn = options.fetchImpl || globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const signal = options.signal ?? AbortSignal.timeout(timeoutMs);
+  const requestSignal = () => options.signal ?? AbortSignal.timeout(timeoutMs);
   const headers = {
     Accept: "application/json",
     Authorization: `Bearer ${token}`,
@@ -113,7 +113,7 @@ export async function deployAlertRuleFile(filePath, options = {}) {
   const org = await requestJson(fetchFn, `${grafanaUrl}/api/org/`, {
     method: "GET",
     headers,
-    signal,
+    signal: requestSignal(),
   });
   const orgId =
     org && typeof org === "object" && !Array.isArray(org) && "id" in org
@@ -127,7 +127,7 @@ export async function deployAlertRuleFile(filePath, options = {}) {
   const existing = await requestJson(fetchFn, rulesEndpoint, {
     method: "GET",
     headers,
-    signal,
+    signal: requestSignal(),
   });
   if (!Array.isArray(existing)) {
     throw new Error("Grafana alert rule response was not an array");
@@ -149,7 +149,7 @@ export async function deployAlertRuleFile(filePath, options = {}) {
     await requestJson(fetchFn, endpoint, {
       method,
       headers,
-      signal,
+      signal: requestSignal(),
       body: JSON.stringify(prepareAlertRule(rule, orgId)),
     });
     deployed.push({ uid: rule.uid, method });

@@ -58,6 +58,17 @@ on the internal network. Create the local secret files under
 stack. Run `make otel-validate` for static checks and `make otel-smoke` for the
 local synthetic end-to-end smoke test.
 
+For Grafana Cloud OTel export, use
+[`deploy/otel/docker-compose.grafana-cloud.yml`](./deploy/otel/docker-compose.grafana-cloud.yml)
+as a second Compose file. Set the three Cloud endpoints and their
+`Authorization` headers through an untracked environment file or secret
+manager; never put tokens in Compose YAML. The Terraform Grafana module
+creates one Access Policy with `logs:write`, `metrics:write`, and `traces:write`.
+Set these production environment variables to the actual Grafana Cloud
+datasource UIDs before running the dashboard workflow:
+`GRAFANA_PROMETHEUS_DATASOURCE_UID`, `GRAFANA_LOKI_DATASOURCE_UID`, and
+`GRAFANA_TEMPO_DATASOURCE_UID`.
+
 ### Scheduled Workers
 
 | Worker | Trigger | Responsibility |

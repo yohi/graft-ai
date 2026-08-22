@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  resolveGrafanaDatasourceUids,
   resolveGrafanaToken,
   resolveGrafanaUrl,
+  rewriteGrafanaDatasourceUids,
 } from "./deploy-dashboards.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -66,8 +68,11 @@ export function parseAlertRules(input) {
  * @param {number} orgId
  * @returns {object}
  */
-export function prepareAlertRule(rule, orgId) {
-  return { ...rule, orgId };
+export function prepareAlertRule(rule, orgId, datasourceUids) {
+  const prepared = { ...rule, orgId };
+  return datasourceUids
+    ? rewriteGrafanaDatasourceUids(prepared, datasourceUids)
+    : prepared;
 }
 
 /**
@@ -75,6 +80,7 @@ export function prepareAlertRule(rule, orgId) {
  * @param {{
  *   grafanaUrl?: string,
  *   token?: string,
+ *   datasourceUids?: import("./deploy-dashboards.mjs").DatasourceUids,
  *   dryRun?: boolean,
  *   fetchImpl?: typeof fetch,
  *   timeoutMs?: number,
@@ -150,7 +156,9 @@ export async function deployAlertRuleFile(filePath, options = {}) {
       method,
       headers,
       signal: requestSignal(),
-      body: JSON.stringify(prepareAlertRule(rule, orgId)),
+      body: JSON.stringify(
+        prepareAlertRule(rule, orgId, options.datasourceUids),
+      ),
     });
     deployed.push({ uid: rule.uid, method });
   }
@@ -212,6 +220,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
 
   let grafanaUrl;
   let token;
+  const datasourceUids = resolveGrafanaDatasourceUids(env);
   if (!parsed.dryRun) {
     try {
       grafanaUrl = resolveGrafanaUrl(env);
@@ -231,6 +240,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
         grafanaUrl,
         token,
         dryRun: parsed.dryRun,
+        datasourceUids,
       });
       if (result.dryRun) {
         console.log(

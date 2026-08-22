@@ -87,9 +87,12 @@ test("resolveGrafanaToken throws when no token is present", () => {
 });
 
 test("deployDashboard supports dry-run mode without making HTTP requests", async () => {
-  const res = await deployDashboard("grafana/dashboards/graft-ai-overview.json", {
-    dryRun: true,
-  });
+  const res = await deployDashboard(
+    "grafana/dashboards/graft-ai-overview.json",
+    {
+      dryRun: true,
+    },
+  );
   assert.equal(res.success, true);
   assert.equal(res.dryRun, true);
   assert.equal(res.uid, "graft-ai-aig-overview");
@@ -119,11 +122,14 @@ test("deployDashboard sends HTTP POST to /api/dashboards/db and handles success"
     };
   };
 
-  const res = await deployDashboard("grafana/dashboards/graft-ai-overview.json", {
-    grafanaUrl: "https://my-stack.grafana.net",
-    token: "test-token",
-    fetchImpl: mockFetch,
-  });
+  const res = await deployDashboard(
+    "grafana/dashboards/graft-ai-overview.json",
+    {
+      grafanaUrl: "https://my-stack.grafana.net",
+      token: "test-token",
+      fetchImpl: mockFetch,
+    },
+  );
 
   assert.equal(capturedUrl, "https://my-stack.grafana.net/api/dashboards/db");
   assert.equal(capturedHeaders.Authorization, "Bearer test-token");
@@ -177,7 +183,10 @@ test("parseCliArgs parses --dry-run and positional arguments", () => {
 
 test("parseCliArgs rejects unsupported options", () => {
   assert.throws(() => parseCliArgs(["--dryrun"]), /Unknown option: --dryrun/);
-  assert.throws(() => parseCliArgs(["--unsupported-flag"]), /Unknown option: --unsupported-flag/);
+  assert.throws(
+    () => parseCliArgs(["--unsupported-flag"]),
+    /Unknown option: --unsupported-flag/,
+  );
 });
 
 test("main CLI runner returns 1 when unknown option like --dryrun is provided", async () => {
@@ -192,7 +201,8 @@ test("deployDashboard passes AbortSignal to fetchFn", async () => {
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ uid: "graft-ai-aig-overview", status: "success" }),
+      text: async () =>
+        JSON.stringify({ uid: "graft-ai-aig-overview", status: "success" }),
     };
   };
 

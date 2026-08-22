@@ -1,0 +1,10 @@
+services:
+  alloy:
+    environment:
+      OTEL_TEMPO_URL: ${OTEL_TEMPO_URL:?set the Grafana Cloud OTLP traces endpoint}
+      OTEL_TEMPO_AUTHORIZATION: ${OTEL_TEMPO_AUTHORIZATION:?set the Grafana Cloud traces Authorization header}
+      OTEL_LOKI_URL: ${OTEL_LOKI_URL:?set the Grafana Cloud Loki push endpoint}
+      OTEL_LOKI_AUTHORIZATION: ${OTEL_LOKI_AUTHORIZATION:?set the Grafana Cloud logs Authorization header}
+      OTEL_PROMETHEUS_URL: ${OTEL_PROMETHEUS_URL:?set the Grafana Cloud OTLP metrics endpoint}
+      OTEL_PROMETHEUS_AUTHORIZATION: ${OTEL_PROMETHEUS_AUTHORIZATION:?set the Grafana Cloud metrics Authorization header}
+    depends_on: []

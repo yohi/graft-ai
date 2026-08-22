@@ -45,6 +45,17 @@ series、50GB logs）の制約内で動作するように最適化されてい�
 - **Provider Metrics Worker:** 毎分 Codex、OpenAI API、OpenCodeGo の使用量を取得し、
   OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
 
+OTel の Grafana Cloud export では、
+[`deploy/otel/docker-compose.grafana-cloud.yml`](./deploy/otel/docker-compose.grafana-cloud.yml)
+を基底 Compose に重ねて使用します。3つの Cloud endpoint と
+`Authorization` header は未追跡の環境ファイルまたは secret manager から渡し、
+Compose YAML に token を書き込みません。Terraform の Grafana module は
+`logs:write`、`metrics:write`、`traces:write` を持つ Access Policy を作成します。
+Dashboard workflow の前に、実際の Cloud datasource UID を次の production
+environment variables に設定してください。
+`GRAFANA_PROMETHEUS_DATASOURCE_UID`、`GRAFANA_LOKI_DATASOURCE_UID`、
+`GRAFANA_TEMPO_DATASOURCE_UID`。
+
 ### スケジュール実行 Worker
 
 | Worker | Trigger | Responsibility |

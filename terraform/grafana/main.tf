@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Grafana Cloud provider — manages Access Policy + Loki write token
+# Grafana Cloud provider — manages Access Policy + telemetry write token
 # Free Tier proxy mode only (no Logpush job here)
 # ------------------------------------------------------------------------------
 
@@ -21,14 +21,14 @@ data "grafana_cloud_stack" "this" {
 }
 
 # ------------------------------------------------------------------
-# Access Policy: logs:write + metrics:write scoped to this stack
+# Access Policy: logs:write + metrics:write + traces:write scoped to this stack
 # ------------------------------------------------------------------
 resource "grafana_cloud_access_policy" "telemetry_write" {
   provider     = grafana.cloud
   region       = data.grafana_cloud_stack.this.region_slug
   name         = "graft-ai-telemetry-write"
   display_name = "graft-ai-telemetry-write"
-  scopes       = ["logs:write", "metrics:write"]
+  scopes       = ["logs:write", "metrics:write", "traces:write"]
 
   realm {
     type       = "stack"
@@ -81,7 +81,7 @@ output "grafana_otlp_url" {
 }
 
 output "grafana_access_policy_token" {
-  description = "Access Policy Token with logs:write and metrics:write"
+  description = "Access Policy Token with logs:write, metrics:write, and traces:write"
   value       = grafana_cloud_access_policy_token.telemetry_write.token
   sensitive   = true
 }

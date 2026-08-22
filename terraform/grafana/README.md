@@ -1,7 +1,8 @@
 # terraform/grafana
 
 Grafana Cloud provider module: manages the `grafana_cloud_access_policy`
-(`logs:write` scope) and its `grafana_cloud_access_policy_token`, used by the
+(`logs:write`, `metrics:write`, and `traces:write` scopes) and its
+`grafana_cloud_access_policy_token`, used by the
 Paid-plan Logpush receiver Worker to push logs to Grafana Cloud Loki.
 
 ## Terraform Cloud backend

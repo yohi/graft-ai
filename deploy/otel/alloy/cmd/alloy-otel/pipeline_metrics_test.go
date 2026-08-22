@@ -47,6 +47,7 @@ func TestAddIngressMetrics_emitsCounterDeltas(t *testing.T) {
 	assertMetricValue(t, samples, "otel_ingress_requests_total", 3, metrics.Sum, map[string]string{"status": "accepted"})
 	assertMetricValue(t, samples, "otel_ingress_rate_limited_total", 2, metrics.Sum, nil)
 	assertMetricValue(t, samples, "otel_ingress_queue_dropped_total", 2, metrics.Sum, map[string]string{"reason": "capacity"})
+	assertMetricValue(t, samples, "otel_ingress_queue_dropped_total", 1, metrics.Sum, map[string]string{"reason": "size"})
 	assertMetricValue(t, samples, "otel_ingress_rejections_total", 1, metrics.Sum, map[string]string{"reason": "auth"})
 	assertMetricValue(t, samples, "otel_ingress_rejections_total", 2, metrics.Sum, map[string]string{"reason": "parse"})
 }

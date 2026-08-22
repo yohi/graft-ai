@@ -1,6 +1,9 @@
 package metrics
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestAccumulator_keepsSumAndGaugeSeriesSeparate(t *testing.T) {
 	accumulator := NewAccumulator()
@@ -18,5 +21,27 @@ func TestAccumulator_keepsSumAndGaugeSeriesSeparate(t *testing.T) {
 	}
 	if normalized.Samples[0].Kind != Sum || normalized.Samples[1].Kind != Gauge {
 		t.Fatalf("sample kinds = %v, %v; want sum, gauge", normalized.Samples[0].Kind, normalized.Samples[1].Kind)
+	}
+}
+
+func TestAccumulator_rejectsNonFiniteGaugeBeforeRegisteringSeries(t *testing.T) {
+	accumulator := NewAccumulator()
+	if err := accumulator.Add(MetricSample{Name: "test_gauge", Value: math.NaN(), Kind: Gauge}); err == nil {
+		t.Fatal("non-finite gauge was accepted")
+	}
+
+	if normalized := accumulator.Flush(123); len(normalized.Samples) != 0 {
+		t.Fatalf("invalid gauge registered %d series, want 0", len(normalized.Samples))
+	}
+}
+
+func TestAccumulator_rejectsGaugeBucketsBeforeRegisteringSeries(t *testing.T) {
+	accumulator := NewAccumulator()
+	if err := accumulator.Add(MetricSample{Name: "test_gauge", Value: 1, Kind: Gauge, Buckets: []float64{1}}); err == nil {
+		t.Fatal("gauge with buckets was accepted")
+	}
+
+	if normalized := accumulator.Flush(123); len(normalized.Samples) != 0 {
+		t.Fatalf("invalid gauge registered %d series, want 0", len(normalized.Samples))
 	}
 }

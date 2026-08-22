@@ -143,6 +143,36 @@ func TestEncodeMetrics_gauge_uses_gauge_data_points(t *testing.T) {
 	}
 }
 
+func TestEncodeMetrics_rejectsGaugeWithBuckets(t *testing.T) {
+	_, err := EncodeMetrics(metrics.NormalizedMetrics{Samples: []metrics.MetricSample{{
+		Name:    "test_gauge",
+		Value:   0.75,
+		Kind:    metrics.Gauge,
+		Buckets: []float64{1},
+	}}}, 1_000_000_000_000, 1_000_003_000_000)
+	if err == nil {
+		t.Fatal("gauge with buckets was encoded")
+	}
+}
+
+func TestMetricProto_encodesGaugeAsScalar(t *testing.T) {
+	metric, err := metricProto(aggregatedSample{
+		Name:    "test_gauge",
+		Value:   0.75,
+		Kind:    metrics.Gauge,
+		Buckets: []float64{1},
+	}, 1_000_000_000_000, 1_000_003_000_000)
+	if err != nil {
+		t.Fatalf("metricProto: %v", err)
+	}
+	if metric.GetGauge() == nil {
+		t.Fatalf("expected Gauge metric, got %T", metric.Data)
+	}
+	if metric.GetHistogram() != nil {
+		t.Fatal("gauge was encoded as Histogram")
+	}
+}
+
 func TestEncodeMetrics_aggregateSamples_no_double_counting(t *testing.T) {
 	normalized := metrics.NormalizedMetrics{Samples: []metrics.MetricSample{
 		{Name: "ai_gateway_requests_total", Value: 1, Labels: map[string]string{"model": "m"}},

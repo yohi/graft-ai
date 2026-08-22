@@ -35,6 +35,15 @@ func NewAccumulator() *Accumulator {
 
 // Add incorporates a MetricSample into the accumulator.
 func (a *Accumulator) Add(sample MetricSample) error {
+	if sample.Kind == Gauge {
+		if !isFinite(sample.Value) {
+			return fmt.Errorf("metric %q has non-finite gauge", sample.Name)
+		}
+		if len(sample.Buckets) != 0 {
+			return fmt.Errorf("metric %q gauge cannot have buckets", sample.Name)
+		}
+	}
+
 	key := sample.Name + "\x00" + string(rune(sample.Kind)) + "\x00" + labelsKey(sample.Labels)
 	series, ok := a.groups[key]
 	if !ok {
@@ -49,9 +58,6 @@ func (a *Accumulator) Add(sample MetricSample) error {
 	}
 
 	if sample.Kind == Gauge {
-		if !isFinite(sample.Value) {
-			return fmt.Errorf("metric %q has non-finite gauge", sample.Name)
-		}
 		series.value = sample.Value
 		series.count = 1
 		a.dataPoints++

@@ -64,9 +64,15 @@ func TestEncodeLoki_fills_only_canonical_labels_when_labels_are_missing(t *testi
 	if len(labels) != 4 {
 		t.Fatalf("labels = %#v, want exactly four canonical labels", labels)
 	}
-	for _, key := range []string{"model", "status_code", "env", "gateway"} {
-		if got := labels[key]; got == "" {
-			t.Fatalf("label %q = %q, want non-empty unknown fallback", key, got)
+	wantLabels := map[string]string{
+		"model":       "m",
+		"status_code": "unknown",
+		"env":         "unknown",
+		"gateway":     "unknown",
+	}
+	for key, want := range wantLabels {
+		if got := labels[key]; got != want {
+			t.Fatalf("label %q = %q, want %q", key, got, want)
 		}
 	}
 	if _, ok := labels["unexpected"]; ok {

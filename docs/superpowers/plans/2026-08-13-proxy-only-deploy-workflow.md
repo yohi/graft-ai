@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close PR #31 and replace its Logpush/Tail-Worker-centric deploy workflow with a proxy-only mode production CD that deploys the Proxy Worker, Ollama Worker, Provider Metrics Worker, and the explicitly selected Grafana dashboards from `master`.
+**Goal:** Close PR #31 and replace its Logpush/Tail-Worker-centric deploy workflow with a proxy-only mode production CD that deploys the Proxy Worker, Ollama Worker, Provider Metrics Worker, and the explicitly selected Grafana dashboards and alert rules from `master`.
 
-**Architecture:** Use GitHub Actions. Trigger on `master` push and `workflow_dispatch`. Each deployable Worker has its own job, followed by a separate `deploy-grafana-dashboards` job that calls `scripts/deploy-dashboards.mjs` with Grafana credentials from the `production` environment. Proxy-only mode intentionally does NOT deploy the Logpush receiver Worker, Tail Worker, Terraform Logpush job, or Terraform Grafana workspace resources. Grafana dashboards are an explicit HTTP API deployment step; Grafana metrics and alert resources remain separately managed and are not part of this workflow.
+**Architecture:** Use GitHub Actions. Trigger on `master` push and `workflow_dispatch`. Each deployable Worker has its own job, followed by a separate `deploy-grafana-dashboards` job that calls `scripts/deploy-dashboards.mjs` and `scripts/deploy-alert-rules.mjs` with Grafana credentials from the `production` environment. Proxy-only mode intentionally does NOT deploy the Logpush receiver Worker, Tail Worker, Terraform Logpush job, or Terraform Grafana workspace resources. Grafana dashboards and alert rules are explicit HTTP API deployment steps; Grafana workspace resources remain separately managed and are not part of this workflow.
 
 **Tech Stack:** GitHub Actions YAML, Bash, Wrangler CLI, Grafana HTTP API via Node.js 22, Terraform CLI.
 
@@ -15,7 +15,7 @@
 - Deployment workflow changes must be validated by YAML syntax check (e.g. `actionlint` if available, or GitHub's own validation by pushing to a branch).
 - `make test`, `make typecheck`, `make fmt`, and `make validate` must pass before any PR handoff.
 - Proxy-only mode does not deploy or reference `wrangler.tail.jsonc` in production CD.
-- Dashboard deployment uses only the dashboard files selected by `scripts/deploy-dashboards.mjs`; it does not apply Terraform or deploy OTel infrastructure.
+- Dashboard and alert-rule deployment uses only the files selected by `scripts/deploy-dashboards.mjs` and `scripts/deploy-alert-rules.mjs`; it does not apply Terraform or deploy OTel infrastructure.
 
 ---
 
@@ -91,9 +91,9 @@
 | `deploy-proxy-worker` | Deploy `graft-ai-aig-proxy` via `wrangler.proxy.jsonc` |
 | `deploy-ollama-worker` | Deploy `graft-ai-ollama-cloud` via `wrangler.ollama.jsonc` |
 | `deploy-provider-metrics-worker` | Deploy `graft-ai-provider-metrics` via `wrangler.provider-metrics.jsonc` |
-| `deploy-grafana-dashboards` | Deploy the selected dashboard JSON files via `scripts/deploy-dashboards.mjs` |
+| `deploy-grafana-dashboards` | Deploy the selected dashboard and alert-rule JSON files via `scripts/deploy-dashboards.mjs` and `scripts/deploy-alert-rules.mjs` |
 
-Use the Wrangler action pinned to the v3 release commit shown below. Each Worker job runs only on `refs/heads/master` and targets the `production` environment. The dashboard job runs after `validate-deployment`, uses the same `production` environment, and invokes `node scripts/deploy-dashboards.mjs` with `GRAFANA_STACK_SLUG` or `GRAFANA_URL` plus a Grafana API/service-account token. No Terraform job is included: this workflow has no Terraform credentials, Terraform working directory, or Terraform dependency graph, and a Terraform failure cannot partially block Worker deployment. Terraform Logpush, Grafana workspace resources, metrics, and alerts remain explicit, separately invoked operations.
+Use the Wrangler action pinned to the v3 release commit shown below. Each Worker job runs only on `refs/heads/master` and targets the `production` environment. The dashboard job runs after `validate-deployment`, uses the same `production` environment, and invokes `node scripts/deploy-dashboards.mjs` and `node scripts/deploy-alert-rules.mjs` with `GRAFANA_STACK_SLUG` or `GRAFANA_URL` plus a Grafana API/service-account token. No Terraform job is included: this workflow has no Terraform credentials, Terraform working directory, or Terraform dependency graph, and a Terraform failure cannot partially block Worker deployment. Terraform Logpush and Grafana workspace resources remain explicit, separately invoked operations.
 
   ```yaml
   name: Deploy

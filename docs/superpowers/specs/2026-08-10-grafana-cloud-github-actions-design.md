@@ -4,16 +4,16 @@
 > を含む旧デプロイ設計を記録したものです。現在の production CD は
 > `docs/superpowers/plans/2026-08-13-proxy-only-deploy-workflow.md` に定義された
 > proxy-only構成へ置き換えられており、Proxy/Ollama/Provider Metrics Worker と
-> 明示的に選択した Grafana dashboard を配備します。以下の5 Worker/Terraform自動
-> deploy要件は現行CDの要件ではありません。
+> 明示的に選択した Grafana dashboard および alert rules を配備します。以下の5
+> Worker/Terraform自動 deploy要件は現行CDの要件ではありません。
 
 ## 1. 背景と目的
 
 `graft-ai` は Cloudflare Workers と Terraform を用いたテレメトリパイプラインである。
 本番デプロイは `.github/workflows/deploy.yml` の production CD が担い、`make deploy` や
 各種 `scripts/*.sh` は手動・ローカル運用にも維持されている。現行の production CD は
-Proxy Worker、Ollama Cloud Worker、Provider Metrics Worker、および Grafana dashboards を
-配備する。Grafana alert rules はこの CD の対象外で、別管理とする。
+Proxy Worker、Ollama Cloud Worker、Provider Metrics Worker、Grafana dashboards、および
+`scripts/deploy-alert-rules.mjs` による Grafana alert rules を配備する。
 
 - ローカル運用と production CD の責務・対象範囲が分かれている
 - CI/CD による継続的な検証と自動デプロイの対象範囲を明文化する必要がある
@@ -27,8 +27,8 @@ Proxy Worker、Ollama Cloud Worker、Provider Metrics Worker、および Grafana
 ### 2.1 ゴール
 
 - Pull Request 作成時にテスト、型検査、フォーマット検査、Terraform plan を実行する
-- `master` ブランチへの push 時に、Cloudflare Workers（3 種）と Grafana dashboards を
-  自動デプロイする。Grafana alert rules は production CD に含めない
+- `master` ブランチへの push 時に、Cloudflare Workers（3 種）、Grafana dashboards、
+  および Grafana alert rules を自動デプロイする
 - Terraform state をリモートバックエンド（Terraform Cloud）で管理する
 - Wrangler secrets を Terraform 出力から自動反映する仕組みを CI に組み込む
 - 将来的な staging / production 分離や追加 Worker に対応できる拡張性を持たせる

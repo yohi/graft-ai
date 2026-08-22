@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * or raw Grafana export format ({ id: null, uid: "...", ... }).
  *
  * @param {string | object} input JSON string or parsed object
- * @param {{ folderUid?: string, message?: string, overwrite?: boolean }} [options]
+ * @param {{ folderUid?: string, message?: string, overwrite?: boolean, datasourceUids?: DatasourceUids }} [options]
  * @returns {{ dashboard: object, folderUid: string, message: string, overwrite: boolean }}
  */
 export function prepareDashboardPayload(input, options = {}) {
@@ -17,7 +17,9 @@ export function prepareDashboardPayload(input, options = {}) {
     throw new Error("Invalid dashboard JSON: expected an object");
   }
 
-  const isWrapped = Boolean(data.dashboard && typeof data.dashboard === "object");
+  const isWrapped = Boolean(
+    data.dashboard && typeof data.dashboard === "object",
+  );
   const dashboard = isWrapped ? data.dashboard : data;
 
   if (!dashboard.title && !dashboard.uid) {
@@ -25,15 +27,113 @@ export function prepareDashboardPayload(input, options = {}) {
   }
 
   return {
-    dashboard,
-    folderUid: options.folderUid ?? (isWrapped && data.folderUid !== undefined ? data.folderUid : ""),
+    dashboard: options.datasourceUids
+      ? rewriteGrafanaDatasourceUids(dashboard, options.datasourceUids)
+      : dashboard,
+    folderUid:
+      options.folderUid ??
+      (isWrapped && data.folderUid !== undefined ? data.folderUid : ""),
     message:
       options.message ??
       (isWrapped && data.message !== undefined
         ? data.message
         : "graft-ai dashboard sync (see git log for change details)"),
-    overwrite: options.overwrite ?? (isWrapped && typeof data.overwrite === "boolean" ? data.overwrite : true),
+    overwrite:
+      options.overwrite ??
+      (isWrapped && typeof data.overwrite === "boolean"
+        ? data.overwrite
+        : true),
   };
+}
+
+const DEFAULT_DATASOURCE_UIDS = Object.freeze({
+  prometheus: "otel-prometheus",
+  loki: "otel-loki",
+  tempo: "otel-tempo",
+});
+
+/**
+ * @typedef {{ prometheus: string, loki: string, tempo: string }} DatasourceUids
+ */
+
+/**
+ * Resolves datasource UIDs from environment variables while preserving the
+ * self-hosted provisioning defaults.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {DatasourceUids}
+ */
+export function resolveGrafanaDatasourceUids(env = process.env) {
+  const configured = {
+    prometheus: env.GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID?.trim(),
+    loki: env.GRAFANA_OTEL_LOKI_DATASOURCE_UID?.trim(),
+    tempo: env.GRAFANA_OTEL_TEMPO_DATASOURCE_UID?.trim(),
+  };
+  const required =
+    env.GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED?.trim().toLowerCase() === "true";
+
+  if (required) {
+    const missing = Object.entries(configured)
+      .filter(([, uid]) => !uid)
+      .map(([signal]) => `GRAFANA_OTEL_${signal.toUpperCase()}_DATASOURCE_UID`);
+    if (missing.length > 0) {
+      throw new Error(
+        `Grafana Cloud OTel datasource UIDs are required when GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true. Missing: ${missing.join(", ")}`,
+      );
+    }
+  }
+
+  return {
+    prometheus: configured.prometheus || DEFAULT_DATASOURCE_UIDS.prometheus,
+    loki: configured.loki || DEFAULT_DATASOURCE_UIDS.loki,
+    tempo: configured.tempo || DEFAULT_DATASOURCE_UIDS.tempo,
+  };
+}
+
+/**
+ * Rewrites only datasource references from the self-hosted OTel dashboard.
+ * The input is not mutated.
+ *
+ * @param {unknown} value
+ * @param {DatasourceUids} overrides
+ * @returns {unknown}
+ */
+export function rewriteGrafanaDatasourceUids(value, overrides) {
+  if (Array.isArray(value)) {
+    return value.map((item) => rewriteGrafanaDatasourceUids(item, overrides));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const source = /** @type {Record<string, unknown>} */ (value);
+  const rewritten = {};
+  for (const [key, item] of Object.entries(source)) {
+    const replacement =
+      key === "uid" || key === "datasourceUid"
+        ? datasourceUidReplacement(item, overrides)
+        : item;
+    rewritten[key] = rewriteGrafanaDatasourceUids(replacement, overrides);
+  }
+  return rewritten;
+}
+
+/**
+ * @param {unknown} value
+ * @param {DatasourceUids} overrides
+ * @returns {unknown}
+ */
+function datasourceUidReplacement(value, overrides) {
+  if (value === DEFAULT_DATASOURCE_UIDS.prometheus) {
+    return overrides.prometheus;
+  }
+  if (value === DEFAULT_DATASOURCE_UIDS.loki) {
+    return overrides.loki;
+  }
+  if (value === DEFAULT_DATASOURCE_UIDS.tempo) {
+    return overrides.tempo;
+  }
+  return value;
 }
 
 /**
@@ -48,7 +148,9 @@ export function resolveGrafanaUrl(env = process.env) {
     url = `https://${env.GRAFANA_STACK_SLUG}.grafana.net`;
   }
   if (!url) {
-    throw new Error("Grafana URL is missing. Set GRAFANA_URL or GRAFANA_STACK_SLUG environment variable.");
+    throw new Error(
+      "Grafana URL is missing. Set GRAFANA_URL or GRAFANA_STACK_SLUG environment variable.",
+    );
   }
   return url.replace(/\/+$/, "");
 }
@@ -83,6 +185,7 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  *   grafanaUrl?: string,
  *   token?: string,
  *   folderUid?: string,
+ *   datasourceUids?: DatasourceUids,
  *   dryRun?: boolean,
  *   fetchImpl?: typeof fetch,
  *   timeoutMs?: number,
@@ -98,6 +201,7 @@ export async function deployDashboard(filePath, options = {}) {
   const rawContent = readFileSync(resolvedPath, "utf8");
   const payload = prepareDashboardPayload(rawContent, {
     folderUid: options.folderUid,
+    datasourceUids: options.datasourceUids,
   });
 
   const title = payload.dashboard.title || "Untitled";
@@ -141,8 +245,14 @@ export async function deployDashboard(filePath, options = {}) {
   }
 
   if (!response.ok) {
-    const errorMsg = result.message || result.error || responseText || `HTTP ${response.status}`;
-    throw new Error(`Failed to deploy dashboard "${title}" (${uid}): ${response.status} - ${errorMsg}`);
+    const errorMsg =
+      result.message ||
+      result.error ||
+      responseText ||
+      `HTTP ${response.status}`;
+    throw new Error(
+      `Failed to deploy dashboard "${title}" (${uid}): ${response.status} - ${errorMsg}`,
+    );
   }
 
   return {
@@ -202,7 +312,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   try {
     parsed = parseCliArgs(args);
   } catch (err) {
-    console.error(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `[ERROR] ${err instanceof Error ? err.message : String(err)}`,
+    );
     return 1;
   }
 
@@ -210,13 +322,24 @@ export async function main(args = process.argv.slice(2), env = process.env) {
 
   let grafanaUrl;
   let token;
+  let datasourceUids;
+  try {
+    datasourceUids = resolveGrafanaDatasourceUids(env);
+  } catch (err) {
+    console.error(
+      `[ERROR] ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
 
   if (!dryRun) {
     try {
       grafanaUrl = resolveGrafanaUrl(env);
       token = resolveGrafanaToken(env);
     } catch (err) {
-      console.error(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `[ERROR] ${err instanceof Error ? err.message : String(err)}`,
+      );
       return 1;
     }
   }
@@ -230,15 +353,22 @@ export async function main(args = process.argv.slice(2), env = process.env) {
         token,
         dryRun,
         folderUid: env.GRAFANA_FOLDER_UID,
+        datasourceUids,
       });
 
       if (res.dryRun) {
-        console.log(`[DRY-RUN] Validated "${res.title}" (uid: ${res.uid}) from ${file}`);
+        console.log(
+          `[DRY-RUN] Validated "${res.title}" (uid: ${res.uid}) from ${file}`,
+        );
       } else {
-        console.log(`[OK] Deployed "${res.title}" (uid: ${res.uid}) - status: ${res.status}${res.url ? ` (${res.url})` : ""}`);
+        console.log(
+          `[OK] Deployed "${res.title}" (uid: ${res.uid}) - status: ${res.status}${res.url ? ` (${res.url})` : ""}`,
+        );
       }
     } catch (err) {
-      console.error(`[ERROR] ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `[ERROR] ${err instanceof Error ? err.message : String(err)}`,
+      );
       hasError = true;
     }
   }
@@ -246,7 +376,10 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   return hasError ? 1 : 0;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   main().then((code) => {
     if (code !== 0) {
       process.exit(code);

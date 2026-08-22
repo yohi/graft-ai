@@ -1,8 +1,11 @@
 # terraform/grafana
 
-Grafana Cloud provider module: manages the `grafana_cloud_access_policy`
-(`logs:write` scope) and its `grafana_cloud_access_policy_token`, used by the
-Paid-plan Logpush receiver Worker to push logs to Grafana Cloud Loki.
+Grafana Cloud provider module: manages a telemetry
+`grafana_cloud_access_policy` with `logs:write`, `metrics:write`, and
+`traces:write` scopes, plus a separate Loki-only policy with `logs:write`.
+The `grafana_loki_write_token` output is used by the Paid-plan Logpush and
+Tail Workers; the `grafana_telemetry_write_token` output is used for OTel and
+Prometheus ingestion.
 
 ## Terraform Cloud backend
 
@@ -79,15 +82,19 @@ workspace:
 ```bash
 cd terraform/grafana
 terraform init
-terraform import grafana_cloud_access_policy.loki_write "<region_slug>:<policy_id>"
-terraform import grafana_cloud_access_policy_token.loki_write "<region_slug>:<token_id>"
+terraform import grafana_cloud_access_policy.telemetry_write "<region_slug>:<telemetry_policy_id>"
+terraform import grafana_cloud_access_policy_token.telemetry_write "<region_slug>:<telemetry_token_id>"
+terraform import grafana_cloud_access_policy.loki_ingest "<region_slug>:<loki_policy_id>"
+terraform import grafana_cloud_access_policy_token.loki_ingest "<region_slug>:<loki_token_id>"
 terraform plan
 ```
 
 `<region_slug>` is the stack's region, for example
-`prod-ap-northeast-0`. If the old token is intentionally discarded, delete the
-stale Access Policy from the Grafana Cloud Portal first and let Terraform
-create a fresh one instead of importing it.
+`prod-ap-northeast-0`. The configuration includes state moves for the historical
+Loki resource addresses so an existing telemetry policy/token is retained while
+the dedicated Loki policy/token is introduced. If a token is intentionally
+discarded, delete the stale Access Policy from the Grafana Cloud Portal first
+and let Terraform create a fresh one instead of importing it.
 
 See also the root [`SPEC.md`](../../SPEC.md) for the general Terraform backend
 and security requirements.

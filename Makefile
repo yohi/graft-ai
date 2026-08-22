@@ -6,7 +6,7 @@ install:
 
 fmt:
 	cd workers && npm run fmt
-	cd workers && npx prettier --write "../deploy/otel/contracts/encoding.mjs" "../tests/otel-contracts.test.mjs" "../scripts/deploy-alert-rules.mjs" "../tests/deploy-alert-rules.test.mjs" "../tests/deployment-contracts.test.mjs"
+	cd workers && npx prettier --write "../deploy/otel/contracts/encoding.mjs" "../tests/otel-contracts.test.mjs" "../scripts/deploy-dashboards.mjs" "../scripts/deploy-alert-rules.mjs" "../tests/deploy-dashboards.test.mjs" "../tests/deploy-alert-rules.test.mjs" "../tests/otel-cloud-config.test.mjs" "../tests/deployment-contracts.test.mjs"
 	$(MAKE) -C deploy/otel/alloy fmt
 	terraform fmt -recursive
 
@@ -23,6 +23,7 @@ test:
 	node --test tests/verify-terraform-logpush-fields.test.mjs
 	node --test tests/deploy-dashboards.test.mjs
 	node --test tests/deploy-alert-rules.test.mjs
+	node --test tests/otel-cloud-config.test.mjs
 	node --test tests/deployment-contracts.test.mjs
 	$(MAKE) otel-validate
 	node --test tests/otel-smoke-retry.test.mjs

@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Grafana Cloud provider — manages Access Policy + Loki write token
+# Grafana Cloud provider — manages Access Policy + telemetry write token
 # Free Tier proxy mode only (no Logpush job here)
 # ------------------------------------------------------------------------------
 
@@ -21,14 +21,24 @@ data "grafana_cloud_stack" "this" {
 }
 
 # ------------------------------------------------------------------
-# Access Policy: logs:write + metrics:write scoped to this stack
+# Access Policy: logs:write + metrics:write + traces:write scoped to this stack
 # ------------------------------------------------------------------
+moved {
+  from = grafana_cloud_access_policy.loki_write
+  to   = grafana_cloud_access_policy.telemetry_write
+}
+
+moved {
+  from = grafana_cloud_access_policy_token.loki_write
+  to   = grafana_cloud_access_policy_token.telemetry_write
+}
+
 resource "grafana_cloud_access_policy" "telemetry_write" {
   provider     = grafana.cloud
   region       = data.grafana_cloud_stack.this.region_slug
   name         = "graft-ai-telemetry-write"
   display_name = "graft-ai-telemetry-write"
-  scopes       = ["logs:write", "metrics:write"]
+  scopes       = ["logs:write", "metrics:write", "traces:write"]
 
   realm {
     type       = "stack"
@@ -45,6 +55,35 @@ resource "grafana_cloud_access_policy_token" "telemetry_write" {
   access_policy_id = grafana_cloud_access_policy.telemetry_write.policy_id
   name             = "graft-ai-telemetry-write"
   display_name     = "graft-ai-telemetry-write"
+  expires_at       = timeadd(timestamp(), "8760h")
+
+  lifecycle {
+    ignore_changes = [expires_at]
+  }
+}
+
+# ------------------------------------------------------------------
+# Loki-only Access Policy and token
+# ------------------------------------------------------------------
+resource "grafana_cloud_access_policy" "loki_ingest" {
+  provider     = grafana.cloud
+  region       = data.grafana_cloud_stack.this.region_slug
+  name         = "graft-ai-loki-write"
+  display_name = "graft-ai-loki-write"
+  scopes       = ["logs:write"]
+
+  realm {
+    type       = "stack"
+    identifier = tostring(data.grafana_cloud_stack.this.id)
+  }
+}
+
+resource "grafana_cloud_access_policy_token" "loki_ingest" {
+  provider         = grafana.cloud
+  region           = data.grafana_cloud_stack.this.region_slug
+  access_policy_id = grafana_cloud_access_policy.loki_ingest.policy_id
+  name             = "graft-ai-loki-write"
+  display_name     = "graft-ai-loki-write"
   expires_at       = timeadd(timestamp(), "8760h")
 
   lifecycle {
@@ -81,13 +120,19 @@ output "grafana_otlp_url" {
 }
 
 output "grafana_access_policy_token" {
-  description = "Access Policy Token with logs:write and metrics:write"
+  description = "Telemetry Access Policy Token with logs:write, metrics:write, and traces:write"
+  value       = grafana_cloud_access_policy_token.telemetry_write.token
+  sensitive   = true
+}
+
+output "grafana_telemetry_write_token" {
+  description = "Telemetry Access Policy Token with logs:write, metrics:write, and traces:write"
   value       = grafana_cloud_access_policy_token.telemetry_write.token
   sensitive   = true
 }
 
 output "grafana_loki_write_token" {
-  description = "Alias for grafana_access_policy_token (backward compatibility)"
-  value       = grafana_cloud_access_policy_token.telemetry_write.token
+  description = "Loki-only Access Policy Token with logs:write"
+  value       = grafana_cloud_access_policy_token.loki_ingest.token
   sensitive   = true
 }

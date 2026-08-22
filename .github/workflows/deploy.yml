@@ -218,11 +218,29 @@ jobs:
         with:
           node-version: 22
 
+      - name: Validate Grafana Cloud datasource UIDs
+        env:
+          GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID }}
+          GRAFANA_OTEL_LOKI_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_LOKI_DATASOURCE_UID }}
+          GRAFANA_OTEL_TEMPO_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_TEMPO_DATASOURCE_UID }}
+        run: |
+          set -euo pipefail
+          for name in GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID GRAFANA_OTEL_LOKI_DATASOURCE_UID GRAFANA_OTEL_TEMPO_DATASOURCE_UID; do
+            if [[ -z "${!name}" ]]; then
+              printf '%s\n' "Set ${name} as a production environment variable before deploying Grafana Cloud resources." >&2
+              exit 1
+            fi
+          done
+
       - name: Deploy dashboards to Grafana Cloud
         env:
           GRAFANA_STACK_SLUG: ${{ vars.GRAFANA_STACK_SLUG }}
           GRAFANA_URL: ${{ vars.GRAFANA_URL || secrets.GRAFANA_URL }}
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN || secrets.GRAFANA_API_KEY || secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED: "true"
+          GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID }}
+          GRAFANA_OTEL_LOKI_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_LOKI_DATASOURCE_UID }}
+          GRAFANA_OTEL_TEMPO_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_TEMPO_DATASOURCE_UID }}
         run: node scripts/deploy-dashboards.mjs
 
       - name: Deploy alert rules to Grafana Cloud
@@ -230,4 +248,8 @@ jobs:
           GRAFANA_STACK_SLUG: ${{ vars.GRAFANA_STACK_SLUG }}
           GRAFANA_URL: ${{ vars.GRAFANA_URL || secrets.GRAFANA_URL }}
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_SERVICE_ACCOUNT_TOKEN || secrets.GRAFANA_API_KEY || secrets.GRAFANA_CLOUD_API_KEY }}
+          GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED: "true"
+          GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID }}
+          GRAFANA_OTEL_LOKI_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_LOKI_DATASOURCE_UID }}
+          GRAFANA_OTEL_TEMPO_DATASOURCE_UID: ${{ vars.GRAFANA_OTEL_TEMPO_DATASOURCE_UID }}
         run: node scripts/deploy-alert-rules.mjs

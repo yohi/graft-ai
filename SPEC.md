@@ -70,7 +70,7 @@ Loki.
 | Ollama Cloud alerts | Grafana Alerting API (`grafana/alerts/`) | Fires session/weekly reset alerts from Prometheus metrics. |
 | Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
 | Ollama dashboard | `grafana/dashboards/graft-ai-ollama-cloud.json` | Ollama Cloud reset metrics dashboard imported via gcx API. |
-| Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write` scope for Loki push. |
+| Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write`, `metrics:write`, and `traces:write` scopes for OTel and Loki/Prometheus delivery. |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
@@ -139,6 +139,19 @@ digest-pinned images, publishes only Grafana to the host, and keeps Alloy and
 all telemetry backends on the internal network. `make otel-validate` checks the
 static topology and dashboard contract, while `make otel-smoke` sends a
 synthetic OTLP request and verifies all three internal backend APIs.
+
+Grafana Cloud export uses `deploy/otel/docker-compose.grafana-cloud.yml` as an
+override. It replaces the three Alloy backend endpoints and requires external
+`Authorization` headers through environment interpolation; credentials must
+not be embedded in committed Compose files. The Grafana Cloud telemetry Access
+Policy must include `logs:write`, `metrics:write`, and `traces:write`. Loki
+Logpush and Tail Workers use a separate Access Policy limited to `logs:write`.
+Dashboard and alert deployment replaces only the self-hosted datasource
+references through the
+`GRAFANA_OTEL_{PROMETHEUS,LOKI,TEMPO}_DATASOURCE_UID` environment variables;
+when `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true`, all three must be configured
+before any Grafana API call. Expression datasource UID `-100` and unrelated
+UIDs remain unchanged.
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 

@@ -58,6 +58,20 @@ on the internal network. Create the local secret files under
 stack. Run `make otel-validate` for static checks and `make otel-smoke` for the
 local synthetic end-to-end smoke test.
 
+For Grafana Cloud OTel export, use
+[`deploy/otel/docker-compose.grafana-cloud.yml`](./deploy/otel/docker-compose.grafana-cloud.yml)
+as a second Compose file. Set the three Cloud endpoints and their
+`Authorization` headers through an untracked environment file or secret
+manager; never put tokens in Compose YAML. The Terraform Grafana module
+creates a telemetry Access Policy with `logs:write`, `metrics:write`, and
+`traces:write`, plus a separate Loki-only Access Policy with `logs:write`.
+Set these production environment variables to the actual Grafana Cloud OTel
+datasource UIDs before running the dashboard workflow:
+`GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID`, `GRAFANA_OTEL_LOKI_DATASOURCE_UID`,
+and `GRAFANA_OTEL_TEMPO_DATASOURCE_UID`. The workflow enables
+`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` so missing UIDs fail before any
+Grafana API call.
+
 ### Scheduled Workers
 
 | Worker | Trigger | Responsibility |
@@ -121,8 +135,8 @@ make deploy-ollama
 
 `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` must include the `metrics:write` scope for
 Prometheus delivery. A Loki-only token with `logs:write` will fail to deliver
-metrics. Use a separate Prometheus token from the Loki token, or use one shared
-token containing both `logs:write` and `metrics:write` scopes.
+metrics. Use the separate telemetry token output by Terraform for Prometheus
+and the `grafana_loki_write_token` output only for Loki.
 `OLLAMA_CLOUD_RESET_ANCHOR_ISO` must be a strict ISO 8601 timestamp and the
 Prometheus endpoint must use HTTPS.
 

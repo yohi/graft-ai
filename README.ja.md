@@ -45,6 +45,20 @@ series、50GB logs）の制約内で動作するように最適化されてい�
 - **Provider Metrics Worker:** 毎分 Codex、OpenAI API、OpenCodeGo の使用量を取得し、
   OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
 
+OTel の Grafana Cloud export では、
+[`deploy/otel/docker-compose.grafana-cloud.yml`](./deploy/otel/docker-compose.grafana-cloud.yml)
+を基底 Compose に重ねて使用します。3つの Cloud endpoint と
+`Authorization` header は未追跡の環境ファイルまたは secret manager から渡し、
+Compose YAML に token を書き込みません。Terraform の Grafana module は
+`logs:write`、`metrics:write`、`traces:write` を持つ telemetry 用 Access Policy と、
+`logs:write` だけを持つ Loki 専用 Access Policy を別々に作成します。
+Dashboard workflow の前に、実際の Cloud OTel datasource UID を次の production
+environment variables に設定してください。
+`GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID`、`GRAFANA_OTEL_LOKI_DATASOURCE_UID`、
+`GRAFANA_OTEL_TEMPO_DATASOURCE_UID`。Workflow は
+`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` を設定し、UID不足時はGrafana APIを
+呼び出す前に失敗します。
+
 ### スケジュール実行 Worker
 
 | Worker | Trigger | Responsibility |
@@ -105,9 +119,9 @@ make deploy-ollama
 
 `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` には Prometheus 送信に必要な
 `metrics:write` scope が必要です。`logs:write` のみを持つ Loki 専用 token
-ではメトリクス送信に失敗します。Loki token とは別の Prometheus token を
-使用するか、共有 token に `logs:write` と `metrics:write` の両方を付与して
-ください。`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
+ではメトリクス送信に失敗します。Terraform の telemetry token を
+Prometheus Worker に、`grafana_loki_write_token` をLoki Workerに分けて使用します。
+`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
 時刻、Prometheus エンドポイントは HTTPS で指定してください。スクリプトは
 さらに Ollama ダッシュボードの import と
 `grafana/alerts/graft-ai-ollama-cloud-rules.json` の Alert Rule 登録を行います。

@@ -33,6 +33,33 @@ describe("selection and sampling", () => {
     ).toBe(true);
   });
 
+  it("does not treat a child server span without a request ID as a request candidate", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const base = redactSpan(firstSpan);
+    const childAttributes = Object.fromEntries(
+      Object.entries(base.attributes).filter(([key]) => key !== "request_id"),
+    );
+    const selected = selectRequestSpan([
+      { ...base, spanId: "0000000000000001", parentSpanId: "", startTimeUnixNano: "10" },
+      {
+        ...base,
+        spanId: "0000000000000002",
+        parentSpanId: "0000000000000001",
+        startTimeUnixNano: "1",
+        attributes: childAttributes,
+      },
+    ]);
+
+    expect(selected.requestSpan?.spanId).toBe("0000000000000001");
+    expect(
+      selected.spans.find((span) => span.spanId === "0000000000000002")?.attributes[
+        "graft_ai.request_span"
+      ],
+    ).toBe(false);
+  });
+
   it("keeps RED metrics for a sampled-out trace", async () => {
     const parsed = parseOtlpJson(validOtlpJson);
     const firstSpan = parsed[0];

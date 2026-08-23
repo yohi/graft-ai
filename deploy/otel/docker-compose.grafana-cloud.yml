@@ -7,4 +7,5 @@ services:
       OTEL_LOKI_AUTHORIZATION: ${OTEL_LOKI_AUTHORIZATION:?set the Grafana Cloud logs Authorization header}
       OTEL_PROMETHEUS_URL: ${OTEL_PROMETHEUS_URL:?set the Grafana Cloud OTLP metrics endpoint}
       OTEL_PROMETHEUS_AUTHORIZATION: ${OTEL_PROMETHEUS_AUTHORIZATION:?set the Grafana Cloud metrics Authorization header}
+      OTEL_GRAFANA_CLOUD_LOGS_RETENTION: ${OTEL_GRAFANA_CLOUD_LOGS_RETENTION:?set a non-empty confirmed Grafana Cloud Logs retention value}
     depends_on: []

@@ -1,5 +1,5 @@
 import { BACKEND_EXPORT_TIMEOUT_MS, MAX_GRAFANA_OTLP_BYTES, type Backend } from "./contracts";
-import { ledgerCall } from "./ledger";
+import { ledgerCall, type ExportRegistrationResult } from "./ledger";
 import { exportObjectKey, putBytesObject, readBytesObject, sha256Hex } from "./storage";
 import type { ExportPointer, ExportResult, JobDescriptor, OtelEnv } from "./types";
 
@@ -13,30 +13,61 @@ export async function enqueueBackendJob(
   if (descriptor.payloadSha256 !== payloadSha256)
     throw new Error("export payload checksum mismatch");
   const nowMs = Date.now();
-  const pointerBase = await putBytesObject(
-    env.OTEL_OBJECTS,
-    exportObjectKey(
+  const pointer: ExportPointer = {
+    ...descriptor,
+    schemaVersion: 1,
+    id: descriptor.jobId,
+    objectKey: exportObjectKey(
       descriptor.backend,
       descriptor.jobId,
       new Date(nowMs).toISOString().slice(0, 10),
     ),
-    bytes,
-    "export",
-  );
-  const pointer: ExportPointer = {
-    ...pointerBase,
+    sha256: payloadSha256,
+    createdAtMs: nowMs,
     kind: "export",
-    ...descriptor,
     payloadSha256,
   };
   const ledger = env.OTEL_LEDGER.getByName("global");
-  const registered = await ledgerCall<"reserved" | "duplicate" | "collision">(
-    ledger,
-    "export.register",
-    { pointer, nowMs },
-  );
-  if (registered === "collision") throw new Error("export job collision");
-  if (registered === "duplicate") return pointer;
+  const registered = await ledgerCall<ExportRegistrationResult>(ledger, "export.register", {
+    descriptor,
+    nowMs,
+  });
+  if (registered.kind === "collision") throw new Error("export job collision");
+  if (registered.kind === "duplicate") {
+    if (!registered.pointer) {
+      if (registered.status !== "reserved") throw new Error("export pointer missing");
+    } else if (registered.status === "ready") {
+      await backendQueue(env, registered.pointer.backend).send(registered.pointer);
+      const enqueued = await ledgerCall<boolean>(ledger, "export.enqueued", {
+        jobId: registered.pointer.jobId,
+      });
+      if (!enqueued) throw new Error("export enqueue transition rejected");
+      return registered.pointer;
+    } else if (registered.status === "expired") {
+      throw new Error("export job expired");
+    } else {
+      return registered.pointer;
+    }
+  }
+
+  try {
+    await putBytesObject(env.OTEL_OBJECTS, pointer.objectKey, bytes, "export");
+  } catch (error) {
+    await ledgerCall(ledger, "export.release-reservation", { jobId: descriptor.jobId });
+    throw error;
+  }
+  const ready = await ledgerCall<boolean>(ledger, "export.ready", {
+    jobId: descriptor.jobId,
+    pointer,
+    nowMs,
+  });
+  if (!ready) {
+    const released = await ledgerCall<boolean>(ledger, "export.release-reservation", {
+      jobId: descriptor.jobId,
+    });
+    if (released) await env.OTEL_OBJECTS.delete(pointer.objectKey);
+    throw new Error("export ready transition rejected");
+  }
 
   await backendQueue(env, descriptor.backend).send(pointer);
   const enqueued = await ledgerCall<boolean>(ledger, "export.enqueued", {

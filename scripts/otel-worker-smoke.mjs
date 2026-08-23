@@ -1,6 +1,7 @@
 const workerUrl = process.env.OTEL_WORKER_URL;
 const token = process.env.OTEL_INGEST_TOKEN;
 if (!workerUrl || !token) throw new Error("OTEL_WORKER_URL and OTEL_INGEST_TOKEN are required");
+const timeoutMs = 10_000;
 
 const endpoint = new URL("/v1/traces", workerUrl);
 const traceId = "00112233445566778899aabbccddeeff";
@@ -33,13 +34,21 @@ const body = {
   ],
 };
 
-const response = await fetch(endpoint, {
-  method: "POST",
-  headers: {
-    authorization: `Bearer ${token}`,
-    "content-type": "application/json",
-  },
-  body: JSON.stringify(body),
-});
+const controller = new AbortController();
+const timeout = setTimeout(() => controller.abort(), timeoutMs);
+let response;
+try {
+  response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: controller.signal,
+  });
+} finally {
+  clearTimeout(timeout);
+}
 if (response.status !== 200) throw new Error(`OTel Worker smoke failed with status ${response.status}`);
 process.stdout.write(`OTel Worker smoke passed: status=${response.status} trace_id=${traceId}\n`);

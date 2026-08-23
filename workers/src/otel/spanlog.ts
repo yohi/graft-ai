@@ -99,8 +99,12 @@ function fitLine(fields: Record<string, JsonValue>): string | null {
   const empty = { ...metadata };
   for (const key of payloadKeys) empty[key] = "";
   let remaining = Math.max(MAX_LOKI_LINE_BYTES - byteLength(JSON.stringify(empty)), 0);
-  let promptBudget = payloadKeys.length === 2 ? Math.floor(remaining / 2) : remaining;
-  let completionBudget = payloadKeys.length === 2 ? remaining - promptBudget : 0;
+  const hasPrompt = originalPrompt !== undefined;
+  const hasCompletion = originalCompletion !== undefined;
+  let promptBudget =
+    payloadKeys.length === 2 ? Math.floor(remaining / 2) : hasPrompt ? remaining : 0;
+  let completionBudget =
+    payloadKeys.length === 2 ? remaining - promptBudget : hasCompletion ? remaining : 0;
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const candidate = { ...metadata };
@@ -194,11 +198,15 @@ function finiteNumber(value: JsonValue): number | null {
 }
 
 function durationMilliseconds(span: RedactedSpan): number | null {
-  const start = finiteNumber(span.startTimeUnixNano);
-  const end = finiteNumber(span.endTimeUnixNano);
-  if (start === null || end === null || end < start || end === 0) return null;
-  const duration = (end - start) / 1_000_000;
-  return Number.isFinite(duration) ? duration : DURATION_OVERFLOW_SENTINEL;
+  try {
+    const start = BigInt(span.startTimeUnixNano);
+    const end = BigInt(span.endTimeUnixNano);
+    if (start <= 0n || end <= 0n || end < start) return null;
+    const duration = Number(end - start) / 1_000_000;
+    return Number.isFinite(duration) ? duration : DURATION_OVERFLOW_SENTINEL;
+  } catch {
+    return null;
+  }
 }
 
 function byteLength(value: string): number {

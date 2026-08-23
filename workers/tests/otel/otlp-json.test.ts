@@ -61,6 +61,58 @@ describe("OTLP JSON encoders", () => {
     expect(JSON.stringify(payload)).not.toContain("Infinity");
   });
 
+  it("uses one non-cumulative bucket for a finite duration", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const selected = selectRequestSpan([
+      redactSpan({
+        ...firstSpan,
+        attributes: { ...firstSpan.attributes, "gen_ai.duration_ms": 20 },
+      }),
+    ]);
+    const duration = toMetricSamples(selected).find(
+      (sample) => sample.name === "ai_gateway_request_duration_seconds",
+    );
+    if (!duration) throw new Error("duration sample missing");
+
+    const payload = JSON.parse(
+      new TextDecoder().decode(
+        encodeMetricsJson([duration], { startTimeUnixNano: "1", endTimeUnixNano: "2" }),
+      ),
+    );
+    const point = payload.resourceMetrics[0].scopeMetrics[0].metrics[0].histogram.dataPoints[0];
+
+    expect(point.bucketCounts).toEqual([
+      "0",
+      "0",
+      "1",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+    ]);
+  });
+
+  it("assigns distinct metric sample IDs to each request metric", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const selected = selectRequestSpan([redactSpan(firstSpan)]);
+    const sampleIds = toMetricSamples(selected).map(
+      (sample) => (sample as unknown as { sampleId?: string }).sampleId,
+    );
+
+    expect(sampleIds).toHaveLength(3);
+    expect(sampleIds.every((sampleId) => typeof sampleId === "string")).toBe(true);
+    expect(new Set(sampleIds).size).toBe(sampleIds.length);
+  });
+
   it("encodes sampled Tempo and Loki output with the same trace ID", () => {
     const parsed = parseOtlpJson(validOtlpJson);
     const firstSpan = parsed[0];

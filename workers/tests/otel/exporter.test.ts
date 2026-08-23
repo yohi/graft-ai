@@ -89,4 +89,39 @@ describe("OTel backend exporter", () => {
       status: 401,
     });
   });
+
+  it("does not overwrite an existing R2 object when a job ID collides", async () => {
+    const originalBytes = new TextEncoder().encode('{"resourceSpans":[{"name":"original"}]}');
+    const conflictingBytes = new TextEncoder().encode('{"resourceSpans":[{"name":"conflicting"}]}');
+    const jobId = `collision-${crypto.randomUUID()}`;
+
+    const original = await enqueueBackendJob(
+      otelEnv,
+      {
+        jobId,
+        backend: "tempo",
+        contentType: "application/json",
+        identity: { kind: "trace", traceId: "00112233445566778899aabbccddeeff" },
+        payloadSha256: await sha256Hex(originalBytes),
+      },
+      originalBytes,
+    );
+    await expect(
+      enqueueBackendJob(
+        otelEnv,
+        {
+          jobId,
+          backend: "tempo",
+          contentType: "application/json",
+          identity: { kind: "trace", traceId: "00112233445566778899aabbccddeeff" },
+          payloadSha256: await sha256Hex(conflictingBytes),
+        },
+        conflictingBytes,
+      ),
+    ).rejects.toThrow("export job collision");
+
+    const stored = await otelEnv.OTEL_OBJECTS.get(original.objectKey);
+    expect(stored).not.toBeNull();
+    expect(await stored?.text()).toBe(new TextDecoder().decode(originalBytes));
+  });
 });

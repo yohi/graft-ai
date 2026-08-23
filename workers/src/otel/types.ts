@@ -37,6 +37,7 @@ export type SelectedTrace = Readonly<{
 export type MetricKind = "sum" | "histogram";
 
 export type MetricSample = Readonly<{
+  sampleId: string;
   name: string;
   kind: MetricKind;
   value: number;

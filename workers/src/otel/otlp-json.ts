@@ -15,6 +15,7 @@ export function toMetricSamples(trace: SelectedTrace): readonly MetricSample[] {
   const labels = metricLabels(span);
   const samples: MetricSample[] = [
     {
+      sampleId: metricSampleId(trace.traceId, CANONICAL_METRIC_NAMES[0], labels),
       name: CANONICAL_METRIC_NAMES[0],
       kind: "sum",
       value: 1,
@@ -22,6 +23,7 @@ export function toMetricSamples(trace: SelectedTrace): readonly MetricSample[] {
     },
   ];
   samples.push({
+    sampleId: metricSampleId(trace.traceId, CANONICAL_METRIC_NAMES[1], labels),
     name: CANONICAL_METRIC_NAMES[1],
     kind: "sum",
     value: isError(span) ? 1 : 0,
@@ -29,6 +31,7 @@ export function toMetricSamples(trace: SelectedTrace): readonly MetricSample[] {
   });
   const duration = durationSeconds(span);
   samples.push({
+    sampleId: metricSampleId(trace.traceId, CANONICAL_METRIC_NAMES[2], labels),
     name: CANONICAL_METRIC_NAMES[2],
     kind: "histogram",
     value: duration,
@@ -194,6 +197,16 @@ function metricAttributes(labels: Readonly<Record<string, string>>): readonly Js
     .map(([key, value]) => ({ key, value: { stringValue: value } }));
 }
 
+function metricSampleId(
+  traceId: string,
+  name: string,
+  labels: Readonly<Record<string, string>>,
+): string {
+  return `trace:${traceId}:${name}:${JSON.stringify(
+    Object.fromEntries(Object.entries(labels).sort(([left], [right]) => left.localeCompare(right))),
+  )}`;
+}
+
 function anyValue(value: JsonValue): JsonValue {
   if (typeof value === "string") return { stringValue: value };
   if (typeof value === "boolean") return { boolValue: value };
@@ -210,7 +223,10 @@ function anyValue(value: JsonValue): JsonValue {
 }
 
 function durationBuckets(duration: number): readonly string[] {
-  return [...DURATION_BUCKETS, Infinity].map((bound) => (duration <= bound ? "1" : "0"));
+  const index = DURATION_BUCKETS.findIndex((bound) => duration <= bound);
+  return [...DURATION_BUCKETS, Infinity].map((_, bucketIndex) =>
+    bucketIndex === (index >= 0 ? index : DURATION_BUCKETS.length) ? "1" : "0",
+  );
 }
 
 function durationSeconds(span: RedactedSpan): number {

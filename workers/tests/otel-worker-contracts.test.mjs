@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseJsonc } from "../../scripts/parse-jsonc.mjs";
+import { validateOtelWorkerConfig } from "../../scripts/verify-otel-worker-config.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
 const config = parseJsonc(
@@ -24,6 +25,18 @@ test("dedicated OTel Worker owns its isolated runtime contract", () => {
   ]);
   assert.doesNotMatch(
     JSON.stringify(config),
-    /Authorization:|OTEL_INGEST_TOKEN\s*:/,
+    /"(?:authorization|OTEL_INGEST_TOKEN|OTEL_RATE_LIMIT_HMAC_KEY)"\s*:/i,
   );
+});
+
+test("rejects quoted inline secret keys and mismatched DLQs", () => {
+  const serialized = JSON.stringify(config);
+  assert.throws(
+    () => validateOtelWorkerConfig(config, `${serialized}\n"OTEL_INGEST_TOKEN": "inline"`),
+    /inline credential/,
+  );
+
+  const invalid = structuredClone(config);
+  invalid.queues.consumers[0].dead_letter_queue = "wrong-dlq";
+  assert.throws(() => validateOtelWorkerConfig(invalid, serialized), /consumer contract/);
 });

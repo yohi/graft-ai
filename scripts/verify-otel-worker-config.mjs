@@ -22,7 +22,7 @@ export function validateOtelWorkerConfig(config, rawConfig) {
   if (config.workers_dev !== true) throw new Error("OTel Worker must keep workers_dev enabled");
   if (config.migrations !== undefined) throw new Error("legacy migrations are forbidden for SQLite Durable Objects");
   if (/protobuf/i.test(rawConfig)) throw new Error("OTel Worker configuration must be JSON-only");
-  if (/authorization\s*:|otel_ingest_token\s*:/i.test(rawConfig)) {
+  if (/["']?(?:authorization|otel_ingest_token|otel_rate_limit_hmac_key)["']?\s*:/i.test(rawConfig)) {
     throw new Error("OTel Worker configuration contains an inline credential");
   }
 
@@ -34,7 +34,12 @@ export function validateOtelWorkerConfig(config, rawConfig) {
   if (consumers.length !== expectedConsumers.length) throw new Error("OTel Worker must have four Queue consumers");
   for (const queue of expectedConsumers) {
     const consumer = consumers.find((entry) => entry.queue === queue);
-    if (!consumer || !consumer.dead_letter_queue || consumer.max_retries !== 2) {
+    const expectedDeadLetterQueue = `${queue.replace(/-v1$/, "")}-dlq-v1`;
+    if (
+      !consumer ||
+      consumer.dead_letter_queue !== expectedDeadLetterQueue ||
+      consumer.max_retries !== 2
+    ) {
       throw new Error(`consumer contract is incomplete for ${queue}`);
     }
   }

@@ -43,13 +43,13 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
   if (contentEncoding !== "identity") return json({ error: "unsupported_encoding" }, 415);
 
   const ownerId = crypto.randomUUID();
-  const nowMs = Date.now();
+  const acquiredAtMs = Date.now();
   const ledger = env.OTEL_LEDGER.getByName("global");
   let lease: ActiveRequestLease | null = null;
   try {
     lease = await ledgerCall<ActiveRequestLease | null>(ledger, "active.acquire", {
       ownerId,
-      nowMs,
+      nowMs: acquiredAtMs,
     });
     if (!lease) return responseWithHeaders({ error: "busy" }, 503, { "retry-after": "1" });
 
@@ -64,6 +64,7 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       request.headers.get("cf-connecting-ip"),
       env.OTEL_RATE_LIMIT_HMAC_KEY,
     );
+    const nowMs = Date.now();
     const rateLimit = await rateLimitTake(env, sourceHash, nowMs);
     if (!rateLimit.allowed) {
       await appendOperationalMetric(env, "otel_ingress_rate_limited_total");
@@ -83,15 +84,34 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
 
     const serialized = JSON.stringify(envelope);
     const bytes = new TextEncoder().encode(serialized);
-    const ingressId = await sha256Hex(bytes);
+    const payloadSha256 = await sha256Hex(bytes);
+    const ingressId = await sha256Hex(
+      new TextEncoder().encode(`graft-ai-otel-ingress-v1\0${serialized}`),
+    );
     const reservation = await ledgerCall<ReservationResult>(ledger, "ingress.reserve", {
       ingressId,
-      payloadSha256: ingressId,
+      payloadSha256,
       ownerId,
       fencingToken: lease.fencingToken,
       nowMs,
     });
-    if (reservation.kind === "duplicate") return accepted();
+    if (reservation.kind === "duplicate") {
+      if (reservation.status === "complete" || reservation.status === "enqueued") return accepted();
+      if (reservation.status === "ready" && reservation.pointer) {
+        try {
+          await env.OTEL_INGRESS_QUEUE.send(reservation.pointer);
+          await ledgerCall(ledger, "ingress.enqueued", {
+            ingressId,
+            ownerId: reservation.ownerId,
+            fencingToken: reservation.fencingToken,
+          });
+          return accepted();
+        } catch {
+          return json({ error: "queue_failed" }, 503);
+        }
+      }
+      return responseWithHeaders({ error: "busy" }, 503, { "retry-after": "1" });
+    }
     if (reservation.kind === "collision") return json({ error: "ingress_collision" }, 409);
     if (reservation.kind === "capacity") {
       await appendOperationalMetric(env, "otel_ingress_queue_dropped_total");
@@ -108,12 +128,18 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       return json({ error: "persistence_failed" }, 503);
     }
 
-    await ledgerCall(ledger, "ingress.ready", {
-      ingressId,
-      pointer,
-      ownerId,
-      fencingToken: lease.fencingToken,
-    });
+    try {
+      await ledgerCall(ledger, "ingress.ready", {
+        ingressId,
+        pointer,
+        ownerId,
+        fencingToken: lease.fencingToken,
+      });
+    } catch {
+      const released = await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
+      if (released) await env.OTEL_OBJECTS.delete(pointer.objectKey);
+      return json({ error: "persistence_failed" }, 503);
+    }
     try {
       await env.OTEL_INGRESS_QUEUE.send(pointer);
       await ledgerCall(ledger, "ingress.enqueued", {
@@ -144,10 +170,16 @@ async function releaseReservation(
   ingressId: string,
   ownerId: string,
   fencingToken: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await ledgerCall(ledger, "ingress.release", { ingressId, ownerId, fencingToken });
-  } catch {}
+    return await ledgerCall<boolean>(ledger, "ingress.release", {
+      ingressId,
+      ownerId,
+      fencingToken,
+    });
+  } catch {
+    return false;
+  }
 }
 
 async function rateLimitTake(
@@ -168,6 +200,7 @@ async function rateLimitTake(
 
 async function appendOperationalMetric(env: OtelEnv, name: string): Promise<void> {
   const sample: MetricSample = {
+    sampleId: `${name}:${crypto.randomUUID()}`,
     name,
     kind: "sum",
     value: 1,

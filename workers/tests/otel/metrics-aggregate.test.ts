@@ -13,6 +13,7 @@ describe("OtelMetricsAggregate", () => {
     const stub = otelEnv.OTEL_METRICS_AGGREGATE.getByName(`metrics-${crypto.randomUUID()}`);
     const nowMs = Date.now();
     const base: MetricSample = {
+      sampleId: "base-sample",
       name: "ai_gateway_requests_total",
       kind: "sum",
       value: 1,
@@ -27,7 +28,7 @@ describe("OtelMetricsAggregate", () => {
 
     const duplicate = await stub.fetch("https://metrics/append", {
       method: "POST",
-      body: JSON.stringify({ samples: [base], nowMs }),
+      body: JSON.stringify({ samples: [{ ...base, value: 999 }], nowMs }),
     });
     expect(await duplicate.json()).toMatchObject({ accepted: 0, pending: 1, flushed: false });
 
@@ -36,7 +37,14 @@ describe("OtelMetricsAggregate", () => {
       final = await stub.fetch("https://metrics/append", {
         method: "POST",
         body: JSON.stringify({
-          samples: [{ ...base, value: index, labels: { env: "prod", gateway: `main-${index}` } }],
+          samples: [
+            {
+              ...base,
+              sampleId: `sample-${index}`,
+              value: index,
+              labels: { env: "prod", gateway: `main-${index}` },
+            },
+          ],
           nowMs,
         }),
       });
@@ -48,6 +56,7 @@ describe("OtelMetricsAggregate", () => {
   it("queues a Prometheus payload when the metrics window alarm flushes", async () => {
     const stub = otelEnv.OTEL_METRICS_AGGREGATE.getByName(`export-${crypto.randomUUID()}`);
     const sample: MetricSample = {
+      sampleId: "window-sample",
       name: "ai_gateway_requests_total",
       kind: "sum",
       value: 1,

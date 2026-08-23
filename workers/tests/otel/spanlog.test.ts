@@ -63,4 +63,39 @@ describe("projectLokiRecord", () => {
 
     expect(record).toBeNull();
   });
+
+  it("retains a completion-only payload when truncating an oversized line", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const attributes = { ...firstSpan.attributes };
+    delete attributes["gen_ai.prompt_json"];
+    attributes["gen_ai.completion_json"] = "😀".repeat(200_000);
+
+    const record = projectLokiRecord(redactSpan({ ...firstSpan, attributes }));
+    expect(record).not.toBeNull();
+    const line = JSON.parse(record?.line ?? "{}");
+    expect(line.completion).toEqual(expect.any(String));
+    expect(line.completion.length).toBeGreaterThan(0);
+    expect(line.completion).not.toBe("[TRUNCATED]");
+    expect(new TextEncoder().encode(record?.line ?? "").byteLength).toBeLessThanOrEqual(262_144);
+  });
+
+  it("calculates duration from nanosecond strings without Number precision loss", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const start = 1_700_000_000_000_000_000n;
+    const end = start + 123_456_789n;
+    const record = projectLokiRecord(
+      redactSpan({
+        ...firstSpan,
+        startTimeUnixNano: String(start),
+        endTimeUnixNano: String(end),
+      }),
+    );
+    const line = JSON.parse(record?.line ?? "{}");
+
+    expect(line.duration_ms).toBeCloseTo(123.456789, 6);
+  });
 });

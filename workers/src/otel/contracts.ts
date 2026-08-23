@@ -2,6 +2,7 @@ export const MAX_INGRESS_BYTES = 8 * 1024 * 1024;
 export const MAX_GRAFANA_OTLP_BYTES = 4_000_000;
 export const MAX_LOKI_LINE_BYTES = 262_144;
 export const MAX_CONCURRENT_REQUESTS = 100;
+export const ACTIVE_REQUEST_LEASE_MS = 35_000;
 export const MAX_INGRESS_RESERVATIONS = 1_000;
 export const RATE_LIMIT_CAPACITY = 20;
 export const RATE_LIMIT_REFILL_PER_SECOND = 2;

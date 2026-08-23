@@ -54,4 +54,16 @@ describe("redactSpan", () => {
     expect(redacted.attributes["gen_ai.prompt_json"]).toBeUndefined();
     expect(redacted.payloadDropReason).toBe("redaction_failure");
   });
+
+  it("redacts unknown token-like keys instead of treating them as numeric", () => {
+    const span = parseOtlpJson(validOtlpJson)[0];
+    if (!span) throw new Error("fixture did not produce a span");
+
+    const redacted = redactSpan({
+      ...span,
+      attributes: { ...span.attributes, access_tokens: "opaque-secret" },
+    });
+
+    expect(redacted.attributes.access_tokens).toBe("[REDACTED]");
+  });
 });

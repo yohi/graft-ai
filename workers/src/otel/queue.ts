@@ -114,13 +114,19 @@ async function consumeExport(
   }
 
   await releaseClaim(ledger, claim.claim);
-  await appendOperationalSamples(env, [failureSample(pointer.backend, result)]);
+  await appendOperationalSamples(env, [
+    failureSample(pointer.backend, pointer.jobId, message.attempts, result),
+  ]);
   if (result.kind === "terminal" || message.attempts >= 3) {
-    await appendOperationalSamples(env, [exhaustedSample(pointer.backend)]);
+    await appendOperationalSamples(env, [
+      exhaustedSample(pointer.backend, pointer.jobId, message.attempts),
+    ]);
     throw new ExportDeadLetterError();
   }
 
-  await appendOperationalSamples(env, [retrySample(pointer.backend)]);
+  await appendOperationalSamples(env, [
+    retrySample(pointer.backend, pointer.jobId, message.attempts),
+  ]);
   const defaultDelay = message.attempts <= 1 ? 1 : 2;
   const retryAfterSeconds = result.kind === "retryable" ? result.retryAfterSeconds : undefined;
   const delaySeconds = Math.max(defaultDelay, retryAfterSeconds ?? 0);
@@ -136,9 +142,12 @@ class ExportDeadLetterError extends Error {
 
 function failureSample(
   backend: Backend,
+  jobId: string,
+  attempt: number,
   result: Exclude<Awaited<ReturnType<typeof exportPointer>>, { kind: "success" }>,
 ): MetricSample {
   return {
+    sampleId: `${jobId}:failure:${attempt}`,
     name: "otel_backend_export_failures_total",
     kind: "sum",
     value: 1,
@@ -146,8 +155,9 @@ function failureSample(
   };
 }
 
-function retrySample(backend: Backend): MetricSample {
+function retrySample(backend: Backend, jobId: string, attempt: number): MetricSample {
   return {
+    sampleId: `${jobId}:retry:${attempt}`,
     name: "otel_backend_export_retries_total",
     kind: "sum",
     value: 1,
@@ -155,8 +165,9 @@ function retrySample(backend: Backend): MetricSample {
   };
 }
 
-function exhaustedSample(backend: Backend): MetricSample {
+function exhaustedSample(backend: Backend, jobId: string, attempt: number): MetricSample {
   return {
+    sampleId: `${jobId}:exhausted:${attempt}`,
     name: "otel_backend_export_exhausted_total",
     kind: "sum",
     value: 1,

@@ -37,7 +37,7 @@ export class OtelMetricsAggregate {
       let aggregate = [...current.samples];
       let accepted = 0;
       for (const sample of samples) {
-        const id = await sampleId(sample);
+        const id = sampleId(sample);
         if (ids.has(id)) continue;
         ids.add(id);
         aggregate = mergeSample(aggregate, sample);
@@ -148,10 +148,8 @@ function aggregateKey(sample: MetricSample): string {
   });
 }
 
-function sampleId(sample: MetricSample): Promise<string> {
-  return sha256Hex(
-    new TextEncoder().encode(JSON.stringify({ ...sample, labels: aggregateKey(sample) })),
-  );
+function sampleId(sample: MetricSample): string {
+  return sample.sampleId;
 }
 
 function readSamples(value: unknown): readonly MetricSample[] | null {
@@ -164,6 +162,7 @@ function readSamples(value: unknown): readonly MetricSample[] | null {
       (item["kind"] !== "sum" && item["kind"] !== "histogram")
     )
       return null;
+    if (typeof item["sampleId"] !== "string" || item["sampleId"].length === 0) return null;
     if (
       typeof item["value"] !== "number" ||
       !Number.isFinite(item["value"]) ||

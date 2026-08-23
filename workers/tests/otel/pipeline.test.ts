@@ -143,16 +143,20 @@ async function readObject(key: string): Promise<Uint8Array> {
 }
 
 async function ingressPointerFor(key: string, bytes: Uint8Array): Promise<IngressPointer> {
-  const sha256 = await sha256Hex(bytes);
+  const payloadSha256 = await sha256Hex(bytes);
+  const serialized = new TextDecoder().decode(bytes);
+  const ingressId = await sha256Hex(
+    new TextEncoder().encode(`graft-ai-otel-ingress-v1\0${serialized}`),
+  );
   return {
     schemaVersion: 1,
-    id: sha256,
+    id: ingressId,
     objectKey: key,
-    sha256,
+    sha256: payloadSha256,
     contentType: "application/json",
     createdAtMs: Date.now(),
     kind: "ingress",
-    ingressId: sha256,
+    ingressId,
   };
 }
 

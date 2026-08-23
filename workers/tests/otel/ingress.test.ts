@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleIngress } from "../../src/otel";
 import type { OtelEnv } from "../../src/otel/types";
 import { validOtlpJson } from "./fixtures";
@@ -50,5 +50,29 @@ describe("OTel ingress", () => {
     const text = await object?.text();
     expect(text).toContain("[REDACTED]");
     expect(text).not.toContain("sk-live-test-secret");
+  });
+
+  it("retries a durable ready reservation after the first queue send fails", async () => {
+    const queue = {
+      send: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("queue unavailable"))
+        .mockResolvedValue(undefined),
+    } as unknown as Queue<unknown>;
+    const testEnv = { ...otelEnv, OTEL_INGRESS_QUEUE: queue } as OtelEnv;
+    const body = structuredClone(validOtlpJson) as typeof validOtlpJson;
+    const firstResource = body.resourceSpans[0]?.resource;
+    if (!firstResource) throw new Error("fixture resource missing");
+    firstResource.attributes = [
+      ...(firstResource.attributes ?? []),
+      { key: "test.recovery", value: { stringValue: crypto.randomUUID() } },
+    ];
+    const first = await handleIngress(request(body), testEnv);
+    expect(first.status).toBe(503);
+
+    const second = await handleIngress(request(body), testEnv);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ reason: "accepted" });
+    expect(queue.send).toHaveBeenCalledTimes(2);
   });
 });

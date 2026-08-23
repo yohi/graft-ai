@@ -1,14 +1,23 @@
 import {
+  ACTIVE_REQUEST_LEASE_MS,
   DEDUPLICATION_TOMBSTONE_MS,
   MAX_CONCURRENT_REQUESTS,
   MAX_INGRESS_RESERVATIONS,
   R2_RETENTION_FAILSAFE_MS,
 } from "./contracts";
-import type { ActiveRequestLease, ExportClaim, ExportPointer, IngressPointer } from "./types";
+import type {
+  ActiveRequestLease,
+  ExportClaim,
+  ExportPointer,
+  IngressPointer,
+  JobDescriptor,
+  MetricSample,
+  OtelEnv,
+} from "./types";
 
 type Lease = ActiveRequestLease & Readonly<{ ownerId: string }>;
 type IngressStatus = "reserved" | "ready" | "enqueued" | "complete" | "expired";
-type ExportStatus = "ready" | "enqueued" | "claimed" | "complete" | "expired";
+type ExportStatus = "reserved" | "ready" | "enqueued" | "claimed" | "complete" | "expired";
 
 type IngressEntry = Readonly<{
   payloadSha256: string;
@@ -22,7 +31,7 @@ type IngressEntry = Readonly<{
 type ExportEntry = Readonly<{
   payloadSha256: string;
   status: ExportStatus;
-  pointer: ExportPointer;
+  pointer?: ExportPointer;
   claim?: ExportClaim;
   tombstoneUntilMs: number;
 }>;
@@ -34,10 +43,33 @@ type LedgerState = Readonly<{
   exports: Readonly<Record<string, ExportEntry>>;
 }>;
 
-export type ReservationResult = Readonly<{
-  kind: "reserved" | "duplicate" | "collision" | "capacity";
-  pointer?: IngressPointer;
-}>;
+export type ReservationResult =
+  | Readonly<{
+      kind: "reserved";
+    }>
+  | Readonly<{
+      kind: "duplicate";
+      status: IngressStatus;
+      pointer?: IngressPointer;
+      ownerId: string;
+      fencingToken: string;
+    }>
+  | Readonly<{
+      kind: "collision" | "capacity";
+    }>;
+
+export type ExportRegistrationResult =
+  | Readonly<{
+      kind: "reserved";
+    }>
+  | Readonly<{
+      kind: "duplicate";
+      status: ExportStatus;
+      pointer?: ExportPointer;
+    }>
+  | Readonly<{
+      kind: "collision";
+    }>;
 
 export type ExportClaimResult =
   | Readonly<{ kind: "claimed"; claim: ExportClaim; pointer: ExportPointer }>
@@ -56,7 +88,7 @@ export class LedgerStaleError extends Error {
 export class OtelLedger {
   constructor(
     private readonly state: DurableObjectState,
-    _env: unknown,
+    private readonly env: OtelEnv,
   ) {}
 
   async fetch(request: Request): Promise<Response> {
@@ -117,6 +149,12 @@ export class OtelLedger {
         );
       case "export.register":
         return this.registerExport(
+          readJobDescriptor(input["descriptor"]),
+          requiredNumber(input, "nowMs"),
+        );
+      case "export.ready":
+        return this.markExportReady(
+          requiredString(input, "jobId"),
           readExportPointer(input["pointer"]),
           requiredNumber(input, "nowMs"),
         );
@@ -130,6 +168,8 @@ export class OtelLedger {
         );
       case "export.release":
         return this.releaseExport(readClaim(input["claim"]));
+      case "export.release-reservation":
+        return this.releaseExportReservation(requiredString(input, "jobId"));
       case "export.complete":
         return this.completeExport(readClaim(input["claim"]));
       default:
@@ -149,7 +189,7 @@ export class OtelLedger {
     const lease = {
       ownerId,
       fencingToken: String(state.nextFencingToken),
-      expiresAtMs: nowMs + 30_000,
+      expiresAtMs: nowMs + ACTIVE_REQUEST_LEASE_MS,
     } satisfies Lease;
     await this.writeState({
       ...state,
@@ -182,7 +222,13 @@ export class OtelLedger {
     const existing = state.ingress[input.ingressId];
     if (existing) {
       if (existing.payloadSha256 !== input.payloadSha256) return { kind: "collision" };
-      return { kind: "duplicate", pointer: existing.pointer };
+      return {
+        kind: "duplicate",
+        status: existing.status,
+        ...(existing.pointer ? { pointer: existing.pointer } : {}),
+        ownerId: existing.ownerId,
+        fencingToken: existing.fencingToken,
+      };
     }
     const pending = Object.values(state.ingress).filter((entry) =>
       ["reserved", "ready", "enqueued"].includes(entry.status),
@@ -196,6 +242,7 @@ export class OtelLedger {
       tombstoneUntilMs: input.nowMs + DEDUPLICATION_TOMBSTONE_MS,
     };
     await this.writeState({ ...state, ingress: { ...state.ingress, [input.ingressId]: entry } });
+    await this.state.storage.setAlarm(input.nowMs + DEDUPLICATION_TOMBSTONE_MS);
     return { kind: "reserved" };
   }
 
@@ -216,6 +263,7 @@ export class OtelLedger {
         [ingressId]: { ...entry, status: "ready", pointer },
       },
     });
+    await this.state.storage.setAlarm(Date.now() + 1_000);
   }
 
   async markIngressEnqueued(
@@ -267,22 +315,42 @@ export class OtelLedger {
   }
 
   async registerExport(
-    pointer: ExportPointer,
+    descriptor: JobDescriptor,
     nowMs: number,
-  ): Promise<"reserved" | "duplicate" | "collision"> {
+  ): Promise<ExportRegistrationResult> {
     const state = await this.readState(nowMs);
-    const existing = state.exports[pointer.jobId];
+    const existing = state.exports[descriptor.jobId];
     if (existing) {
-      return existing.payloadSha256 === pointer.payloadSha256 ? "duplicate" : "collision";
+      if (existing.payloadSha256 !== descriptor.payloadSha256) return { kind: "collision" };
+      return {
+        kind: "duplicate",
+        status: existing.status,
+        ...(existing.pointer ? { pointer: existing.pointer } : {}),
+      };
     }
     const entry: ExportEntry = {
-      payloadSha256: pointer.payloadSha256,
-      status: "ready",
-      pointer,
+      payloadSha256: descriptor.payloadSha256,
+      status: "reserved",
       tombstoneUntilMs: nowMs + DEDUPLICATION_TOMBSTONE_MS,
     };
-    await this.writeState({ ...state, exports: { ...state.exports, [pointer.jobId]: entry } });
-    return "reserved";
+    await this.writeState({ ...state, exports: { ...state.exports, [descriptor.jobId]: entry } });
+    await this.state.storage.setAlarm(nowMs + DEDUPLICATION_TOMBSTONE_MS);
+    return { kind: "reserved" };
+  }
+
+  async markExportReady(jobId: string, pointer: ExportPointer, nowMs: number): Promise<boolean> {
+    const state = await this.readState(nowMs);
+    const entry = state.exports[jobId];
+    if (!entry || entry.payloadSha256 !== pointer.payloadSha256) return false;
+    if (entry.status !== "reserved") {
+      return Boolean(entry.pointer && entry.pointer.objectKey === pointer.objectKey);
+    }
+    await this.writeState({
+      ...state,
+      exports: { ...state.exports, [jobId]: { ...entry, status: "ready", pointer } },
+    });
+    await this.state.storage.setAlarm(Date.now() + 1_000);
+    return true;
   }
 
   async markExportEnqueued(jobId: string): Promise<boolean> {
@@ -290,7 +358,7 @@ export class OtelLedger {
     const entry = state.exports[jobId];
     if (!entry) return false;
     if (entry.status === "enqueued") return true;
-    if (entry.status !== "ready") return false;
+    if (entry.status !== "ready" || !entry.pointer) return false;
     await this.writeState({
       ...state,
       exports: { ...state.exports, [jobId]: { ...entry, status: "enqueued" } },
@@ -304,6 +372,7 @@ export class OtelLedger {
     if (!entry) return { kind: "missing" };
     if (entry.status === "complete") return { kind: "complete" };
     if (entry.status === "expired") return { kind: "expired" };
+    if (entry.status === "reserved" || !entry.pointer) return { kind: "busy" };
     if (entry.status === "claimed" && entry.claim && entry.claim.expiresAtMs > nowMs)
       return { kind: "busy" };
     const claim: ExportClaim = {
@@ -317,6 +386,7 @@ export class OtelLedger {
       nextFencingToken: state.nextFencingToken + 1,
       exports: { ...state.exports, [jobId]: { ...entry, status: "claimed", claim } },
     });
+    await this.state.storage.setAlarm(claim.expiresAtMs);
     return { kind: "claimed", claim, pointer: entry.pointer };
   }
 
@@ -331,6 +401,16 @@ export class OtelLedger {
         [claim.jobId]: { ...entry, status: "enqueued", claim: undefined },
       },
     });
+    return true;
+  }
+
+  async releaseExportReservation(jobId: string): Promise<boolean> {
+    const state = await this.readState(Date.now());
+    const entry = state.exports[jobId];
+    if (!entry || entry.status !== "reserved") return false;
+    const exports = { ...state.exports };
+    delete exports[jobId];
+    await this.writeState({ ...state, exports });
     return true;
   }
 
@@ -350,8 +430,60 @@ export class OtelLedger {
   }
 
   async alarm(): Promise<void> {
-    const state = await this.readState(Date.now());
-    await this.writeState(state);
+    await this.state.blockConcurrencyWhile(async () => {
+      const nowMs = Date.now();
+      const state = await this.readState(nowMs);
+      const ingress = { ...state.ingress };
+      const exports = { ...state.exports };
+      const expiredPointers: Array<IngressPointer | ExportPointer> = [];
+      let nextAlarmMs: number | null = null;
+
+      for (const [ingressId, entry] of Object.entries(ingress)) {
+        if (isRetentionExpired(entry, nowMs)) {
+          if (entry.pointer) expiredPointers.push(entry.pointer);
+          ingress[ingressId] = { ...entry, status: "expired" };
+          continue;
+        }
+        if (entry.status === "ready" && entry.pointer) {
+          try {
+            await sendPointer(this.env, entry.pointer);
+            ingress[ingressId] = { ...entry, status: "enqueued" };
+          } catch {
+            nextAlarmMs = earliestAlarm(nextAlarmMs, nowMs + 1_000);
+          }
+        }
+        nextAlarmMs = retentionAlarm(nextAlarmMs, entry, nowMs);
+      }
+
+      for (const [jobId, entry] of Object.entries(exports)) {
+        if (isRetentionExpired(entry, nowMs)) {
+          if (entry.pointer) expiredPointers.push(entry.pointer);
+          exports[jobId] = { ...entry, status: "expired", claim: undefined };
+          continue;
+        }
+        if (entry.status === "claimed" && entry.claim && entry.claim.expiresAtMs <= nowMs) {
+          exports[jobId] = { ...entry, status: "enqueued", claim: undefined };
+        } else if (entry.status === "ready" && entry.pointer) {
+          try {
+            await sendPointer(this.env, entry.pointer);
+            exports[jobId] = { ...entry, status: "enqueued" };
+          } catch {
+            nextAlarmMs = earliestAlarm(nextAlarmMs, nowMs + 1_000);
+          }
+        }
+        const current = exports[jobId] ?? entry;
+        nextAlarmMs = retentionAlarm(nextAlarmMs, current, nowMs);
+        if (current.status === "claimed" && current.claim) {
+          nextAlarmMs = earliestAlarm(nextAlarmMs, current.claim.expiresAtMs);
+        }
+      }
+
+      await this.writeState({ ...state, ingress, exports });
+      for (const pointer of expiredPointers) {
+        await this.expirePointer(pointer);
+      }
+      if (nextAlarmMs !== null) await this.state.storage.setAlarm(nextAlarmMs);
+    });
   }
 
   private async readState(nowMs: number): Promise<LedgerState> {
@@ -360,19 +492,81 @@ export class OtelLedger {
     const ingress = Object.fromEntries(
       Object.entries(state.ingress).filter(([_, entry]) =>
         entry.status === "ready" || entry.status === "enqueued"
-          ? entry.tombstoneUntilMs + R2_RETENTION_FAILSAFE_MS > nowMs
+          ? true
           : entry.tombstoneUntilMs > nowMs,
       ),
     );
     const exports = Object.fromEntries(
-      Object.entries(state.exports).filter(([_, entry]) => entry.tombstoneUntilMs > nowMs),
+      Object.entries(state.exports).filter(([_, entry]) =>
+        entry.status === "ready" || entry.status === "enqueued" || entry.status === "claimed"
+          ? true
+          : entry.tombstoneUntilMs > nowMs,
+      ),
     );
     return { ...state, ingress, exports };
+  }
+
+  private async expirePointer(pointer: IngressPointer | ExportPointer): Promise<void> {
+    try {
+      await this.env.OTEL_OBJECTS.delete(pointer.objectKey);
+    } catch {}
+    try {
+      const sample: MetricSample = {
+        sampleId: `r2-retention:${pointer.kind}:${pointer.id}`,
+        name: "otel_r2_retention_expired_total",
+        kind: "sum",
+        value: 1,
+        labels: { kind: pointer.kind },
+      };
+      await this.env.OTEL_METRICS_AGGREGATE.getByName("global").fetch("https://metrics/append", {
+        method: "POST",
+        body: JSON.stringify({ samples: [sample], nowMs: Date.now() }),
+      });
+    } catch {}
   }
 
   private async writeState(state: LedgerState): Promise<void> {
     await this.state.storage.put("state", state);
   }
+}
+
+function isRetentionExpired(entry: IngressEntry | ExportEntry, nowMs: number): boolean {
+  return (
+    (entry.status === "ready" || entry.status === "enqueued" || entry.status === "claimed") &&
+    entry.tombstoneUntilMs + R2_RETENTION_FAILSAFE_MS <= nowMs
+  );
+}
+
+function retentionAlarm(
+  current: number | null,
+  entry: IngressEntry | ExportEntry,
+  nowMs: number,
+): number | null {
+  if (entry.status !== "ready" && entry.status !== "enqueued" && entry.status !== "claimed") {
+    return current;
+  }
+  const deadline = entry.tombstoneUntilMs + R2_RETENTION_FAILSAFE_MS;
+  return deadline > nowMs ? earliestAlarm(current, deadline) : current;
+}
+
+function earliestAlarm(current: number | null, candidate: number): number {
+  return current === null ? candidate : Math.min(current, candidate);
+}
+
+async function sendPointer(env: OtelEnv, pointer: IngressPointer | ExportPointer): Promise<void> {
+  if (pointer.kind === "ingress") {
+    await env.OTEL_INGRESS_QUEUE.send(pointer);
+    return;
+  }
+  if (pointer.backend === "tempo") {
+    await env.OTEL_TEMPO_QUEUE.send(pointer);
+    return;
+  }
+  if (pointer.backend === "loki") {
+    await env.OTEL_LOKI_QUEUE.send(pointer);
+    return;
+  }
+  await env.OTEL_PROMETHEUS_QUEUE.send(pointer);
 }
 
 export async function ledgerCall<T>(
@@ -411,6 +605,11 @@ function sameClaim(left: ExportClaim | undefined, right: ExportClaim): boolean {
 function readExportPointer(value: unknown): ExportPointer {
   if (!isRecord(value)) throw new TypeError("invalid export pointer");
   return value as ExportPointer;
+}
+
+function readJobDescriptor(value: unknown): JobDescriptor {
+  if (!isRecord(value)) throw new TypeError("invalid job descriptor");
+  return value as JobDescriptor;
 }
 
 function readIngressPointer(value: unknown): IngressPointer {

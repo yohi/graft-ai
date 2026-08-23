@@ -231,7 +231,7 @@ function durationBuckets(duration: number): readonly string[] {
 
 function durationSeconds(span: RedactedSpan): number {
   const durationMs = numericAttribute(span, "duration_ms", "gen_ai.duration_ms");
-  if (durationMs !== null) return durationMs / 1_000;
+  if (durationMs !== null && durationMs >= 0) return durationMs / 1_000;
   try {
     const start = BigInt(span.startTimeUnixNano);
     const end = BigInt(span.endTimeUnixNano);

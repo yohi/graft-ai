@@ -99,6 +99,25 @@ describe("OTLP JSON encoders", () => {
     ]);
   });
 
+  it("falls back to timestamp duration when an explicit duration is negative", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+
+    const selected = selectRequestSpan([
+      redactSpan({
+        ...firstSpan,
+        attributes: { ...firstSpan.attributes, "gen_ai.duration_ms": -20 },
+      }),
+    ]);
+    const duration = toMetricSamples(selected).find(
+      (sample) => sample.name === "ai_gateway_request_duration_seconds",
+    );
+    if (!duration) throw new Error("duration sample missing");
+
+    expect(duration.value).toBeCloseTo(0.125, 9);
+  });
+
   it("assigns distinct metric sample IDs to each request metric", () => {
     const parsed = parseOtlpJson(validOtlpJson);
     const firstSpan = parsed[0];

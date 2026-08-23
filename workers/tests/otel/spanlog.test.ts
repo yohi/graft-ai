@@ -98,4 +98,20 @@ describe("projectLokiRecord", () => {
 
     expect(line.duration_ms).toBeCloseTo(123.456789, 6);
   });
+
+  it("falls back to timestamp duration when an explicit duration is negative", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+
+    const record = projectLokiRecord(
+      redactSpan({
+        ...firstSpan,
+        attributes: { ...firstSpan.attributes, "gen_ai.duration_ms": -20 },
+      }),
+    );
+    const line = JSON.parse(record?.line ?? "{}");
+
+    expect(line.duration_ms).toBeCloseTo(125, 9);
+  });
 });

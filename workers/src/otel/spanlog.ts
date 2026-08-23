@@ -35,7 +35,7 @@ export function projectLokiRecord(span: RedactedSpan): LokiRecord | null {
     const value = firstValue(span, ...aliases);
     if (value === undefined) continue;
     const numeric = finiteNumber(value);
-    if (numeric === null) {
+    if (numeric === null || (target === "duration_ms" && numeric < 0)) {
       numericFieldInvalid = true;
       continue;
     }

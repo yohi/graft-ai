@@ -30,6 +30,61 @@ describe("parseOtlpJson", () => {
     ).toThrow(/trace ID/i);
   });
 
+  it("orders top-level and nested attribute keys by code point", () => {
+    const spans = parseOtlpJson({
+      resourceSpans: [
+        {
+          resource: { attributes: [] },
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: "11111111111111111111111111111111",
+                  spanId: "1111111111111111",
+                  name: "ordered",
+                  kind: "SPAN_KIND_SERVER",
+                  startTimeUnixNano: "1",
+                  endTimeUnixNano: "2",
+                  status: { code: "STATUS_CODE_OK" },
+                  attributes: [
+                    { key: "z", value: { stringValue: "z" } },
+                    { key: "a", value: { stringValue: "a" } },
+                    { key: "ä", value: { stringValue: "umlaut" } },
+                    {
+                      key: "nested",
+                      value: {
+                        kvlistValue: {
+                          values: [
+                            { key: "z", value: { stringValue: "z" } },
+                            { key: "a", value: { stringValue: "a" } },
+                            { key: "ä", value: { stringValue: "umlaut" } },
+                          ],
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const attributes = spans[0]?.attributes;
+    if (!attributes) throw new Error("parsed attributes missing");
+    const nested = attributes.nested;
+    if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+      throw new Error("nested attributes missing");
+    }
+
+    expect(Object.keys(attributes).filter((key) => ["a", "z", "ä"].includes(key))).toEqual([
+      "a",
+      "z",
+      "ä",
+    ]);
+    expect(Object.keys(nested)).toEqual(["a", "z", "ä"]);
+  });
+
   it("fills missing low-cardinality identity attributes with unknown", () => {
     const spans = parseOtlpJson({
       resourceSpans: [

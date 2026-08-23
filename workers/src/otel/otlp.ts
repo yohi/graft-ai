@@ -119,7 +119,7 @@ function normalizeAttributes(attributes: Attributes): Record<string, JsonValue> 
 function sortAttributes(attributes: Record<string, JsonValue>): Attributes {
   return Object.fromEntries(
     Object.entries(attributes)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareKeys(left, right))
       .map(([key, value]) => [key, sortJson(value)]),
   );
 }
@@ -129,11 +129,16 @@ function sortJson(value: JsonValue): JsonValue {
   if (isRecord(value)) {
     return Object.fromEntries(
       Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => compareKeys(left, right))
         .map(([key, child]) => [key, sortJson(child as JsonValue)]),
     );
   }
   return value;
+}
+
+function compareKeys(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
 function spanKind(value: unknown): string {

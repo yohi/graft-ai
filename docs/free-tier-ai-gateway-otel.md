@@ -198,12 +198,15 @@ Send one controlled low-cost request through the deployed proxy Worker. The
 path omits the leading provider gateway prefix because the Worker appends it:
 
 ```bash
-curl --fail-with-body --show-error \
-  "${PROXY_WORKER_URL}/openai/chat/completions" \
-  -H "X-Proxy-Secret: ${PROXY_SECRET}" \
-  -H "Authorization: Bearer ${OPENAI_API_KEY}" \
-  -H "Content-Type: application/json" \
-  --data '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Reply only with OK."}],"max_tokens":1}'
+curl --config - <<EOF
+fail-with-body
+show-error
+url = "${PROXY_WORKER_URL}/openai/chat/completions"
+header = "X-Proxy-Secret: ${PROXY_SECRET}"
+header = "Authorization: Bearer ${OPENAI_API_KEY}"
+header = "Content-Type: application/json"
+data = "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply only with OK.\"}],\"max_tokens\":1}"
+EOF
 ```
 
 Within 15 minutes, open `graft-ai-otel-observability` and verify all three

@@ -16,6 +16,8 @@ const numericKeys = new Set([
   "gen_ai.usage.output_tokens",
   "total_tokens",
   "gen_ai.usage.total_tokens",
+  "gen_ai.usage.cache_read.input_tokens",
+  "gen_ai.usage.cache_creation.input_tokens",
   "cost_usd",
   "gen_ai.usage.cost_usd",
   "duration_ms",

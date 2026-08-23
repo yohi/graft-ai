@@ -66,4 +66,21 @@ describe("redactSpan", () => {
 
     expect(redacted.attributes.access_tokens).toBe("[REDACTED]");
   });
+
+  it("preserves numeric cache token attributes", () => {
+    const span = parseOtlpJson(validOtlpJson)[0];
+    if (!span) throw new Error("fixture did not produce a span");
+
+    const redacted = redactSpan({
+      ...span,
+      attributes: {
+        ...span.attributes,
+        "gen_ai.usage.cache_read.input_tokens": 12,
+        "gen_ai.usage.cache_creation.input_tokens": 3,
+      },
+    });
+
+    expect(redacted.attributes["gen_ai.usage.cache_read.input_tokens"]).toBe(12);
+    expect(redacted.attributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(3);
+  });
 });

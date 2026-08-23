@@ -17,6 +17,13 @@ const expectedConsumers = [
 ];
 
 export function validateOtelWorkerConfig(config, rawConfig) {
+  validateBasicConfig(config, rawConfig);
+  validateQueues(config);
+  validateStorage(config);
+  validateDurableObjects(config);
+}
+
+function validateBasicConfig(config, rawConfig) {
   if (config.name !== "graft-ai-aig-otel") throw new Error("unexpected OTel Worker name");
   if (config.main !== "src/otel.ts") throw new Error("OTel Worker must use src/otel.ts");
   if (config.workers_dev !== true) throw new Error("OTel Worker must keep workers_dev enabled");
@@ -25,7 +32,12 @@ export function validateOtelWorkerConfig(config, rawConfig) {
   if (/["']?(?:authorization|otel_ingest_token|otel_rate_limit_hmac_key)["']?\s*:/i.test(rawConfig)) {
     throw new Error("OTel Worker configuration contains an inline credential");
   }
+  if (config.routes?.some((route) => typeof route === "string" && !route.includes("workers.dev"))) {
+    throw new Error("initial OTel Worker routes must remain on workers.dev");
+  }
+}
 
+function validateQueues(config) {
   const producers = new Map((config.queues?.producers ?? []).map((entry) => [entry.binding, entry.queue]));
   for (const [binding, queue] of Object.entries(expectedQueues)) {
     if (producers.get(binding) !== queue) throw new Error(`missing producer ${binding}`);
@@ -43,10 +55,15 @@ export function validateOtelWorkerConfig(config, rawConfig) {
       throw new Error(`consumer contract is incomplete for ${queue}`);
     }
   }
+}
 
+function validateStorage(config) {
   if (!config.r2_buckets?.some((entry) => entry.binding === "OTEL_OBJECTS")) {
     throw new Error("OTEL_OBJECTS R2 binding is missing");
   }
+}
+
+function validateDurableObjects(config) {
   const durableBindings = new Set((config.durable_objects?.bindings ?? []).map((entry) => entry.name));
   for (const binding of ["OTEL_RATE_LIMIT", "OTEL_LEDGER", "OTEL_TRACE_AGGREGATE", "OTEL_METRICS_AGGREGATE"]) {
     if (!durableBindings.has(binding)) throw new Error(`Durable Object binding is missing: ${binding}`);
@@ -54,9 +71,6 @@ export function validateOtelWorkerConfig(config, rawConfig) {
   const exports = Object.keys(config.exports ?? {}).sort((left, right) => left.localeCompare(right));
   if (exports.join(",") !== "OtelLedger,OtelMetricsAggregate,OtelRateLimit,TraceAggregate") {
     throw new Error("OTel Worker Durable Object exports are incomplete");
-  }
-  if (config.routes?.some((route) => typeof route === "string" && !route.includes("workers.dev"))) {
-    throw new Error("initial OTel Worker routes must remain on workers.dev");
   }
 }
 

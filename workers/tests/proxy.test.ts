@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import proxyWorker from "../src/proxy";
 import type { ProxyEnv, TelemetryEvent } from "../src/types";
 
@@ -26,6 +26,10 @@ function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
 }
 
 describe("AI Gateway proxy Worker", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("forwards method, body, headers, and path to Cloudflare AI Gateway", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(JSON.stringify({ ok: true }), {
@@ -72,6 +76,51 @@ describe("AI Gateway proxy Worker", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer user-token");
     expect(headers.get("x-client-trace")).toBe("trace-1");
+
+    vi.restoreAllMocks();
+  });
+
+  it("injects configured gateway and environment metadata while preserving other metadata", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const request = new Request("https://proxy.example.com/openai/chat/completions", {
+      method: "POST",
+      headers: {
+        "x-proxy-secret": "test-proxy-secret",
+        "cf-aig-metadata": '{"tenant":"team-a","gateway":"caller","env":"dev"}',
+      },
+      body: "{}",
+    });
+
+    await proxyWorker.fetch?.(request, buildEnv(), mockCtx as unknown as ExecutionContext);
+
+    const [, init] = fetchSpy.mock.calls[0] ?? [];
+    const metadata = JSON.parse(new Headers(init?.headers).get("cf-aig-metadata") ?? "{}");
+    expect(metadata).toEqual({ tenant: "team-a", gateway: "main", env: "prod" });
+    expect(new Headers(init?.headers).get("x-proxy-secret")).toBeNull();
+
+    vi.restoreAllMocks();
+  });
+
+  it("replaces malformed caller metadata with the configured labels", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const request = new Request("https://proxy.example.com/openai/chat/completions", {
+      method: "POST",
+      headers: {
+        "x-proxy-secret": "test-proxy-secret",
+        "cf-aig-metadata": "not-json",
+      },
+      body: "{}",
+    });
+
+    await proxyWorker.fetch?.(request, buildEnv(), mockCtx as unknown as ExecutionContext);
+
+    const [, init] = fetchSpy.mock.calls[0] ?? [];
+    expect(JSON.parse(new Headers(init?.headers).get("cf-aig-metadata") ?? "{}")).toEqual({
+      gateway: "main",
+      env: "prod",
+    });
 
     vi.restoreAllMocks();
   });

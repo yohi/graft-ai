@@ -96,4 +96,16 @@ func TestCanonicalMetrics_uses_non_empty_string_fallback(t *testing.T) {
 	}
 }
 
+func TestCanonicalMetrics_usesCloudflareProviderFallback(t *testing.T) {
+	span := redaction.RedactedSpan{Span: redaction.Span{Attributes: map[string]json.RawMessage{
+		"graft_ai.request_span": raw(`true`),
+		"gen_ai.model.provider": raw(`"openai"`),
+	}}}
+
+	normalized := NewCanonicalMetrics().Normalize(span)
+	if got := normalized.Samples[0].Labels["provider"]; got != "openai" {
+		t.Fatalf("provider = %q, want openai", got)
+	}
+}
+
 func raw(value string) json.RawMessage { return json.RawMessage(value) }

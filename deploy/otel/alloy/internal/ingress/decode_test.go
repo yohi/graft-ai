@@ -100,6 +100,72 @@ func TestDecodeSpans_normalizes_proto_request_fields_for_selector(t *testing.T) 
 	}
 }
 
+func TestDecodeSpans_normalizesCloudflareGenAIProvider(t *testing.T) {
+	payload := requestSpanOTLPBody(t, []*commonpb.KeyValue{
+		stringAttribute("gen_ai.request.model", "gpt-4o-mini"),
+		stringAttribute("gen_ai.model.provider", "openai"),
+		intAttribute("http.response.status_code", 200),
+		stringAttribute("gateway", "main"),
+		stringAttribute("env", "prod"),
+	})
+
+	spans, err := decodeSpans(payload, "application/x-protobuf")
+	if err != nil {
+		t.Fatalf("decodeSpans() error = %v", err)
+	}
+	for key, want := range map[string]string{
+		"model":       `"gpt-4o-mini"`,
+		"provider":    `"openai"`,
+		"status_code": "200",
+		"gateway":     `"main"`,
+		"env":         `"prod"`,
+	} {
+		if got := string(spans[0].Attributes[key]); got != want {
+			t.Fatalf("%s = %s, want %s", key, got, want)
+		}
+	}
+}
+
+func requestSpanOTLPBody(t *testing.T, attributes []*commonpb.KeyValue) []byte {
+	t.Helper()
+	payload := &collectortracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			ScopeSpans: []*tracepb.ScopeSpans{{
+				Spans: []*tracepb.Span{{
+					TraceId:    []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
+					SpanId:     []byte{0x01, 0x12, 0x23, 0x34, 0x45, 0x56, 0x67, 0x78},
+					Name:       "request",
+					Kind:       tracepb.Span_SPAN_KIND_SERVER,
+					Attributes: attributes,
+				}},
+			}},
+		}},
+	}
+	body, err := proto.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal OTLP protobuf: %v", err)
+	}
+	return body
+}
+
+func stringAttribute(key, value string) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key: key,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_StringValue{StringValue: value},
+		},
+	}
+}
+
+func intAttribute(key string, value int64) *commonpb.KeyValue {
+	return &commonpb.KeyValue{
+		Key: key,
+		Value: &commonpb.AnyValue{
+			Value: &commonpb.AnyValue_IntValue{IntValue: value},
+		},
+	}
+}
+
 func validRequestSpanOTLPBody(t *testing.T) []byte {
 	t.Helper()
 	payload := &collectortracepb.ExportTraceServiceRequest{

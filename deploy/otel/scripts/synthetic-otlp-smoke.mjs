@@ -65,7 +65,7 @@ function lokiRecordMatches(stream) {
         record.input_tokens === 12 &&
         record.output_tokens === 7 &&
         record.total_tokens === 19 &&
-        record.cost_usd === 0.0125 &&
+        Math.abs(record.cost_usd - 0.0125) < 1e-9 &&
         serialized.includes("[REDACTED]") &&
         !serialized.includes("sk-live-smoke")
       );

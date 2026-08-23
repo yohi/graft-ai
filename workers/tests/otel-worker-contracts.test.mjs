@@ -6,9 +6,7 @@ import { parseJsonc } from "../../scripts/parse-jsonc.mjs";
 import { validateOtelWorkerConfig } from "../../scripts/verify-otel-worker-config.mjs";
 
 const root = resolve(import.meta.dirname, "../..");
-const config = parseJsonc(
-  readFileSync(resolve(root, "workers/wrangler.otel.jsonc"), "utf8"),
-);
+const config = parseJsonc(readFileSync(resolve(root, "workers/wrangler.otel.jsonc"), "utf8"));
 
 test("dedicated OTel Worker owns its isolated runtime contract", () => {
   assert.equal(config.name, "graft-ai-aig-otel");
@@ -39,4 +37,33 @@ test("rejects quoted inline secret keys and mismatched DLQs", () => {
   const invalid = structuredClone(config);
   invalid.queues.consumers[0].dead_letter_queue = "wrong-dlq";
   assert.throws(() => validateOtelWorkerConfig(invalid, serialized), /consumer contract/);
+});
+
+test("rejects any explicit initial Worker route", () => {
+  const serialized = JSON.stringify(config);
+  const invalidConfigs = [
+    { ...config, route: "https://otel.example.com/*" },
+    { ...config, routes: ["graft-ai.workers.dev/*"] },
+    { ...config, routes: [{ pattern: "otel.example.com/*" }] },
+  ];
+
+  for (const invalid of invalidConfigs) {
+    assert.throws(
+      () => validateOtelWorkerConfig(invalid, serialized),
+      /initial OTel Worker routes must remain on workers\.dev/,
+    );
+  }
+
+  assert.doesNotThrow(() => validateOtelWorkerConfig(config, serialized));
+  assert.doesNotThrow(() => validateOtelWorkerConfig({ ...config, routes: [] }, serialized));
+});
+
+test("requires rate limiting before the ingress body is consumed", () => {
+  const ingressSource = readFileSync(resolve(root, "workers/src/otel/ingress.ts"), "utf8");
+  const bodyRead = ingressSource.indexOf("const body = await readBody(request)");
+  const rateLimitCheck = ingressSource.indexOf("const rateLimit = await rateLimitTake");
+
+  assert.notEqual(bodyRead, -1);
+  assert.notEqual(rateLimitCheck, -1);
+  assert.ok(rateLimitCheck < bodyRead);
 });

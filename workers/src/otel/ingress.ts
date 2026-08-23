@@ -53,13 +53,6 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
     });
     if (!lease) return responseWithHeaders({ error: "busy" }, 503, { "retry-after": "1" });
 
-    const body = await readBody(request);
-    if (body.kind !== "ok") {
-      if (body.kind === "too_large") return json({ error: "payload_too_large" }, 413);
-      if (body.kind === "timeout") return json({ error: "request_timeout" }, 408);
-      return json({ error: "invalid_utf8" }, 400);
-    }
-
     const sourceHash = await sourceHashFor(
       request.headers.get("cf-connecting-ip"),
       env.OTEL_RATE_LIMIT_HMAC_KEY,
@@ -71,6 +64,13 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       return responseWithHeaders({ error: "rate_limited" }, 429, {
         "retry-after": String(rateLimit.retryAfterSeconds),
       });
+    }
+
+    const body = await readBody(request);
+    if (body.kind !== "ok") {
+      if (body.kind === "too_large") return json({ error: "payload_too_large" }, 413);
+      if (body.kind === "timeout") return json({ error: "request_timeout" }, 408);
+      return json({ error: "invalid_utf8" }, 400);
     }
 
     let envelope: OtelIngressEnvelope;

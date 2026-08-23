@@ -24,26 +24,44 @@ export function validateOtelWorkerConfig(config, rawConfig) {
 }
 
 function validateBasicConfig(config, rawConfig) {
-  if (config.name !== "graft-ai-aig-otel") throw new Error("unexpected OTel Worker name");
-  if (config.main !== "src/otel.ts") throw new Error("OTel Worker must use src/otel.ts");
-  if (config.workers_dev !== true) throw new Error("OTel Worker must keep workers_dev enabled");
-  if (config.migrations !== undefined) throw new Error("legacy migrations are forbidden for SQLite Durable Objects");
-  if (/protobuf/i.test(rawConfig)) throw new Error("OTel Worker configuration must be JSON-only");
-  if (/["']?(?:authorization|otel_ingest_token|otel_rate_limit_hmac_key)["']?\s*:/i.test(rawConfig)) {
+  if (config.name !== "graft-ai-aig-otel")
+    throw new Error("unexpected OTel Worker name");
+  if (config.main !== "src/otel.ts")
+    throw new Error("OTel Worker must use src/otel.ts");
+  if (config.workers_dev !== true)
+    throw new Error("OTel Worker must keep workers_dev enabled");
+  if (config.migrations !== undefined)
+    throw new Error(
+      "legacy migrations are forbidden for SQLite Durable Objects",
+    );
+  if (/protobuf/i.test(rawConfig))
+    throw new Error("OTel Worker configuration must be JSON-only");
+  if (
+    /["']?(?:authorization|otel_ingest_token|otel_rate_limit_hmac_key)["']?\s*:/i.test(
+      rawConfig,
+    )
+  ) {
     throw new Error("OTel Worker configuration contains an inline credential");
   }
-  if (config.routes?.some((route) => typeof route === "string" && !route.includes("workers.dev"))) {
+  if (config.route !== undefined || (config.routes?.length ?? 0) > 0) {
     throw new Error("initial OTel Worker routes must remain on workers.dev");
   }
 }
 
 function validateQueues(config) {
-  const producers = new Map((config.queues?.producers ?? []).map((entry) => [entry.binding, entry.queue]));
+  const producers = new Map(
+    (config.queues?.producers ?? []).map((entry) => [
+      entry.binding,
+      entry.queue,
+    ]),
+  );
   for (const [binding, queue] of Object.entries(expectedQueues)) {
-    if (producers.get(binding) !== queue) throw new Error(`missing producer ${binding}`);
+    if (producers.get(binding) !== queue)
+      throw new Error(`missing producer ${binding}`);
   }
   const consumers = config.queues?.consumers ?? [];
-  if (consumers.length !== expectedConsumers.length) throw new Error("OTel Worker must have four Queue consumers");
+  if (consumers.length !== expectedConsumers.length)
+    throw new Error("OTel Worker must have four Queue consumers");
   for (const queue of expectedConsumers) {
     const consumer = consumers.find((entry) => entry.queue === queue);
     const expectedDeadLetterQueue = `${queue.replace(/-v1$/, "")}-dlq-v1`;
@@ -64,12 +82,25 @@ function validateStorage(config) {
 }
 
 function validateDurableObjects(config) {
-  const durableBindings = new Set((config.durable_objects?.bindings ?? []).map((entry) => entry.name));
-  for (const binding of ["OTEL_RATE_LIMIT", "OTEL_LEDGER", "OTEL_TRACE_AGGREGATE", "OTEL_METRICS_AGGREGATE"]) {
-    if (!durableBindings.has(binding)) throw new Error(`Durable Object binding is missing: ${binding}`);
+  const durableBindings = new Set(
+    (config.durable_objects?.bindings ?? []).map((entry) => entry.name),
+  );
+  for (const binding of [
+    "OTEL_RATE_LIMIT",
+    "OTEL_LEDGER",
+    "OTEL_TRACE_AGGREGATE",
+    "OTEL_METRICS_AGGREGATE",
+  ]) {
+    if (!durableBindings.has(binding))
+      throw new Error(`Durable Object binding is missing: ${binding}`);
   }
-  const exports = Object.keys(config.exports ?? {}).sort((left, right) => left.localeCompare(right));
-  if (exports.join(",") !== "OtelLedger,OtelMetricsAggregate,OtelRateLimit,TraceAggregate") {
+  const exports = Object.keys(config.exports ?? {}).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  if (
+    exports.join(",") !==
+    "OtelLedger,OtelMetricsAggregate,OtelRateLimit,TraceAggregate"
+  ) {
     throw new Error("OTel Worker Durable Object exports are incomplete");
   }
 }
@@ -82,11 +113,17 @@ function main() {
   process.stdout.write("OTel Worker configuration validation passed\n");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.dirname, "verify-otel-worker-config.mjs")) {
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) ===
+    resolve(import.meta.dirname, "verify-otel-worker-config.mjs")
+) {
   try {
     main();
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
     process.exitCode = 1;
   }
 }

@@ -77,4 +77,49 @@ describe("OTel ingress", () => {
     expect(await second.json()).toMatchObject({ reason: "accepted" });
     expect(queue.send).toHaveBeenCalledTimes(2);
   });
+
+  it("rate-limits from request headers before consuming the request body", async () => {
+    const rateLimitStub = otelEnv.OTEL_RATE_LIMIT.getByName(`rate-test-${crypto.randomUUID()}`);
+    const rateLimitFetch = vi
+      .spyOn(rateLimitStub, "fetch")
+      .mockResolvedValue(Response.json({ allowed: false, retryAfterSeconds: 1 }));
+    const getRateLimitStub = vi
+      .spyOn(otelEnv.OTEL_RATE_LIMIT, "getByName")
+      .mockReturnValue(rateLimitStub);
+    let bodyRead = false;
+    const body = {
+      getReader() {
+        bodyRead = true;
+        throw new Error("request body must not be consumed");
+      },
+    };
+    const request = new Proxy(
+      new Request("https://worker.example/v1/traces", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "application/json",
+          "cf-connecting-ip": "203.0.113.12",
+        },
+        body: "{}",
+      }),
+      {
+        get(target, property) {
+          if (property === "body") return body;
+          return Reflect.get(target, property, target);
+        },
+      },
+    );
+
+    try {
+      const response = await handleIngress(request, otelEnv);
+
+      expect(response.status).toBe(429);
+      expect(await response.json()).toMatchObject({ error: "rate_limited" });
+      expect(bodyRead).toBe(false);
+    } finally {
+      getRateLimitStub.mockRestore();
+      rateLimitFetch.mockRestore();
+    }
+  });
 });

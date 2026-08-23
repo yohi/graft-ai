@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Cloudflare Worker OTel Pipeline Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -18,8 +20,10 @@
 - A public Worker has no Tunnel peer CIDR to validate. Bearer authentication is the trust boundary; use Cloudflare-provided `CF-Connecting-IP` only for HMAC-hashed rate-limit buckets, and ignore `X-Forwarded-For` and `True-Client-IP`.
 - Redact before any R2 write, Queue send, Durable Object request, log, or Grafana request. Do not persist raw headers, raw OTLP bodies, prompt/completion text before redaction, or credentials.
 - Preserve all existing signal contracts: request-span selection, `graft-ai-otel-v1` SHA-256 sampling, unsampled RED metrics, sampled Tempo/Loki output, canonical metric names, and exactly four Loki labels: `model`, `status_code`, `env`, `gateway`.
-- Use at-least-once Queue semantics. Every ingress and export operation needs a stable ID, Durable Object idempotency, and a 25-hour deduplication tombstone. Do not claim exactly-once delivery.
-- R2 stores only redacted JSON below `otel/`; delete successful objects eagerly and enforce a seven-day lifecycle rule so DLQ records remain replayable without exceeding the 14-day payload-retention boundary.
+- Use at-least-once Queue semantics. Every ingress and export operation needs a stable ID, Durable Object idempotency, and a 25-hour deduplication tombstone. Do not claim exactly-once delivery or generic Grafana-side deduplication.
+- Derive `ingressId` as `SHA-256("graft-ai-otel-ingress-v1\\0" + canonicalRedactedEnvelopeBytes)`, excluding Worker receive time and other delivery metadata. A future documented AI Gateway delivery ID may be a domain-separated input, but `cf-aig-otel-trace-id`, span IDs, and span `request_id` are never ingress IDs. A matching payload hash is an accepted duplicate; an existing ID with a different hash is a collision that fails without modifying the original state.
+- Treat every outbound Grafana POST as an at-least-once side effect. Direct Grafana endpoints have no common idempotency-key contract: persist deterministic job identity and request bytes, reconcile only documented backend responses, and leave unknown outcomes retryable or DLQ-visible rather than guessing success.
+- R2 stores only redacted JSON below `otel/`; retain an object after its `ready` or `enqueued` state is durable, and delete it only after the ledger records `complete` or `expired`. Before the seven-day R2 lifecycle failsafe can delete a nonterminal object, a ledger retention sweep must record `expired`, emit an operational failure sample, and delete it deliberately. This keeps DLQ records replayable for seven days without exceeding the 14-day payload-retention boundary.
 - Terraform owns Queue, DLQ, R2 bucket, and R2 lifecycle resources. `wrangler.otel.jsonc` is the sole owner of Worker queue consumers and Durable Object lifecycle; do not add `cloudflare_queue_consumer` resources.
 - Use `workers.dev` for the first deployment. Do not add a custom route or Zone DNS dependency while the current API token cannot manage Zone DNS.
 - Secrets are Wrangler secrets only: `OTEL_INGEST_TOKEN`, `OTEL_RATE_LIMIT_HMAC_KEY`, `GRAFANA_CLOUD_OTLP_TRACES_URL`, `GRAFANA_CLOUD_OTLP_METRICS_URL`, `GRAFANA_CLOUD_OTLP_AUTHORIZATION`, `GRAFANA_CLOUD_LOKI_URL`, and `GRAFANA_CLOUD_LOKI_AUTHORIZATION`.
@@ -322,7 +326,7 @@ Stage only the files in this task and use a Conventional Commit message such as 
 **Interfaces:**
 
 - Consumes: `deploy/otel/contracts/contracts.json` and `deploy/otel/contracts/sampling-fixtures.json` as the coexistence reference contract.
-- Produces `parseOtlpJson(body: unknown): readonly CanonicalSpan[]`, `redactSpan(span: CanonicalSpan): RedactedSpan`, `selectRequestSpan(spans: readonly RedactedSpan[]): SelectedTrace`, `shouldSampleTrace(traceId: string, rate: string): boolean`, `toMetricSamples(trace: SelectedTrace): readonly MetricSample[]`, `toTempoTrace(trace: SelectedTrace, sampled: boolean): readonly RedactedSpan[]`, `toLokiRecords(trace: SelectedTrace, sampled: boolean): readonly LokiRecord[]`, `projectLokiRecord(span: RedactedSpan): LokiRecord | null`, `encodeTempoJson(trace: SelectedTrace): Uint8Array`, and `encodeMetricsJson(samples: readonly MetricSample[], window: MetricWindow): Uint8Array`.
+- Produces `parseOtlpJson(body: unknown): readonly CanonicalSpan[]`, `redactSpan(span: CanonicalSpan): RedactedSpan`, `selectRequestSpan(spans: readonly RedactedSpan[]): SelectedTrace`, `shouldSampleTrace(traceId: string, rate: string): Promise<boolean>`, `toMetricSamples(trace: SelectedTrace): readonly MetricSample[]`, `toTempoTrace(trace: SelectedTrace, sampled: boolean): readonly RedactedSpan[]`, `toLokiRecords(trace: SelectedTrace, sampled: boolean): readonly LokiRecord[]`, `projectLokiRecord(span: RedactedSpan): LokiRecord | null`, `encodeTempoJson(trace: SelectedTrace): Uint8Array`, and `encodeMetricsJson(samples: readonly MetricSample[], window: MetricWindow): Uint8Array`.
 - Guarantees: no parser result contains unredacted payload text after `redactSpan()`, and all exported JSON is deterministic for equal input.
 
 - [ ] **Step 1: Add failing algorithm tests from the existing contracts**
@@ -336,16 +340,16 @@ it("accepts only OTLP JSON with valid 16-byte trace and 8-byte span IDs", () => 
   expect(() => parseOtlpJson(invalidTraceIdOtlpJson)).toThrow(/trace ID/i);
 });
 
-it("keeps metrics for sampled-out traces", () => {
+it("keeps metrics for sampled-out traces", async () => {
   const selected = selectRequestSpan(redactedTrace);
-  expect(shouldSampleTrace(selected.traceId, "0.5")).toBe(false);
+  expect(await shouldSampleTrace(selected.traceId, "0.5")).toBe(false);
   expect(toMetricSamples(selected)).toHaveLength(3);
   expect(toTempoTrace(selected, false)).toEqual([]);
   expect(toLokiRecords(selected, false)).toEqual([]);
 });
 ```
 
-Add fixture cases for bearer, Basic, API-key, nested `token`/`password` keys, malformed JSON payload, depth 65, invalid numeric fields, 262,144-byte log lines, metadata-only overflow, and every trace/rate pair in `sampling-fixtures.json`.
+Add fixture cases for bearer, Basic, API-key, nested `token`/`password` keys, malformed JSON payload, depth 65, invalid numeric fields, 262,144-byte log lines, metadata-only overflow, every trace/rate pair in `sampling-fixtures.json`, and a histogram with 11 finite explicit bounds plus a twelfth `+Inf` bucket count.
 
 - [ ] **Step 2: Run the focused suites and confirm they fail**
 
@@ -365,6 +369,11 @@ In `contracts.ts`, define the values copied from the current contract instead of
 export const MAX_INGRESS_BYTES = 8 * 1024 * 1024;
 export const MAX_GRAFANA_OTLP_BYTES = 4_000_000;
 export const MAX_LOKI_LINE_BYTES = 262_144;
+export const BACKEND_EXPORT_TIMEOUT_MS = {
+  tempo: 10_000,
+  loki: 10_000,
+  prometheus: 10_000,
+} as const;
 export const LOKI_LABEL_KEYS = [
   "model",
   "status_code",
@@ -380,22 +389,68 @@ export const METRIC_LABEL_KEYS = [
 ] as const;
 export const SAMPLING_SEED = "graft-ai-otel-v1";
 export const DURATION_BUCKETS = [
-  0.005,
-  0.01,
-  0.025,
-  0.05,
-  0.1,
-  0.25,
-  0.5,
-  1,
-  2.5,
-  5,
-  10,
-  Infinity,
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
 ] as const;
+export const DURATION_OVERFLOW_SENTINEL = Infinity;
 ```
 
 Model nanosecond timestamps and all OTLP 64-bit counters as validated decimal strings or `bigint`; do not convert trace IDs, nanoseconds, counts, or the sampling hash through `number`.
+
+In `types.ts`, define the wire types shared by Tasks 3 through 5 before any Durable Object stores or queues them:
+
+```ts
+export type BackendJobIdentity =
+  | Readonly<{ kind: "trace"; traceId: string }>
+  | Readonly<{
+      kind: "metrics";
+      windowStartUnixNano: string;
+      windowEndUnixNano: string;
+    }>;
+
+export type ObjectPointer = Readonly<{
+  schemaVersion: 1;
+  id: string;
+  objectKey: string;
+  sha256: string;
+  contentType: "application/json";
+  createdAtMs: number;
+}>;
+
+export type IngressPointer = ObjectPointer &
+  Readonly<{ kind: "ingress"; ingressId: string }>;
+
+export type JobDescriptor = Readonly<{
+  jobId: string;
+  backend: Backend;
+  contentType: "application/json";
+  identity: BackendJobIdentity;
+  payloadSha256: string;
+}>;
+
+export type ExportPointer = ObjectPointer &
+  JobDescriptor &
+  Readonly<{ kind: "export" }>;
+
+export type QueuePointer = IngressPointer | ExportPointer;
+
+export type ActiveRequestLease = Readonly<{
+  ownerId: string;
+  fencingToken: string;
+  expiresAtMs: number;
+}>;
+
+export type ExportClaim = ActiveRequestLease & Readonly<{ jobId: string }>;
+
+export type ExportResult =
+  | Readonly<{ kind: "success"; status: number }>
+  | Readonly<{
+      kind: "retryable";
+      reason: "timeout" | "network" | "http";
+      status?: number;
+      retryAfterSeconds?: number;
+    }>
+  | Readonly<{ kind: "terminal"; status: number }>;
+```
 
 - [ ] **Step 4: Parse and canonicalize only the required OTLP JSON shape**
 
@@ -439,7 +494,7 @@ payloadDropReason: "redaction_failure",
 
 Select a request span only when it is a server span and either has no parent span ID or has a request ID. Sort candidates by `startTimeUnixNano`, then `spanId`; mark every span `graft_ai.request_span=false` before setting the selected span to `true`.
 
-Implement the sampling comparison without floating point:
+Implement `shouldSampleTrace()` as `async` and await it at every production and test call site. Preserve the existing sampling decision with this floating-point-free comparison:
 
 ```ts
 const digest = await crypto.subtle.digest(
@@ -452,7 +507,7 @@ const hash64 = BigInt(
 return hash64 * 1_000_000n < BigInt(ratePpm) * (1n << 64n);
 ```
 
-Encode Tempo as OTLP JSON `resourceSpans`, retaining only the existing Tempo metadata allowlist. Encode metrics as OTLP JSON DELTA sums and histograms, with a common 30-second reporting window and string-form 64-bit counts. Encode Loki as `{"streams":[...]}` with exactly the four canonical labels.
+Encode Tempo as OTLP JSON `resourceSpans`, retaining only the existing Tempo metadata allowlist. Encode metrics as OTLP JSON DELTA sums and histograms, with a common 30-second reporting window and string-form 64-bit counts. Histogram `explicitBounds` is exactly the 11 finite `DURATION_BUCKETS`; `bucketCounts` has 12 non-cumulative entries, with the final entry representing the implicit `+Inf` bucket. Use `DURATION_OVERFLOW_SENTINEL` only for internal comparison and never serialize it. Encode Loki as `{"streams":[...]}` with exactly the four canonical labels.
 
 - [ ] **Step 7: Run focused tests, typecheck, and format**
 
@@ -485,13 +540,14 @@ Stage only Task 2 files and use a message such as `feat(otel): Workerã¸OTLPå‡¦ç
 **Interfaces:**
 
 - `OtelRateLimit.take(sourceHash: string, nowMs: number): Promise<{ allowed: boolean; retryAfterSeconds: number }>`.
-- `OtelLedger.reserveIngress(ingressId: string, nowMs: number): Promise<"accepted" | "capacity">` and `claimExport(jobId: string): Promise<"claimed" | "complete">`.
+- `OtelLedger` exposes active-request lease acquisition/release, ingress reservation transitions, and export claim acquisition/release/completion. Every `ActiveRequestLease` and `ExportClaim` contains an opaque `ownerId`, a monotonically increasing `fencingToken`, and `expiresAtMs`; every release, transition, and completion supplies the matching token so an expired owner cannot alter a newer state.
+- `reserveIngress({ ingressId, payloadSha256, ownerId, fencingToken, nowMs })` returns `reserved`, `duplicate`, `collision`, or `capacity`. Its durable state transitions are `reserved -> ready -> enqueued -> complete|expired`; `ready` and `enqueued` retain the R2 pointer for reconciliation. Backend jobs transition `ready -> enqueued -> claimed -> complete|expired`; a released or lease-expired claim atomically returns `claimed -> enqueued`. `claimExport({ jobId, ownerId, nowMs })` returns `claimed`, `busy`, `complete`, or the retention-terminal `expired`; a lease whose `expiresAtMs` has elapsed is reclaimable by a new owner with a new fencing token.
 - `TraceAggregate.fetch()` accepts `POST /ingest` with `{ ingressId, receivedAtMs, spans }` and flushes one second after the final observed span.
-- `OtelMetricsAggregate.fetch()` accepts `POST /append` with a deduplicated `MetricSample[]`, flushes after 30 seconds or 200 samples, and emits a Prometheus Queue pointer.
+- `OtelMetricsAggregate.fetch()` accepts `POST /append` with a deduplicated `MetricSample[]`, flushes after 30 seconds or 200 samples, and creates the Task 2 `JobDescriptor` for one canonical metrics window.
 
 - [ ] **Step 1: Add failing Durable Object tests**
 
-Use `runInDurableObject`, `runDurableObjectAlarm`, and `evictDurableObject` from `cloudflare:test`. Cover stable source HMAC buckets, 20-token capacity, a one-second idle alarm, a duplicate ingress ID after eviction, a 25-hour completion tombstone, the deterministic request-span tie-break, metrics flush at 200 samples, and a 30-second metrics alarm.
+Use `runInDurableObject`, `runDurableObjectAlarm`, and `evictDurableObject` from `cloudflare:test`. Cover stable source HMAC buckets, 20-token capacity, a one-second idle alarm, a duplicate ingress ID after eviction, a 25-hour completion tombstone, active-request lease and export-claim expiration, stale fencing-token rejection, Worker crash recovery through an alarm, the deterministic request-span tie-break, metrics flush at 200 samples, and a 30-second metrics alarm.
 
 ```ts
 it("does not count the same ingress twice after a queue retry", async () => {
@@ -528,18 +584,20 @@ Return `429` with `Retry-After: "1"` or the ceiling of the next token availabili
 
 - [ ] **Step 4: Implement the ledger and trace state with SQLite-backed idempotency**
 
-`OtelLedger` stores ingress reservations and export states keyed by UUID-like IDs only. It must:
+`OtelLedger` stores ingress reservations and export states keyed by opaque IDs only. It must:
 
 - reserve at most 1,000 pending ingress IDs;
 - return `capacity` without enqueueing when full, while ingress still returns `200` with `X-OTel-Drop-Reason: capacity`;
-- expire abandoned reservations and completed export tombstones after 25 hours through its alarm;
+- expire active-request leases and export claims at their `expiresAtMs`; expire only reservations that never become `ready` and terminal ingress/export tombstones after 25 hours;
+- retain `ready` and `enqueued` ingress/export pointers until durable completion or the seven-day retention sweep records `expired`; reconcile a retained `ready` pointer by resending it to its declared Queue without deleting its R2 object;
+- reject every stale release, state transition, or completion whose owner/fencing token no longer matches;
 - record a job as complete before R2 deletion so a duplicate Queue delivery acknowledges without a second Grafana POST.
 
 `TraceAggregate` must persist redacted spans only, set a one-second alarm after every unique ingress ID, flush all spans for its trace at alarm time, and send metrics before applying sampling. A span arriving after a completed trace tombstone is acknowledged, dropped, and counted as `otel_backend_queue_dropped_total{backend="trace",signal="span",reason="late_span"}` rather than reopening and double-counting the trace.
 
 - [ ] **Step 5: Implement the metrics accumulator**
 
-Store samples by `metricSampleId` in SQLite. Aggregate by metric name, kind, and sorted labels. On flush, create an OTLP/JSON payload whose `startTimeUnixNano` is the window start and `timeUnixNano` is the flush timestamp. Use DELTA monotonic sums for `ai_gateway_requests_total` and `ai_gateway_errors_total`, DELTA histogram for `ai_gateway_request_duration_seconds`, and the existing duration buckets.
+Store samples by `metricSampleId` in SQLite. Aggregate by metric name, kind, and sorted labels. On flush, create an OTLP/JSON payload whose `startTimeUnixNano` is the canonical window start and `timeUnixNano` is the flush timestamp. Derive the Prometheus `jobId` from `SHA-256("metrics\\0" + backend + "\\0" + windowStartUnixNano + "\\0" + windowEndUnixNano + "\\0" + payloadSha256)`, not from a trace ID; persist the descriptor and fully encoded payload before Queue submission. Use DELTA monotonic sums for `ai_gateway_requests_total` and `ai_gateway_errors_total`, DELTA histogram for `ai_gateway_request_duration_seconds`, and the existing duration buckets.
 
 Append low-cardinality operational samples with the existing names: `otel_backend_export_retries_total`, `otel_backend_export_failures_total`, `otel_backend_export_exhausted_total`, `otel_backend_queue_dropped_total`, `otel_backend_queue_utilization_ratio`, `otel_backend_queue_oldest_age_seconds`, and `otel_ingress_rate_limited_total`.
 
@@ -577,7 +635,7 @@ Stage only Task 3 files and use a message such as `feat(otel): Durable Objectã§
 
 - [ ] **Step 1: Add failing ingress and storage tests**
 
-Use `SELF.fetch()` for HTTP paths and `env.OTEL_OBJECTS` for R2 assertions. Cover method/path/auth/content type/compression, content-length and streamed body overflow, invalid JSON, rate-limit `Retry-After`, capacity-drop `200`, R2 checksum mismatch, and an explicit assertion that neither R2 content nor Queue bodies contain `sk-`, `Bearer `, or the test payload secret.
+Use `SELF.fetch()` for HTTP paths and `env.OTEL_OBJECTS` for R2 assertions. Cover method/path/auth/content type/compression, content-length and streamed body overflow, invalid JSON, deterministic duplicate ingress IDs, ID collision rejection, rate-limit `Retry-After`, capacity-drop `200`, R2 checksum mismatch, Queue send or post-send ledger-transition failure, alarm-driven reconciliation of a retained `ready` pointer, and an explicit assertion that neither R2 content nor Queue bodies contain `sk-`, a `Bearer` authorization prefix, or the test payload secret.
 
 ```ts
 it("persists only a redacted R2 envelope and queues a pointer", async () => {
@@ -606,24 +664,16 @@ Expected: FAIL because the OTel Worker entrypoint and R2 helpers do not exist.
 
 - [ ] **Step 3: Implement canonical R2 pointers**
 
-Use these wire types and keys. Do not include trace IDs or prompt-derived content in object keys:
+Use the Task 2 `ObjectPointer`, `IngressPointer`, `JobDescriptor`, `ExportPointer`, and `QueuePointer` wire types. Do not redefine or weaken them here, and do not include trace IDs or prompt-derived content in object keys:
 
 ```ts
-export type ObjectPointer = Readonly<{
-  schemaVersion: 1;
-  id: string;
-  objectKey: string;
-  sha256: string;
-  createdAtMs: number;
-}>;
-
 const ingressKey = (id: string, date: string) =>
   `otel/ingress/${date}/${id}.json`;
 const exportKey = (backend: Backend, id: string, date: string) =>
   `otel/export/${backend}/${date}/${id}.json`;
 ```
 
-Write `contentType: "application/json"` and custom metadata `schemaVersion: "1"`, `sha256`, and `kind`. On a checksum mismatch, throw a non-sensitive error so Queue handling retries without logging object content.
+Write `contentType: "application/json"` and custom metadata `schemaVersion: "1"`, `sha256`, and `kind`. Queue bodies are the JSON serialization of `IngressPointer` or `ExportPointer`; they contain no payload bytes, secrets, or prompt-derived object-key material. `ObjectPointer.id` equals `ingressId` or `jobId`, and R2 metadata must agree with the pointer's checksum, content type, and kind. On a checksum mismatch, throw a non-sensitive error so Queue handling retries without logging object content.
 
 - [ ] **Step 4: Implement ingress status and persistence order**
 
@@ -632,17 +682,17 @@ Handle the request in this exact order:
 1. Reject non-`POST /v1/traces` with `404` or `405` before reading a body.
 2. Compare the bearer token through `timingSafeSecretEqual()` from `workers/src/crypto.ts`; return `401` on absent or unequal credentials.
 3. Reject unsupported content type or non-identity compression with `415`.
-4. Acquire and always release the 100-request ledger lease; read the stream with an 8 MiB cap and a 30-second cancelable deadline; return `413` or `408` when exceeded.
+4. Acquire the 100-request ledger lease with an opaque owner ID and fencing token; always release that exact lease in `finally`. Read the stream with an 8 MiB cap and a 30-second cancelable deadline; return `413` or `408` when exceeded.
 5. Rate-limit the canonical `CF-Connecting-IP`; return `429` and `Retry-After` when rejected.
 6. Parse, normalize, and redact; return `400` on invalid OTLP JSON before durable storage.
-7. Reserve ingress capacity in `OtelLedger`; on `capacity`, emit the operational sample and return `200` with `X-OTel-Drop-Reason: capacity`.
-8. Write the redacted envelope to R2, send only its `ObjectPointer` to `OTEL_INGRESS_QUEUE`, mark the reservation enqueued, and return `200 {"reason":"accepted"}`.
+7. Canonically serialize the redacted envelope without Worker receive time or other delivery metadata, derive `ingressId`, and reserve it in `OtelLedger`. On `duplicate`, return the existing accepted result; on `collision`, return a non-retryable conflict without changing the original reservation; on `capacity`, emit the operational sample and return `200` with `X-OTel-Drop-Reason: capacity`.
+8. Write the redacted envelope to R2, persist its `IngressPointer` as `ready` in `OtelLedger`, send only that pointer to `OTEL_INGRESS_QUEUE`, then mark the reservation `enqueued` and return `200 {"reason":"accepted"}`. If the Worker stops after R2 persistence or Queue send, the ledger alarm reconciles the retained `ready` pointer by sending the same pointer; duplicate Queue delivery is expected.
 
-If R2 write or Queue send fails, release the reservation, delete a just-written object when possible, and return `503`; never claim acceptance without a durable handoff.
+If R2 persistence fails before a `ready` pointer exists, release the reservation and return `503`. Once a `ready` pointer is durable, never delete its R2 object because Queue send or a subsequent ledger transition failed or became unknown; retain it for reconciliation and return `503` only when the request cannot safely be accepted. Delete only after the ingress consumer makes completion durable.
 
 - [ ] **Step 5: Route ingress Queue messages to trace Durable Objects**
 
-For each ingress pointer, load and verify the redacted envelope once, group its spans by trace ID, and call the corresponding `OTEL_TRACE_AGGREGATE.getByName(traceId)` stub with `{ ingressId, receivedAtMs, spans }`. After every trace accepts the ingress ID, mark the ledger reservation complete and delete the ingress R2 object. If any call fails, do not acknowledge the Queue message; call `message.retry({ delaySeconds: 1 })`.
+For each ingress pointer, first check the ledger by `ingressId`; a terminal (`complete` or `expired`) reservation acknowledges without loading R2, so redelivery after deletion is safe. Otherwise load and verify the redacted envelope once, group its spans by trace ID, and call the corresponding `OTEL_TRACE_AGGREGATE.getByName(traceId)` stub with `{ ingressId, receivedAtMs, spans }`. After every trace accepts the ingress ID, mark the ledger reservation complete, then delete the ingress R2 object. If deletion is interrupted, the completed reservation still absorbs redelivery and the lifecycle rule removes the orphan. If any call fails, do not acknowledge the Queue message; call `message.retry({ delaySeconds: 1 })`.
 
 - [ ] **Step 6: Verify ingress behavior**
 
@@ -672,9 +722,9 @@ Stage only Task 4 files and use a message such as `feat(otel): redacted ingressã
 
 **Interfaces:**
 
-- `enqueueBackendJob(backend: Backend, bytes: Uint8Array, contentType: string): Promise<void>` persists a redacted payload in R2 then sends an `ExportPointer` to exactly one backend Queue.
-- `exportPointer(pointer: ExportPointer, backend: Backend, env: OtelEnv): Promise<ExportResult>` posts to the configured endpoint.
-- `isRetryable(response: Response | null): boolean` is true only for network failure, `408`, `429`, and `5xx`.
+- `enqueueBackendJob(env: OtelEnv, descriptor: JobDescriptor, bytes: Uint8Array): Promise<ExportPointer>` validates the descriptor, persists the redacted payload and pointer as `ready` before Queue submission, sends exactly one `ExportPointer` to the queue selected by `descriptor.backend`, then marks it `enqueued`. A post-send transition failure retains the `ready` object for reconciliation.
+- `exportPointer(pointer: ExportPointer, env: OtelEnv): Promise<ExportResult>` posts to the endpoint selected by `pointer.backend` with `AbortSignal.timeout(BACKEND_EXPORT_TIMEOUT_MS[pointer.backend])` or an equivalent cleared `AbortController` deadline.
+- `ExportResult` distinguishes `success`, `retryable`, and `terminal` outcomes and carries an optional status/retry delay. Classify timeout, abort, network errors, and HTTP `408`, `429`, and `5xx` as `retryable`; `isRetryable(result: ExportResult): boolean` returns `result.kind === "retryable"`.
 
 - [ ] **Step 1: Add failing independent-backend tests**
 
@@ -694,7 +744,7 @@ expect(await queueResultFor("graft-ai-aig-otel-loki-v1")).toMatchObject({
 });
 ```
 
-Cover `408`, `429`, `500`, network error, `400`, `401`, `413`, checksum failure, duplicate success, three attempts, DLQ arrival, R2 delete after success, and no secrets/payloads in logs.
+Cover `408`, `429`, `500`, network error, timeout abort, `400`, `401`, `413`, checksum failure, duplicate success, post-send job state-transition failure, a backend that accepts bytes then loses its response, three attempts, DLQ arrival, 25-hour claim-expiry replay, R2 delete after durable completion, per-message ack/retry behavior in a mixed batch, and no secrets/payloads in logs.
 
 - [ ] **Step 2: Run focused Queue/exporter tests and confirm they fail**
 
@@ -708,7 +758,7 @@ Expected: FAIL because backend consumer and HTTP client modules do not exist.
 
 - [ ] **Step 3: Build redacted backend payloads before Queue handoff**
 
-`TraceAggregate.alarm()` must enqueue a Tempo payload only for sampled traces and a Loki payload only for the selected request span of sampled traces. `OtelMetricsAggregate` must enqueue every metrics payload regardless of sampling. Each job gets a stable ID derived from `SHA-256(traceId + flushTimestamp + backend)`; store its fully encoded JSON in R2 and send only the pointer.
+`TraceAggregate.alarm()` must enqueue a Tempo payload only for sampled traces and a Loki payload only for the selected request span of sampled traces. `OtelMetricsAggregate` must enqueue every metrics payload regardless of sampling. For a trace, derive `jobId` from its `traceId`, backend, and canonical payload hash. For metrics, derive it from the canonical window, backend, and canonical payload hash. In both cases, create the complete `JobDescriptor`, persist its fully encoded JSON and `ExportPointer` as `ready`, submit only the pointer to the backend Queue, then mark it `enqueued`; a post-send state-transition failure retains the object for reconciliation.
 
 Reject a serialized payload above `MAX_GRAFANA_OTLP_BYTES`. For Tempo, remove non-selected spans in deterministic `startTimeUnixNano`, `spanId` order until it fits, set `graft_ai.tempo_truncated=true` on the selected span, and emit a `line_size_metadata`-style drop metric if the selected-span payload alone cannot fit. Never split an OTLP trace document.
 
@@ -716,12 +766,13 @@ Reject a serialized payload above `MAX_GRAFANA_OTLP_BYTES`. For Tempo, remove no
 
 For a claimed job:
 
-1. Send `POST` with its stored `contentType` and the backend-specific authorization secret.
-2. On a `2xx`, record completion in `OtelLedger`, delete its R2 object, add any success health sample, and call `message.ack()`.
-3. On retryable failure with `message.attempts < 3`, add `otel_backend_export_retries_total{backend}`, then call `message.retry({ delaySeconds })`. Use delay `1` after attempt one and `2` after attempt two; honor a valid numeric `Retry-After` only when it is greater.
-4. On a non-retryable response or exhausted third attempt, record failure/exhaustion samples, call `message.retry()` only for unexpected local exceptions, and otherwise let the configured backend-specific Queue DLQ capture the pointer by throwing after the health sample write.
+1. Claim the job with an owner ID and fencing token, then send `POST` with its stored `contentType`, backend-specific authorization secret, and bounded timeout.
+2. On a confirmed `2xx`, record completion in `OtelLedger` with the claim token, delete its R2 object, add any success health sample, and call `message.ack()`.
+3. On a timeout, transport error, or response lost after bytes may have been sent, do not mark completion or delete R2. Treat the outcome as retryable at-least-once delivery, atomically release the claim back to `enqueued` (or let its `expiresAtMs` alarm do so), add `otel_backend_export_retries_total{backend}`, then call `message.retry({ delaySeconds })` while `message.attempts < 3`; otherwise follow item 5. Use delay `1` after attempt one and `2` after attempt two; honor a valid numeric `Retry-After` only when it is greater.
+4. Do not assume a common Grafana idempotency key or that an arbitrary duplicate response proves delivery. Only a documented backend-specific outcome for the identical deterministic descriptor may reconcile as already accepted; otherwise preserve the pointer and let retry/DLQ expose the uncertainty.
+5. On a non-retryable response or exhausted third attempt, record failure/exhaustion samples, atomically release the claim back to `enqueued` for a future DLQ replay, call `message.retry()` only for unexpected local exceptions, and otherwise let the configured backend-specific Queue DLQ capture the pointer by throwing after the health sample write.
 
-Never acknowledge an unexpected local error or R2 checksum failure. Queue redelivery remains the recovery path. A duplicate that finds a completed ledger job must acknowledge without another outbound request.
+Never acknowledge an unexpected local error or R2 checksum failure. Queue redelivery remains the recovery path. A duplicate that finds a terminal (`complete` or `expired`) ledger job must acknowledge without another outbound request. A duplicate following an unconfirmed external POST may issue another POST by design; direct Grafana export remains at-least-once until a verified backend-specific reconciliation contract is available.
 
 - [ ] **Step 5: Run Queue/exporter verification**
 
@@ -732,7 +783,7 @@ cd workers && npx vitest run --config vitest.otel.config.ts tests/otel/exporter.
 cd workers && npm run typecheck:otel
 ```
 
-Expected: each backend retries independently, only retryable failures are retried, exhausted work reaches the matching DLQ, and duplicate Queue delivery remains idempotent.
+Expected: each backend retries independently, only retryable failures are retried, exhausted work reaches the matching DLQ, terminal jobs absorb duplicate Queue delivery, and an unconfirmed external POST remains an explicit at-least-once outcome.
 
 - [ ] **Step 6: Create a commit only if the user explicitly requests one**
 
@@ -848,12 +899,15 @@ Run the reviewed Terraform apply and deployment workflow or its equivalent produ
 
 - [ ] **Step 3: Exercise the Worker before changing AI Gateway**
 
-Set the two temporary process variables from the approved secret manager and run:
+Set the non-secret Worker URL, then obtain the token from the approved secret manager without placing its value in a command line or shell history. If the secret manager cannot inject it into the process environment, use a non-echoing prompt:
 
 ```bash
-OTEL_WORKER_URL="https://<worker>.workers.dev" \
-OTEL_INGEST_TOKEN="<secret-manager-value>" \
+export OTEL_WORKER_URL="https://<worker>.workers.dev"
+read -r -s -p "OTEL_INGEST_TOKEN: " OTEL_INGEST_TOKEN
+printf '\n'
+export OTEL_INGEST_TOKEN
 node scripts/otel-worker-smoke.mjs
+unset OTEL_INGEST_TOKEN
 ```
 
 Expected: a `200` response for the known synthetic trace. Verify its Tempo trace, redacted Loki record, canonical Prometheus series, and no alert firing. Record only non-secret status and trace ID.
@@ -952,11 +1006,15 @@ Stage the decommissioned files and documentation only after the evidence record 
 - [ ] AI Gateway sends exactly one OTLP/JSON exporter to `POST /v1/traces` on the Worker.
 - [ ] The ingress returns `401`, `400`, `415`, `413`, `408`, `429`, and accepted `200` according to the documented conditions; capacity drop returns `200` with a drop reason.
 - [ ] No raw credential, prompt, completion, or metadata reaches R2, Queues, Durable Objects, Workers logs, Grafana, DLQs, or documentation.
-- [ ] Queue messages contain only SHA-verified redacted R2 pointers; successful jobs delete their R2 object and completed job tombstones absorb duplicate delivery.
+- [ ] Every ingress ID is deterministic from the canonical redacted envelope; matching duplicates are accepted, collisions fail without changing the original reservation, and span request/trace IDs are not used as ingress IDs.
+- [ ] Queue messages contain only SHA-verified redacted R2 pointers. `reserved -> ready -> enqueued -> complete|expired` is durable and reconcilable; `ready`/`enqueued` R2 objects are retained until completion or a recorded retention expiry, and terminal ingress/job tombstones absorb duplicate delivery.
+- [ ] Active-request leases and export claims carry owners, fencing tokens, and expiry. Alarm expiry or release returns an export claim to `enqueued`, while stale owners cannot release or complete new work.
 - [ ] Trace grouping waits one idle second, applies the existing request-span tie-break, sends metrics before sampling, and applies one deterministic sampling decision to both Tempo and Loki.
 - [ ] Loki has exactly `model`, `status_code`, `env`, and `gateway` labels; `trace_id` remains a JSON log field.
 - [ ] Grafana receives JSON OTLP traces and DELTA metrics below the 4 MB export cap, plus Loki JSON records below 262,144 bytes.
-- [ ] Retryable backend failures retry at most three attempts; terminal failures enter backend-specific DLQs and emit the existing alert-compatible health metrics.
+- [ ] Histogram `explicitBounds` contains the 11 finite duration bounds only, while 12 non-cumulative bucket counts retain the implicit `+Inf` bucket without serializing `Infinity`.
+- [ ] Backend requests use bounded per-backend timeouts. Timeout, abort, and network failures retry at most three attempts; terminal failures enter backend-specific DLQs and emit the existing alert-compatible health metrics.
+- [ ] Confirmed completion prevents another outbound request. A lost external response remains an explicit at-least-once retry/DLQ outcome unless a documented backend-specific reconciliation rule identifies the exact descriptor as already accepted.
 - [ ] Terraform owns Queue/DLQ/R2 resources, Wrangler owns consumers/DO exports, and CI applies resources before deploying the OTel Worker.
 - [ ] The legacy Tunnel/Alloy route is retained through a 24-hour healthy observation window and removed only after explicit confirmation.
 
@@ -964,7 +1022,7 @@ Stage the decommissioned files and documentation only after the evidence record 
 
 - **Spec coverage:** Tasks 1 through 6 cover the Worker resource model, JSON-only protocol, source protection, redaction, exact selection/sampling, signal fan-out, Grafana formatting, retries, observability, Terraform, CI, docs, and tests. Task 7 covers production activation and rollback. Task 8 makes retirement conditional on verified operation.
 - **Placeholder scan:** All interfaces, resource names, secrets, Queue names, limits, test commands, and cutover assertions are specified. Values represented as secret-manager inputs are intentionally not deployable literals.
-- **Type consistency:** `OtelEnv`, `ObjectPointer`, `ExportPointer`, `TraceAggregate`, `OtelMetricsAggregate`, `OTEL_OBJECTS`, the four Queue bindings, and the three backend identifiers use one spelling throughout this plan.
+- **Type consistency:** `OtelEnv`, `ObjectPointer`, `IngressPointer`, `ExportPointer`, `QueuePointer`, `JobDescriptor`, `TraceAggregate`, `OtelMetricsAggregate`, `OTEL_OBJECTS`, the four Queue bindings, and the three backend identifiers use one spelling throughout this plan.
 
 ## Execution Handoff
 

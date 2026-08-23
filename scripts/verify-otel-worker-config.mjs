@@ -51,7 +51,7 @@ export function validateOtelWorkerConfig(config, rawConfig) {
   for (const binding of ["OTEL_RATE_LIMIT", "OTEL_LEDGER", "OTEL_TRACE_AGGREGATE", "OTEL_METRICS_AGGREGATE"]) {
     if (!durableBindings.has(binding)) throw new Error(`Durable Object binding is missing: ${binding}`);
   }
-  const exports = Object.keys(config.exports ?? {}).sort();
+  const exports = Object.keys(config.exports ?? {}).sort((left, right) => left.localeCompare(right));
   if (exports.join(",") !== "OtelLedger,OtelMetricsAggregate,OtelRateLimit,TraceAggregate") {
     throw new Error("OTel Worker Durable Object exports are incomplete");
   }

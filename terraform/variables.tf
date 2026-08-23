@@ -5,7 +5,7 @@ variable "cloudflare_account_id" {
 }
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API Token with Logpush and Workers permissions"
+  description = "Cloudflare API Token with Logpush, Workers, Queues, and account-level R2 Storage Write permissions"
   type        = string
   sensitive   = true
 }
@@ -121,4 +121,3 @@ variable "origin_secret" {
     error_message = "origin_secret must not be empty."
   }
 }
-

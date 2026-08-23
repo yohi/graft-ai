@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules deploy-otel-worker otel-worker-test otel-worker-validate otel-worker-smoke clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
 
 install:
 	cd workers && npm install
@@ -18,6 +18,7 @@ test:
 	$(MAKE) otel-contracts
 	$(MAKE) otel-alloy-test
 	cd workers && npx vitest run
+	$(MAKE) otel-worker-test
 	node --test tests/parse-jsonc.test.mjs
 	node scripts/verify-terraform-logpush-fields.mjs
 	node --test tests/verify-terraform-logpush-fields.test.mjs
@@ -47,6 +48,20 @@ otel-validate: otel-node-preflight
 
 otel-smoke: otel-validate
 	bash deploy/otel/tests/compose-smoke.test.sh
+
+otel-worker-test:
+	cd workers && npm run test:otel
+
+otel-worker-validate:
+	node scripts/verify-otel-worker-config.mjs
+	node --test workers/tests/otel-worker-contracts.test.mjs
+	cd workers && npm run validate:otel
+
+otel-worker-smoke:
+	node scripts/otel-worker-smoke.mjs
+
+deploy-otel-worker:
+	cd workers && npx wrangler deploy --config wrangler.otel.jsonc
 typecheck:
 	cd workers && npm run typecheck:ci
 

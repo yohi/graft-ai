@@ -45,13 +45,18 @@ series、50GB logs）の制約内で動作するように最適化されてい�
 - **Provider Metrics Worker:** 毎分 Codex、OpenAI API、OpenCodeGo の使用量を取得し、
   OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
 
-OTel の Grafana Cloud export では、
-[`deploy/otel/docker-compose.grafana-cloud.yml`](./deploy/otel/docker-compose.grafana-cloud.yml)
-を基底 Compose に重ねて使用します。3つの Cloud endpoint と
-`Authorization` header は未追跡の環境ファイルまたは secret manager から渡し、
-Compose YAML に token を書き込みません。Terraform の Grafana module は
-`logs:write`、`metrics:write`、`traces:write` を持つ telemetry 用 Access Policy と、
-`logs:write` だけを持つ Loki 専用 Access Policy を別々に作成します。
+AI Gateway OTel は専用の `workers.dev` Worker で OTLP/JSON を受信します。
+Worker は R2/Queue に渡す前に資格情報と payload をレダクションし、Tempo、Loki、
+Prometheus を backend ごとの Queue/DLQ から独立して送信します。デプロイ、Secret、
+Queue/DLQ、Grafana 検証、rollback 手順は
+[`docs/cloudflare-worker-ai-gateway-otel.md`](./docs/cloudflare-worker-ai-gateway-otel.md)
+にまとめています。`make otel-worker-test` と `make otel-worker-validate` を
+デプロイ前に実行してください。
+
+Grafana Cloud の telemetry 用 Access Policy には `logs:write`、`metrics:write`、
+`traces:write` が必要です。Loki 専用 token を使う場合は `logs:write` のみを許可し、
+endpoint や Authorization 値を Wrangler vars、Terraform tfvars、Compose YAML、
+ソースコードへ書き込まないでください。
 Dashboard workflow の前に、実際の Cloud OTel datasource UID を次の production
 environment variables に設定してください。
 `GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID`、`GRAFANA_OTEL_LOKI_DATASOURCE_UID`、
@@ -59,9 +64,8 @@ environment variables に設定してください。
 `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` を設定し、UID不足時はGrafana APIを
 呼び出す前に失敗します。
 
-Free Tier の導入手順は[Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md)
-を参照してください。このモードでは Logpush dashboard ではなく OTel dashboard
-（`graft-ai-otel-observability`）を使用します。
+旧Tunnel/Alloy経路の手順は[legacy Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md)
+にあります。専用Workerの24時間観測期間が完了するまで、rollback経路として保持します。
 
 ### スケジュール実行 Worker
 

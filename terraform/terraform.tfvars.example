@@ -7,5 +7,10 @@ worker_script_name      = "graft-ai-aig-logpush"
 logpush_job_name        = "graft-ai-aig-logpush"
 workers_subdomain       = "your-account-subdomain"
 
+# The dedicated OTel Worker and R2 bucket names are fixed to match
+# workers/wrangler.otel.jsonc and must not be changed.
+# otel_worker_name       = "graft-ai-aig-otel"
+# otel_bucket_name       = "graft-ai-aig-otel-v1"
+
 # max_upload_bytes   = 5000000
 # max_upload_records = 1000

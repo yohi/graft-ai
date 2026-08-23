@@ -16,4 +16,8 @@ export default defineConfig({
       },
     }),
   ],
+  test: {
+    include: ["tests/**/*.test.ts"],
+    exclude: ["tests/otel/**/*.test.ts", "tests/otel-worker-contracts.test.mjs"],
+  },
 });

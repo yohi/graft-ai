@@ -87,7 +87,7 @@ func normalizeAttributes(attributes map[string]json.RawMessage, span *tracepb.Sp
 		aliases   []string
 	}{
 		{canonical: "model", aliases: []string{"gen_ai.request.model"}},
-		{canonical: "provider", aliases: []string{"gen_ai.provider.name", "gen_ai.system"}},
+		{canonical: "provider", aliases: []string{"gen_ai.model.provider", "gen_ai.provider.name", "gen_ai.system"}},
 		{canonical: "request_id", aliases: []string{"cf-aig-request-id", "cf_aig_request_id"}},
 		{canonical: "env", aliases: []string{"deployment.environment", "deployment.environment.name"}},
 		{canonical: "gateway", aliases: []string{"cf-aig-gateway", "ai_gateway.name"}},

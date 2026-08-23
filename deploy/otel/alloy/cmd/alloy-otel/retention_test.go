@@ -18,6 +18,7 @@ func TestEvaluateCloudLogsRetention_allows_only_positive_values_up_to_fourteen_d
 		{name: "missing", value: "", wantReason: "retention_unavailable"},
 		{name: "invalid", value: "not-a-duration", wantReason: "retention_invalid"},
 		{name: "zero", value: "0d", wantReason: "retention_invalid"},
+		{name: "composite duration is unsupported", value: "1h30m", wantReason: "retention_invalid"},
 		{name: "too long", value: "15d", wantReason: "retention_exceeds_14d", wantValue: 15 * 24 * time.Hour},
 	}
 

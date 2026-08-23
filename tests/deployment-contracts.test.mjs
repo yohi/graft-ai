@@ -29,6 +29,10 @@ const alerts = JSON.parse(
     "utf8",
   ),
 );
+const freeTierOtelGuide = readFileSync(
+  resolve(root, "docs/free-tier-ai-gateway-otel.md"),
+  "utf8",
+);
 
 test("PR Terraform plan uses read-only Grafana retention credentials", () => {
   assert.match(ci, /CLOUDFLARE_READONLY_API_TOKEN/);
@@ -129,4 +133,27 @@ test("Terraform migration and setup scripts use the current resource addresses",
   );
   assert.match(tfApplyGrafana, /grafana_loki_write_token/);
   assert.match(tfApplyGrafana, /grafana_telemetry_write_token/);
+});
+
+test("Free Tier OTel guide uses the Tunnel and does not require Logpush", () => {
+  for (const text of [
+    "https://<otel-public-hostname>/v1/traces",
+    "Authorization: Bearer <OTEL_INGEST_TOKEN>",
+    "OTEL_GRAFANA_CLOUD_LOGS_RETENTION",
+    "OTEL_INGEST_TOKEN must be set and non-empty",
+    "OTEL_RATE_LIMIT_HMAC_KEY must be set and non-empty",
+    "CLOUDFLARED_TUNNEL_TOKEN must be set and non-empty",
+    "OTEL_INGEST_TOKEN and OTEL_RATE_LIMIT_HMAC_KEY must differ",
+    "set -euo pipefail",
+    "chmod 600 deploy/otel/.env.grafana-cloud",
+    "grafana_admin_password",
+    "graft-ai-otel-observability",
+    "graft-ai-aig-overview",
+  ]) {
+    assert.match(
+      freeTierOtelGuide,
+      new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+  }
+  assert.match(freeTierOtelGuide, /does not use Workers Logpush/);
 });

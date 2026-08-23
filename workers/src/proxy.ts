@@ -97,9 +97,33 @@ function buildTelemetryEvent(
   };
 }
 
-function buildUpstreamInit(request: Request): RequestInit {
+function isMetadataObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function metadataForGateway(rawMetadata: string | null, env: ProxyEnv): string {
+  let metadata: Record<string, unknown> = {};
+  if (rawMetadata !== null) {
+    try {
+      const parsed: unknown = JSON.parse(rawMetadata);
+      if (isMetadataObject(parsed)) {
+        metadata = parsed;
+      }
+    } catch {
+      metadata = {};
+    }
+  }
+  return JSON.stringify({
+    ...metadata,
+    gateway: env.GATEWAY_NAME,
+    env: env.ENV_LABEL,
+  });
+}
+
+function buildUpstreamInit(request: Request, env: ProxyEnv): RequestInit {
   const headers = new Headers(request.headers);
   headers.delete("X-Proxy-Secret");
+  headers.set("cf-aig-metadata", metadataForGateway(headers.get("cf-aig-metadata"), env));
   if (request.method === "GET" || request.method === "HEAD") {
     return { method: request.method, headers, redirect: "manual" };
   }
@@ -139,7 +163,7 @@ export default {
       );
     }
     const startedAt = Date.now();
-    const upstreamResponse = await fetch(upstreamUrl, buildUpstreamInit(request));
+    const upstreamResponse = await fetch(upstreamUrl, buildUpstreamInit(request, env));
     const durationMs = Date.now() - startedAt;
     console.log(JSON.stringify(buildTelemetryEvent(request, upstreamResponse, env, durationMs)));
     return upstreamResponse;

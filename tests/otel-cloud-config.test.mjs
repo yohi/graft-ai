@@ -92,6 +92,11 @@ test("Grafana Cloud Compose override requires external endpoints and auth header
   ]) {
     assert.match(compose, new RegExp(`\\$\\{${variable}:\\?`));
   }
+  assert.match(
+    compose,
+    /\$\{OTEL_GRAFANA_CLOUD_LOGS_RETENTION:\?set a non-empty confirmed Grafana Cloud Logs retention value\}/,
+  );
+  assert.doesNotMatch(compose, /positive duration of 14d or less/);
   assert.doesNotMatch(compose, /Basic\\s+[A-Za-z0-9+/=]{20,}/);
   assert.match(compose, /depends_on: \[\]/);
 });

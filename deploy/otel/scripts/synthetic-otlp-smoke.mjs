@@ -20,6 +20,12 @@ const smokeMetricLabels = {
   env: "smoke",
   gateway: "smoke",
 };
+const expectedLokiLabels = {
+  env: "smoke",
+  gateway: "smoke",
+  model: "smoke-model",
+  status_code: "200",
+};
 const prometheusQuery = `ai_gateway_requests_total{${Object.entries(
   smokeMetricLabels,
 )
@@ -33,6 +39,41 @@ const tempoResponseHasTrace = (json) =>
       ),
     ),
   );
+function lokiRecordMatches(stream) {
+  const labels = stream?.stream;
+  if (
+    labels === null ||
+    typeof labels !== "object" ||
+    Array.isArray(labels) ||
+    JSON.stringify(Object.keys(labels).sort()) !==
+      JSON.stringify(Object.keys(expectedLokiLabels).sort()) ||
+    !Object.entries(expectedLokiLabels).every(
+      ([key, value]) => labels[key] === value,
+    )
+  ) {
+    return false;
+  }
+
+  if (!Array.isArray(stream.values)) return false;
+
+  return stream.values.some(([, rawRecord]) => {
+    try {
+      const record = JSON.parse(rawRecord);
+      const serialized = JSON.stringify(record);
+      return (
+        record.provider === "smoke-provider" &&
+        record.input_tokens === 12 &&
+        record.output_tokens === 7 &&
+        record.total_tokens === 19 &&
+        Math.abs(record.cost_usd - 0.0125) < 1e-9 &&
+        serialized.includes("[REDACTED]") &&
+        !serialized.includes("sk-live-smoke")
+      );
+    } catch {
+      return false;
+    }
+  });
+}
 const now = BigInt(Date.now()) * 1_000_000n;
 const body = {
   resourceSpans: [
@@ -48,17 +89,31 @@ const body = {
               startTimeUnixNano: String(now),
               endTimeUnixNano: String(now + 25_000_000n),
               attributes: [
-                { key: "model", value: { stringValue: "smoke-model" } },
-                { key: "provider", value: { stringValue: "smoke-provider" } },
-                { key: "status_code", value: { intValue: "200" } },
-                { key: "env", value: { stringValue: "smoke" } },
+                {
+                  key: "gen_ai.request.model",
+                  value: { stringValue: "smoke-model" },
+                },
+                {
+                  key: "gen_ai.model.provider",
+                  value: { stringValue: "smoke-provider" },
+                },
+                { key: "gen_ai.usage.input_tokens", value: { intValue: "12" } },
+                { key: "gen_ai.usage.output_tokens", value: { intValue: "7" } },
+                { key: "gen_ai.usage.total_tokens", value: { intValue: "19" } },
+                { key: "gen_ai.usage.cost", value: { doubleValue: 0.0125 } },
+                {
+                  key: "http.response.status_code",
+                  value: { intValue: "200" },
+                },
+                {
+                  key: "cf-aig-request-id",
+                  value: { stringValue: "smoke-request" },
+                },
                 { key: "gateway", value: { stringValue: "smoke" } },
-                { key: "request_id", value: { stringValue: "smoke-request" } },
+                { key: "env", value: { stringValue: "smoke" } },
                 {
                   key: "gen_ai.prompt_json",
-                  value: {
-                    stringValue: '{"prompt":"smoke","token":"sk-live-smoke"}',
-                  },
+                  value: { stringValue: '{"token":"sk-live-smoke"}' },
                 },
               ],
             },
@@ -135,11 +190,10 @@ await fetchWithRetry(
     }),
 );
 await fetchWithRetry(
-  `${lokiUrl}/loki/api/v1/query_range?query=${encodeURIComponent('{gateway="smoke"}')}`,
+  `${lokiUrl}/loki/api/v1/query_range?query=${encodeURIComponent('{gateway="smoke",env="smoke",model="smoke-model",status_code="200"}')}`,
   {},
   "Loki query",
-  (json) =>
-    json?.data?.result?.some((stream) => stream?.stream?.gateway === "smoke"),
+  (json) => json?.data?.result?.some(lokiRecordMatches),
 );
 await fetchWithRetry(
   `${tempoUrl}/api/traces/${traceIdHex}`,

@@ -52,7 +52,7 @@ func (CanonicalMetrics) Normalize(span redaction.RedactedSpan) NormalizedMetrics
 	}
 	labels := map[string]string{
 		"model":       firstString(span, "model", "gen_ai.request.model"),
-		"provider":    firstString(span, "provider", "gen_ai.provider.name", "gen_ai.system"),
+		"provider":    firstString(span, "provider", "gen_ai.model.provider", "gen_ai.provider.name", "gen_ai.system"),
 		"status_code": firstString(span, "status_code", "http.response.status_code"),
 		"env":         firstString(span, "env"),
 		"gateway":     firstString(span, "gateway"),

@@ -242,7 +242,7 @@ export class OtelLedger {
       tombstoneUntilMs: input.nowMs + DEDUPLICATION_TOMBSTONE_MS,
     };
     await this.writeState({ ...state, ingress: { ...state.ingress, [input.ingressId]: entry } });
-    await this.state.storage.setAlarm(input.nowMs + DEDUPLICATION_TOMBSTONE_MS);
+    await this.scheduleAlarm(input.nowMs + DEDUPLICATION_TOMBSTONE_MS);
     return { kind: "reserved" };
   }
 
@@ -263,7 +263,7 @@ export class OtelLedger {
         [ingressId]: { ...entry, status: "ready", pointer },
       },
     });
-    await this.state.storage.setAlarm(Date.now() + 1_000);
+    await this.scheduleAlarm(Date.now() + 1_000);
   }
 
   async markIngressEnqueued(
@@ -334,7 +334,7 @@ export class OtelLedger {
       tombstoneUntilMs: nowMs + DEDUPLICATION_TOMBSTONE_MS,
     };
     await this.writeState({ ...state, exports: { ...state.exports, [descriptor.jobId]: entry } });
-    await this.state.storage.setAlarm(nowMs + DEDUPLICATION_TOMBSTONE_MS);
+    await this.scheduleAlarm(nowMs + DEDUPLICATION_TOMBSTONE_MS);
     return { kind: "reserved" };
   }
 
@@ -349,7 +349,7 @@ export class OtelLedger {
       ...state,
       exports: { ...state.exports, [jobId]: { ...entry, status: "ready", pointer } },
     });
-    await this.state.storage.setAlarm(Date.now() + 1_000);
+    await this.scheduleAlarm(Date.now() + 1_000);
     return true;
   }
 
@@ -386,7 +386,7 @@ export class OtelLedger {
       nextFencingToken: state.nextFencingToken + 1,
       exports: { ...state.exports, [jobId]: { ...entry, status: "claimed", claim } },
     });
-    await this.state.storage.setAlarm(claim.expiresAtMs);
+    await this.scheduleAlarm(claim.expiresAtMs);
     return { kind: "claimed", claim, pointer: entry.pointer };
   }
 
@@ -527,6 +527,13 @@ export class OtelLedger {
 
   private async writeState(state: LedgerState): Promise<void> {
     await this.state.storage.put("state", state);
+  }
+
+  private async scheduleAlarm(deadlineMs: number): Promise<void> {
+    const scheduled = await this.state.storage.getAlarm();
+    if (scheduled === null || deadlineMs < scheduled) {
+      await this.state.storage.setAlarm(deadlineMs);
+    }
   }
 }
 

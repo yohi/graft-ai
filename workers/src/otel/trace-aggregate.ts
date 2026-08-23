@@ -53,7 +53,8 @@ export class TraceAggregate {
         completed: false,
       };
       await this.state.storage.put("trace", next);
-      await this.state.storage.setAlarm(receivedAtMs + TRACE_IDLE_ALARM_MS);
+      const idleDeadlineMs = receivedAtMs + TRACE_IDLE_ALARM_MS;
+      await this.scheduleAlarm(Math.max(idleDeadlineMs, Date.now()));
       return Response.json({ accepted: true, duplicate: false });
     });
   }
@@ -138,6 +139,13 @@ export class TraceAggregate {
       lastReceivedAtMs: 0,
       completed: false,
     };
+  }
+
+  private async scheduleAlarm(deadlineMs: number): Promise<void> {
+    const scheduled = await this.state.storage.getAlarm();
+    if (scheduled === null || deadlineMs < scheduled) {
+      await this.state.storage.setAlarm(deadlineMs);
+    }
   }
 }
 

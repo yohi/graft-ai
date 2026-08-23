@@ -5,7 +5,7 @@ variable "cloudflare_account_id" {
 }
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API Token with Logpush, Workers, Queues, and account-level R2 Storage Write permissions"
+  description = "Cloudflare API Token with Logpush, account-level Queues Write (or Queues Edit), and account-level R2 Storage Write permissions"
   type        = string
   sensitive   = true
 }

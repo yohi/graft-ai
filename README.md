@@ -416,7 +416,7 @@ GitHub Actions workflows drive continuous integration and deployment:
 
 Required repository secrets/variables:
 - Cloudflare: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. The API token
-  must include account-level Queue access and `Workers R2 Storage Write` (or
+  must include account-level `Queues Write` (or `Queues Edit`) and `Workers R2 Storage Write` (or
   the equivalent `Edit`) permission for the OTel infrastructure deployment;
   bucket-scoped Object Read/Write R2 tokens do not authenticate against the
   Cloudflare REST bucket API.

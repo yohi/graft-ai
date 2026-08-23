@@ -31,7 +31,8 @@ resource "cloudflare_queue" "otel_dlq" {
   queue_name = each.value
 
   settings = {
-    message_retention_period = 345600
+    # Workers Free limits Queue retention to 24 hours.
+    message_retention_period = 86400
   }
 }
 

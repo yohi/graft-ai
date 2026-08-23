@@ -415,7 +415,11 @@ GitHub Actions workflows drive continuous integration and deployment:
   - Uses the `production` GitHub environment
 
 Required repository secrets/variables:
-- Cloudflare: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+- Cloudflare: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`. The API token
+  must include account-level `Queues Write` (or `Queues Edit`) and `Workers R2 Storage Write` (or
+  the equivalent `Edit`) permission for the OTel infrastructure deployment;
+  bucket-scoped Object Read/Write R2 tokens do not authenticate against the
+  Cloudflare REST bucket API.
 - Grafana Dashboards: `GRAFANA_STACK_SLUG` (variable) or `GRAFANA_URL`, and `GRAFANA_SERVICE_ACCOUNT_TOKEN` / `GRAFANA_API_KEY` (secret).
 Provider Metrics and Ollama Cloud Workers need their own secrets registered via Wrangler before the first deploy.
 

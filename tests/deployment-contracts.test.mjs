@@ -9,6 +9,7 @@ const deploy = readFileSync(
   resolve(root, ".github/workflows/deploy.yml"),
   "utf8",
 );
+const otelTerraform = readFileSync(resolve(root, "terraform/otel.tf"), "utf8");
 const makefile = readFileSync(resolve(root, "Makefile"), "utf8");
 const setup = readFileSync(resolve(root, "scripts/setup.sh"), "utf8");
 const grafanaMain = readFileSync(
@@ -44,6 +45,15 @@ test("PR Terraform plan uses read-only Grafana retention credentials", () => {
     /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/,
   );
   assert.doesNotMatch(ci, /GRAFANA_CLOUD_ACCESS_POLICY_TOKEN/);
+});
+
+test("Free Tier OTel DLQs use the Cloudflare Queue retention limit", () => {
+  const dlqBlock =
+    otelTerraform.match(
+      /resource "cloudflare_queue" "otel_dlq"[\s\S]*?(?=\nresource |\s*$)/,
+    )?.[0] ?? "";
+  assert.match(dlqBlock, /message_retention_period\s*=\s*86400/);
+  assert.doesNotMatch(dlqBlock, /message_retention_period\s*=\s*345600/);
 });
 
 test("OTel backend alert rules cover exhaustion, drops, saturation, and ingress limiting", () => {

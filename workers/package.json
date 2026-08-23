@@ -7,9 +7,12 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "vitest run",
+    "test:otel": "vitest run --config vitest.otel.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "typecheck:ci": "wrangler types && tsc --noEmit",
+    "typecheck:otel": "tsc --noEmit",
+    "validate:otel": "wrangler deploy --dry-run --config wrangler.otel.jsonc",
     "fmt": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "fmt:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "cf-typegen": "wrangler types"

@@ -33,7 +33,7 @@ The current support status and planned roadmap items are summarized below:
 | **AI Gateway access log forwarding** | Collect AI Gateway access logs and forward them to Grafana Loki via Workers Logpush | Proxy-only mode does not forward access logs | - |
 | **Ollama Cloud** | Calculate session/weekly rate-limit reset times and push to Grafana Metrics (Prometheus format) | Real-time access logs forwarding | Dynamic auto-detection of rate-limit reset anchors (currently uses static anchors) |
 | **OpenAI (Direct Connect)** | - (only supported via AI Gateway proxy) | Direct cost/token scraping via API keys | Scheduled usage scraping from OpenAI Usage APIs |
-| **AI Gateway OTel telemetry** | Receive OTLP through a private Tunnel and export redacted Tempo/Loki/Prometheus signals with custom Alloy | Grafana Cloud acceptance requires tenant-specific endpoints and credentials | - |
+| **AI Gateway OTel telemetry** | Receive redacted OTLP/JSON through a dedicated `workers.dev` Worker and export independent Tempo/Loki/Prometheus signals | Grafana Cloud acceptance requires tenant-specific endpoints and credentials | - |
 
 ## 🏗️ Architecture
 
@@ -45,26 +45,24 @@ The current support status and planned roadmap items are summarized below:
   configured anchor and intervals, pushes them to Grafana Cloud Metrics.
 - **Provider Metrics Worker:** Fetches Codex, OpenAI API, and OpenCodeGo usage
   every minute and pushes OTLP/v1 metrics to Grafana Cloud Prometheus.
-- **AI Gateway OTel pipeline:** Receives OTLP/HTTP through Cloudflare Tunnel,
-  redacts credentials before queueing, elects request spans, applies one
-  deterministic trace decision, and asynchronously exports Tempo metadata,
-  redacted Loki payload logs, and unsampled Prometheus RED metrics.
+- **AI Gateway OTel pipeline:** Receives OTLP/JSON through a dedicated
+  `workers.dev` Worker, redacts credentials before R2/Queue handoff, elects
+  request spans, applies one deterministic trace decision, and asynchronously
+  exports Tempo metadata, redacted Loki payload logs, and unsampled Prometheus
+  RED metrics.
 
-The OTel path is independent of Logpush and proxy routing. The self-hosted
-reference stack is in [`deploy/otel/docker-compose.yml`](./deploy/otel/docker-compose.yml);
-it exposes only Grafana on the host and keeps Alloy and all telemetry backends
-on the internal network. Create the local secret files under
-`deploy/otel/secrets/` from `deploy/otel/env.example` before starting the
-stack. Run `make otel-validate` for static checks and `make otel-smoke` for the
-local synthetic end-to-end smoke test.
+The OTel Worker path is independent of Logpush and proxy routing. The
+deployment, secret, Queue/DLQ, Grafana verification, and rollback procedure is
+documented in the [Cloudflare Worker AI Gateway OTel runbook](./docs/cloudflare-worker-ai-gateway-otel.md).
+Run `make otel-worker-test` and `make otel-worker-validate` before deployment.
+The existing Tunnel/Alloy stack under `deploy/otel/` remains the rollback route
+during the coexistence and observation window.
 
-For Grafana Cloud OTel export, use
-[`deploy/otel/docker-compose.grafana-cloud.yml`](./deploy/otel/docker-compose.grafana-cloud.yml)
-as a second Compose file. Set the three Cloud endpoints and their
-`Authorization` headers through an untracked environment file or secret
-manager; never put tokens in Compose YAML. The Terraform Grafana module
-creates a telemetry Access Policy with `logs:write`, `metrics:write`, and
-`traces:write`, plus a separate Loki-only Access Policy with `logs:write`.
+For Grafana Cloud OTel export, register the Worker secrets through Wrangler or
+the production deployment workflow. The telemetry Access Policy needs
+`logs:write`, `metrics:write`, and `traces:write`; a separate Loki-only Access
+Policy may be used when only Loki is accessed. Never put endpoint credentials in
+Wrangler vars, Terraform tfvars, Compose YAML, or source files.
 Set these production environment variables to the actual Grafana Cloud OTel
 datasource UIDs before running the dashboard workflow:
 `GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID`, `GRAFANA_OTEL_LOKI_DATASOURCE_UID`,
@@ -72,9 +70,17 @@ and `GRAFANA_OTEL_TEMPO_DATASOURCE_UID`. The workflow enables
 `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` so missing UIDs fail before any
 Grafana API call.
 
-The [Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md) is
-the Free Tier deployment path for routing AI Gateway telemetry through the
-Tunnel and Alloy.
+The [legacy Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md)
+describes the Tunnel/Alloy rollback route. It remains available until the
+dedicated Worker has completed its controlled observation window.
+
+### Dedicated AI Gateway OTel Worker
+
+Configure the AI Gateway exporter with the dedicated Worker URL, a Bearer token
+stored as the `OTEL_INGEST_TOKEN` Wrangler secret, and JSON content type. The
+Worker stores only redacted payloads under `otel/` in R2; Queue messages contain
+only SHA-256-verified pointers. Backend queues and DLQs are isolated per
+Tempo, Loki, and Prometheus destination.
 
 ### Scheduled Workers
 

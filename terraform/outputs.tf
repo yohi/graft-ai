@@ -3,6 +3,11 @@ output "worker_url" {
   value       = "https://${var.worker_script_name}.${var.workers_subdomain}.workers.dev"
 }
 
+output "otel_worker_url" {
+  description = "URL of the dedicated AI Gateway OTel Worker"
+  value       = "https://${local.otel_worker_name}.${var.workers_subdomain}.workers.dev"
+}
+
 output "logpush_job_name" {
   description = "Name of the created Logpush job"
   value       = var.logpush_job_name

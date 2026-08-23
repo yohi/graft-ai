@@ -1,0 +1,87 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "graft-ai-aig-otel",
+  "main": "src/otel.ts",
+  "compatibility_date": "2026-07-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "vars": {
+    "GATEWAY_NAME": "main",
+    "ENV_LABEL": "prod",
+    "OTEL_SAMPLING_RATE": "1",
+    "OTEL_GRAFANA_CLOUD_LOGS_RETENTION": "14d"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "OTEL_INGRESS_QUEUE",
+        "queue": "graft-ai-aig-otel-ingress-v1"
+      },
+      { "binding": "OTEL_TEMPO_QUEUE", "queue": "graft-ai-aig-otel-tempo-v1" },
+      { "binding": "OTEL_LOKI_QUEUE", "queue": "graft-ai-aig-otel-loki-v1" },
+      {
+        "binding": "OTEL_PROMETHEUS_QUEUE",
+        "queue": "graft-ai-aig-otel-prometheus-v1"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "graft-ai-aig-otel-ingress-v1",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 2,
+        "retry_delay": 1,
+        "max_concurrency": 10,
+        "dead_letter_queue": "graft-ai-aig-otel-ingress-dlq-v1"
+      },
+      {
+        "queue": "graft-ai-aig-otel-tempo-v1",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 2,
+        "retry_delay": 1,
+        "max_concurrency": 10,
+        "dead_letter_queue": "graft-ai-aig-otel-tempo-dlq-v1"
+      },
+      {
+        "queue": "graft-ai-aig-otel-loki-v1",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 2,
+        "retry_delay": 1,
+        "max_concurrency": 10,
+        "dead_letter_queue": "graft-ai-aig-otel-loki-dlq-v1"
+      },
+      {
+        "queue": "graft-ai-aig-otel-prometheus-v1",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 2,
+        "retry_delay": 1,
+        "max_concurrency": 10,
+        "dead_letter_queue": "graft-ai-aig-otel-prometheus-dlq-v1"
+      }
+    ]
+  },
+  "r2_buckets": [
+    { "binding": "OTEL_OBJECTS", "bucket_name": "graft-ai-aig-otel-v1" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "OTEL_RATE_LIMIT", "class_name": "OtelRateLimit" },
+      { "name": "OTEL_LEDGER", "class_name": "OtelLedger" },
+      { "name": "OTEL_TRACE_AGGREGATE", "class_name": "TraceAggregate" },
+      {
+        "name": "OTEL_METRICS_AGGREGATE",
+        "class_name": "OtelMetricsAggregate"
+      }
+    ]
+  },
+  "exports": {
+    "OtelRateLimit": { "type": "durable-object", "storage": "sqlite" },
+    "OtelLedger": { "type": "durable-object", "storage": "sqlite" },
+    "TraceAggregate": { "type": "durable-object", "storage": "sqlite" },
+    "OtelMetricsAggregate": { "type": "durable-object", "storage": "sqlite" }
+  }
+}

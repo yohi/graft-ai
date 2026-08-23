@@ -29,6 +29,17 @@ jobs:
         working-directory: workers
         run: npm run typecheck:ci
 
+      - name: Test dedicated OTel Worker
+        working-directory: workers
+        run: npm run test:otel
+
+      - name: Type check dedicated OTel Worker
+        working-directory: workers
+        run: npm run typecheck:otel
+
+      - name: Validate dedicated OTel Worker configuration
+        run: make otel-worker-validate
+
       - name: Run repository tests
         run: make test
 

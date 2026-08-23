@@ -77,6 +77,28 @@ variable "workers_subdomain" {
   type        = string
 }
 
+variable "otel_worker_name" {
+  description = "Fixed name of the dedicated AI Gateway OTel Worker"
+  type        = string
+  default     = "graft-ai-aig-otel"
+
+  validation {
+    condition     = var.otel_worker_name == "graft-ai-aig-otel"
+    error_message = "otel_worker_name is fixed at graft-ai-aig-otel to match wrangler.otel.jsonc."
+  }
+}
+
+variable "otel_bucket_name" {
+  description = "Fixed name of the dedicated AI Gateway OTel R2 bucket"
+  type        = string
+  default     = "graft-ai-aig-otel-v1"
+
+  validation {
+    condition     = var.otel_bucket_name == "graft-ai-aig-otel-v1"
+    error_message = "otel_bucket_name is fixed at graft-ai-aig-otel-v1 to match wrangler.otel.jsonc."
+  }
+}
+
 variable "max_upload_bytes" {
   description = "Maximum upload size in bytes for each Logpush batch"
   type        = number
@@ -99,5 +121,4 @@ variable "origin_secret" {
     error_message = "origin_secret must not be empty."
   }
 }
-
 

@@ -8,17 +8,17 @@ const otelEnv = env as unknown as {
 describe("OtelRateLimit", () => {
   it("allows twenty requests, then returns a retry delay until a token refills", async () => {
     const stub = otelEnv.OTEL_RATE_LIMIT.getByName(`rate-${crypto.randomUUID()}`);
-    const results: Response[] = [];
+    const results: Array<{ readonly allowed: boolean; readonly retryAfterSeconds: number }> = [];
     for (let index = 0; index < 20; index += 1) {
-      results.push(
-        await stub.fetch("https://rate/take", {
-          method: "POST",
-          body: JSON.stringify({ sourceHash: "source", nowMs: 0 }),
-        }),
-      );
+      const response = await stub.fetch("https://rate/take", {
+        method: "POST",
+        body: JSON.stringify({ sourceHash: "source", nowMs: 0 }),
+      });
+      expect(response.status).toBe(200);
+      results.push((await response.json()) as { allowed: boolean; retryAfterSeconds: number });
     }
 
-    expect(results.every((response) => response.status === 200)).toBe(true);
+    expect(results.every((result) => result.allowed)).toBe(true);
     const limited = await stub.fetch("https://rate/take", {
       method: "POST",
       body: JSON.stringify({ sourceHash: "source", nowMs: 0 }),

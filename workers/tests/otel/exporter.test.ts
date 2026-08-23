@@ -28,14 +28,9 @@ describe("OTel backend exporter", () => {
       payloadSha256: await sha256Hex(bytes),
     };
     const pointer = await enqueueBackendJob(otelEnv, descriptor, bytes);
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe(otelEnv.GRAFANA_CLOUD_OTLP_TRACES_URL);
-      expect(init?.headers).toMatchObject({
-        "content-type": "application/json",
-        authorization: "Basic tempo-token",
-      });
-      return new Response(null, { status: 200 });
-    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(exportPointer(pointer, otelEnv)).resolves.toEqual({
@@ -43,6 +38,12 @@ describe("OTel backend exporter", () => {
       status: 200,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    expect(String(requestUrl)).toBe(otelEnv.GRAFANA_CLOUD_OTLP_TRACES_URL);
+    expect(requestInit?.headers).toMatchObject({
+      "content-type": "application/json",
+      authorization: "Basic tempo-token",
+    });
   });
 
   it("classifies retryable and terminal backend responses", async () => {

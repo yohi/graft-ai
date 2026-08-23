@@ -38,15 +38,17 @@ describe("OTel ingress", () => {
   });
 
   it("persists only a redacted envelope and returns an accepted response", async () => {
+    const before = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/ingress/" });
+    const beforeKeys = new Set(before.objects.map((entry) => entry.key));
     const response = await handleIngress(request(validOtlpJson), otelEnv);
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ reason: "accepted" });
 
     const listed = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/ingress/" });
     expect(listed.objects.length).toBeGreaterThan(0);
-    const object = await otelEnv.OTEL_OBJECTS.get(
-      listed.objects[listed.objects.length - 1]?.key ?? "",
-    );
+    const created = listed.objects.find((entry) => !beforeKeys.has(entry.key));
+    expect(created).toBeDefined();
+    const object = await otelEnv.OTEL_OBJECTS.get(created?.key ?? "");
     const text = await object?.text();
     expect(text).toContain("[REDACTED]");
     expect(text).not.toContain("sk-live-test-secret");

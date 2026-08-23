@@ -15,9 +15,14 @@ describe("R2 object storage", () => {
     await expect(readJsonObject(otelEnv.OTEL_OBJECTS, pointer)).resolves.toEqual({
       safe: "[REDACTED]",
     });
-    await otelEnv.OTEL_OBJECTS.put(key, "changed");
+    const original = await otelEnv.OTEL_OBJECTS.get(key);
+    if (!original) throw new Error("stored object missing");
+    await otelEnv.OTEL_OBJECTS.put(key, "changed", {
+      httpMetadata: original.httpMetadata,
+      customMetadata: original.customMetadata,
+    });
     await expect(readJsonObject(otelEnv.OTEL_OBJECTS, pointer)).rejects.toThrow(
-      /checksum|content type|metadata/i,
+      "R2 object checksum mismatch",
     );
   });
 });

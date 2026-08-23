@@ -59,6 +59,10 @@ environment variables に設定してください。
 `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` を設定し、UID不足時はGrafana APIを
 呼び出す前に失敗します。
 
+Free Tier の導入手順は[Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md)
+を参照してください。このモードでは Logpush dashboard ではなく OTel dashboard
+（`graft-ai-otel-observability`）を使用します。
+
 ### スケジュール実行 Worker
 
 | Worker | Trigger | Responsibility |

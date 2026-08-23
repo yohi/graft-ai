@@ -72,6 +72,10 @@ and `GRAFANA_OTEL_TEMPO_DATASOURCE_UID`. The workflow enables
 `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` so missing UIDs fail before any
 Grafana API call.
 
+The [Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md) is
+the Free Tier deployment path for routing AI Gateway telemetry through the
+Tunnel and Alloy.
+
 ### Scheduled Workers
 
 | Worker | Trigger | Responsibility |

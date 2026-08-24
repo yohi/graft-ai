@@ -60,6 +60,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    outputs:
+      otel_payload_kv_namespace_id: ${{ steps.read_otel_kv_namespace.outputs.namespace_id }}
     env:
       TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -85,7 +87,7 @@ jobs:
           terraform_version: "1.10.0"
           terraform_wrapper: false
 
-      - name: Apply Queue and R2 resources
+      - name: Apply Queue, KV, and R2 resources
         working-directory: terraform
         run: |
           set -euo pipefail
@@ -93,8 +95,21 @@ jobs:
           terraform apply -input=false -auto-approve \
             -target=cloudflare_queue.otel \
             -target=cloudflare_queue.otel_dlq \
+            -target=cloudflare_workers_kv_namespace.otel_payloads \
             -target=cloudflare_r2_bucket.otel \
             -target=cloudflare_r2_bucket_lifecycle.otel
+
+      - name: Read OTel KV namespace ID
+        id: read_otel_kv_namespace
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+          namespace_id="$(terraform output -raw otel_payload_kv_namespace_id)"
+          if [[ ! "$namespace_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            printf '%s\n' 'Terraform returned an invalid OTel KV namespace ID.' >&2
+            exit 1
+          fi
+          printf 'namespace_id=%s\n' "$namespace_id" >> "$GITHUB_OUTPUT"
 
   deploy-otel-worker:
     name: Deploy dedicated OTel Worker
@@ -104,6 +119,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      OTEL_PAYLOAD_KV_NAMESPACE_ID: ${{ needs.apply-cloudflare-infrastructure.outputs.otel_payload_kv_namespace_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -118,6 +135,19 @@ jobs:
       - name: Install Worker dependencies
         working-directory: workers
         run: npm ci --ignore-scripts
+
+      - name: Render deployable OTel Worker config
+        working-directory: workers
+        run: |
+          set -euo pipefail
+          if [[ ! "$OTEL_PAYLOAD_KV_NAMESPACE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            printf '%s\n' 'The OTel KV namespace ID output is missing or invalid.' >&2
+            exit 1
+          fi
+          node ../scripts/render-otel-worker-config.mjs \
+            --payload-store kv \
+            --kv-namespace-id "$OTEL_PAYLOAD_KV_NAMESPACE_ID" \
+            --output .wrangler/otel.generated.jsonc
 
       - name: Sync dedicated OTel Worker secrets
         working-directory: workers
@@ -153,7 +183,7 @@ jobs:
             exit 1
           fi
           for name in "${secret_names[@]}"; do
-            printf '%s' "${!name}" | npx wrangler secret put "$name" --config wrangler.otel.jsonc
+            printf '%s' "${!name}" | npx wrangler secret put "$name" --config .wrangler/otel.generated.jsonc
           done
 
       - name: Deploy with Wrangler
@@ -162,7 +192,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers
-          command: deploy --config wrangler.otel.jsonc
+          command: deploy --config .wrangler/otel.generated.jsonc
 
   deploy-proxy-worker:
     name: Deploy Proxy Worker

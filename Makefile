@@ -1,4 +1,4 @@
-.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules deploy-otel-worker otel-worker-test otel-worker-validate otel-worker-smoke clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
+.PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules otel-worker-infrastructure render-otel-worker-config deploy-otel-worker otel-worker-test otel-worker-validate otel-worker-smoke clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
 
 install:
 	cd workers && npm install
@@ -60,8 +60,28 @@ otel-worker-validate:
 otel-worker-smoke:
 	node scripts/otel-worker-smoke.mjs
 
-deploy-otel-worker:
-	cd workers && npx wrangler deploy --config wrangler.otel.jsonc
+otel-worker-infrastructure:
+	terraform -chdir=terraform init
+	terraform -chdir=terraform apply -input=false -auto-approve \
+		-target=cloudflare_queue.otel \
+		-target=cloudflare_queue.otel_dlq \
+		-target=cloudflare_workers_kv_namespace.otel_payloads \
+		-target=cloudflare_r2_bucket.otel \
+		-target=cloudflare_r2_bucket_lifecycle.otel
+
+render-otel-worker-config:
+	@set -eu; \
+	namespace_id="$${OTEL_PAYLOAD_KV_NAMESPACE_ID:-$$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)}"; \
+	test -n "$$namespace_id"; \
+	node scripts/render-otel-worker-config.mjs \
+		--payload-store "$${OTEL_PAYLOAD_STORE:-kv}" \
+		--kv-namespace-id "$$namespace_id" \
+		--output workers/.wrangler/otel.generated.jsonc
+
+
+deploy-otel-worker: otel-worker-infrastructure
+	$(MAKE) render-otel-worker-config
+	cd workers && npx wrangler deploy --config .wrangler/otel.generated.jsonc
 typecheck:
 	cd workers && npm run typecheck:ci
 

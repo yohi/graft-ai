@@ -7,7 +7,13 @@ const expectedQueues = {
   OTEL_TEMPO_QUEUE: "graft-ai-aig-otel-tempo-v1",
   OTEL_LOKI_QUEUE: "graft-ai-aig-otel-loki-v1",
   OTEL_PROMETHEUS_QUEUE: "graft-ai-aig-otel-prometheus-v1",
+  OTEL_INGRESS_DLQ: "graft-ai-aig-otel-ingress-dlq-v1",
+  OTEL_TEMPO_DLQ: "graft-ai-aig-otel-tempo-dlq-v1",
+  OTEL_LOKI_DLQ: "graft-ai-aig-otel-loki-dlq-v1",
+  OTEL_PROMETHEUS_DLQ: "graft-ai-aig-otel-prometheus-dlq-v1",
 };
+
+const expectedQueueMaxRetries = 7;
 
 const expectedConsumers = [
   "graft-ai-aig-otel-ingress-v1",
@@ -68,7 +74,7 @@ function validateQueues(config) {
     if (
       !consumer ||
       consumer.dead_letter_queue !== expectedDeadLetterQueue ||
-      consumer.max_retries !== 2
+      consumer.max_retries !== expectedQueueMaxRetries
     ) {
       throw new Error(`consumer contract is incomplete for ${queue}`);
     }
@@ -76,8 +82,14 @@ function validateQueues(config) {
 }
 
 function validateStorage(config) {
-  if (!config.r2_buckets?.some((entry) => entry.binding === "OTEL_OBJECTS")) {
-    throw new Error("OTEL_OBJECTS R2 binding is missing");
+  const hasKvBinding = config.kv_namespaces?.some(
+    (entry) => entry.binding === "OTEL_PAYLOAD_KV",
+  );
+  const hasR2Binding = config.r2_buckets?.some(
+    (entry) => entry.binding === "OTEL_OBJECTS",
+  );
+  if (!hasKvBinding && !hasR2Binding) {
+    throw new Error("OTEL_PAYLOAD_KV or OTEL_OBJECTS binding is missing");
   }
 }
 

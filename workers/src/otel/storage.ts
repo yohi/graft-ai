@@ -24,6 +24,39 @@ type PayloadMetadata = Readonly<{
 
 const CONTENT_TYPE = "application/json" as const;
 
+abstract class PayloadStoreBase implements PayloadStore {
+  abstract readonly backend: PayloadStoreBackend;
+
+  async putJsonObject<T>(
+    objectKey: string,
+    value: T,
+    kind: "ingress" | "export",
+  ): Promise<CurrentObjectPointer> {
+    return this.putBytesObject(objectKey, new TextEncoder().encode(JSON.stringify(value)), kind);
+  }
+
+  async readJsonObject<T>(pointer: ObjectPointer): Promise<T> {
+    const bytes = await this.readBytesObject(pointer);
+    try {
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      return parsed as T;
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new PayloadStoreIntegrityError("payload object JSON is invalid");
+      }
+      throw error;
+    }
+  }
+
+  abstract putBytesObject(
+    objectKey: string,
+    bytes: Uint8Array,
+    kind: "ingress" | "export",
+  ): Promise<CurrentObjectPointer>;
+  abstract readBytesObject(pointer: ObjectPointer): Promise<Uint8Array>;
+  abstract deleteObject(pointer: ObjectPointer): Promise<void>;
+}
+
 export function resolvePayloadStoreBackend(value: string | undefined): PayloadStoreBackend {
   const selected = value?.trim() ?? "";
   if (selected === "") return "kv";
@@ -48,17 +81,11 @@ export function queueDeliveryDelaySeconds(pointer: ObjectPointer): number {
     : 0;
 }
 
-class KvPayloadStore implements PayloadStore {
+class KvPayloadStore extends PayloadStoreBase {
   readonly backend = "kv" as const;
 
-  constructor(private readonly namespace: KVNamespace) {}
-
-  async putJsonObject<T>(objectKey: string, value: T): Promise<CurrentObjectPointer> {
-    return this.putBytesObject(
-      objectKey,
-      new TextEncoder().encode(JSON.stringify(value)),
-      payloadKindForObjectKey(objectKey),
-    );
+  constructor(private readonly namespace: KVNamespace) {
+    super();
   }
 
   async putBytesObject(
@@ -77,19 +104,6 @@ class KvPayloadStore implements PayloadStore {
       throw classifyStoreFailure(error, "KV payload write");
     }
     return currentPointer(objectKey, sha256, this.backend);
-  }
-
-  async readJsonObject<T>(pointer: ObjectPointer): Promise<T> {
-    const bytes = await this.readBytesObject(pointer);
-    try {
-      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-      return parsed as T;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new PayloadStoreIntegrityError("payload object JSON is invalid");
-      }
-      throw error;
-    }
   }
 
   async readBytesObject(pointer: ObjectPointer): Promise<Uint8Array> {
@@ -120,17 +134,11 @@ class KvPayloadStore implements PayloadStore {
   }
 }
 
-class R2PayloadStore implements PayloadStore {
+class R2PayloadStore extends PayloadStoreBase {
   readonly backend = "r2" as const;
 
-  constructor(private readonly bucket: R2Bucket) {}
-
-  async putJsonObject<T>(objectKey: string, value: T): Promise<CurrentObjectPointer> {
-    return this.putBytesObject(
-      objectKey,
-      new TextEncoder().encode(JSON.stringify(value)),
-      payloadKindForObjectKey(objectKey),
-    );
+  constructor(private readonly bucket: R2Bucket) {
+    super();
   }
 
   async putBytesObject(
@@ -148,19 +156,6 @@ class R2PayloadStore implements PayloadStore {
       throw classifyStoreFailure(error, "R2 payload write");
     }
     return currentPointer(objectKey, sha256, this.backend);
-  }
-
-  async readJsonObject<T>(pointer: ObjectPointer): Promise<T> {
-    const bytes = await this.readBytesObject(pointer);
-    try {
-      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
-      return parsed as T;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new PayloadStoreIntegrityError("payload object JSON is invalid");
-      }
-      throw error;
-    }
   }
 
   async readBytesObject(pointer: ObjectPointer): Promise<Uint8Array> {
@@ -207,10 +202,6 @@ function payloadStoreForBackend(env: OtelEnv, backend: PayloadStoreBackend): Pay
   return new R2PayloadStore(env.OTEL_OBJECTS);
 }
 
-function payloadKindForObjectKey(objectKey: string): "ingress" | "export" {
-  return objectKey.includes("/export/") ? "export" : "ingress";
-}
-
 function payloadMetadata(sha256: string, kind: "ingress" | "export"): PayloadMetadata {
   return { schemaVersion: "1", sha256, contentType: CONTENT_TYPE, kind };
 }
@@ -236,7 +227,7 @@ function currentPointer(
 }
 
 function validateMetadata(metadata: PayloadMetadata | null, pointer: ObjectPointer): void {
-  if (!metadata || metadata.schemaVersion !== "1" || metadata.contentType !== pointer.contentType) {
+  if (metadata?.schemaVersion !== "1" || metadata?.contentType !== pointer.contentType) {
     throw new PayloadStoreIntegrityError("payload object metadata is invalid");
   }
   if (metadata.sha256 !== pointer.sha256) {

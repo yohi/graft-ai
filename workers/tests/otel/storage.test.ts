@@ -17,9 +17,11 @@ describe.each(configuredBackends)("%s payload store", (backend) => {
       ...otelEnv,
       OTEL_PAYLOAD_STORE: backend,
     });
-    const pointer = await store.putJsonObject(`otel/test/${crypto.randomUUID()}.json`, {
-      safe: "[REDACTED]",
-    });
+    const pointer = await store.putJsonObject(
+      `otel/test/${crypto.randomUUID()}.json`,
+      { safe: "[REDACTED]" },
+      "ingress",
+    );
 
     expect(pointer.schemaVersion).toBe(2);
     expect(pointer.storageBackend).toBe(backend);
@@ -30,6 +32,21 @@ describe.each(configuredBackends)("%s payload store", (backend) => {
     await expect(store.deleteObject(pointer)).resolves.toBeUndefined();
     await expect(store.deleteObject(pointer)).resolves.toBeUndefined();
   });
+});
+
+it.skipIf(!otelEnv.OTEL_PAYLOAD_KV)("records the explicit kind for a JSON payload", async () => {
+  const payloadKv = otelEnv.OTEL_PAYLOAD_KV;
+  if (!payloadKv) throw new Error("KV payload binding is unavailable");
+  const store = payloadStoreForWrite({ ...otelEnv, OTEL_PAYLOAD_STORE: "kv" });
+  const objectKey = `otel/custom/${crypto.randomUUID()}.json`;
+  const pointer = await store.putJsonObject(objectKey, { safe: "[REDACTED]" }, "export");
+
+  const stored = await payloadKv.getWithMetadata<{ kind: "ingress" | "export" }>(objectKey, {
+    type: "arrayBuffer",
+  });
+
+  expect(stored.metadata?.kind).toBe("export");
+  await store.deleteObject(pointer);
 });
 
 it("defaults an unset selector to KV and rejects an unsupported selector", () => {
@@ -43,7 +60,7 @@ it.skipIf(!otelEnv.OTEL_OBJECTS)(
   async () => {
     const key = `otel/test/legacy-${crypto.randomUUID()}.json`;
     const r2Store = payloadStoreForWrite({ ...otelEnv, OTEL_PAYLOAD_STORE: "r2" });
-    const pointer = await r2Store.putJsonObject(key, { safe: "[REDACTED]" });
+    const pointer = await r2Store.putJsonObject(key, { safe: "[REDACTED]" }, "ingress");
     const legacyPointer = {
       schemaVersion: 1,
       id: pointer.id,

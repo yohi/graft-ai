@@ -36,25 +36,38 @@ export async function handleQueue(
   env: OtelEnv,
   _ctx: ExecutionContext,
 ): Promise<void> {
-  const backend = BACKEND_QUEUE_NAMES[batch.queue];
-  if (batch.queue !== INGRESS_QUEUE_NAME && !backend) throw new Error("unsupported queue");
+  const backend = backendForQueue(batch.queue);
   for (const message of batch.messages) {
     try {
-      let disposition: QueueDisposition;
-      if (batch.queue === INGRESS_QUEUE_NAME) {
-        if (message.body.kind !== "ingress") throw new Error("unsupported pointer");
-        disposition = await consumeIngress(message.body, env);
-      } else {
-        if (message.body.kind !== "export" || message.body.backend !== backend) {
-          throw new Error("backend pointer mismatch");
-        }
-        disposition = await consumeExport(message.body, env, backend);
-      }
+      const disposition = await consumeQueueMessage(message.body, batch.queue, backend, env);
       await applyDisposition(message, disposition, env);
     } catch {
       message.retry({ delaySeconds: 1 });
     }
   }
+}
+
+function backendForQueue(queue: string): Backend | undefined {
+  if (queue === INGRESS_QUEUE_NAME) return undefined;
+  const backend = BACKEND_QUEUE_NAMES[queue];
+  if (!backend) throw new Error("unsupported queue");
+  return backend;
+}
+
+async function consumeQueueMessage(
+  pointer: QueuePointer,
+  queue: string,
+  backend: Backend | undefined,
+  env: OtelEnv,
+): Promise<QueueDisposition> {
+  if (queue === INGRESS_QUEUE_NAME) {
+    if (pointer.kind !== "ingress") throw new Error("unsupported pointer");
+    return consumeIngress(pointer, env);
+  }
+  if (pointer.kind !== "export" || pointer.backend !== backend) {
+    throw new Error("backend pointer mismatch");
+  }
+  return consumeExport(pointer, env, backend);
 }
 
 async function consumeIngress(pointer: IngressPointer, env: OtelEnv): Promise<QueueDisposition> {
@@ -80,17 +93,10 @@ async function consumeIngress(pointer: IngressPointer, env: OtelEnv): Promise<Qu
     const ordinal = await ledgerCall<number>(ledger, "ingress.payload-read-failure", {
       ingressId: pointer.ingressId,
     });
-    if (
-      backend === "kv" &&
-      (error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError) &&
-      ordinal <= KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length
-    ) {
-      return {
-        kind: "retry",
-        delaySeconds: KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120,
-      };
-    }
-    return { kind: "dead-letter", pointer: durablePointer };
+    const retryDelay = payloadReadRetryDelay(backend, error, ordinal);
+    return retryDelay === undefined
+      ? { kind: "dead-letter", pointer: durablePointer }
+      : { kind: "retry", delaySeconds: retryDelay };
   }
 
   const byTrace = new Map<string, typeof envelope.spans>();
@@ -145,63 +151,94 @@ async function consumeExport(
   if (claim.kind === "complete" || claim.kind === "expired") return { kind: "ack" };
   if (claim.kind !== "claimed") return { kind: "retry", delaySeconds: 1 };
 
+  return processClaimedExport(claim, env, ledger);
+}
+
+async function processClaimedExport(
+  claim: Extract<ExportClaimResult, { kind: "claimed" }>,
+  env: OtelEnv,
+  ledger: DurableObjectStub,
+): Promise<QueueDisposition> {
   const durablePointer = claim.pointer;
   const pointerBackend = payloadBackend(durablePointer);
   let result: ExportResult;
   try {
     result = await exportPointer(durablePointer, env);
   } catch (error) {
-    await releaseClaim(ledger, claim.claim);
+    return handleExportPayloadReadFailure(
+      env,
+      ledger,
+      durablePointer,
+      claim.claim,
+      pointerBackend,
+      error,
+    );
+  }
+
+  if (result.kind === "success")
+    return completeExport(env, ledger, durablePointer, claim.claim, pointerBackend);
+  return handleDownstreamFailure(env, ledger, durablePointer, claim.claim, result);
+}
+
+async function handleExportPayloadReadFailure(
+  env: OtelEnv,
+  ledger: DurableObjectStub,
+  pointer: ExportPointer,
+  claim: ExportClaim,
+  backend: PayloadStoreBackend,
+  error: unknown,
+): Promise<QueueDisposition> {
+  await releaseClaim(ledger, claim);
+  if (!(error instanceof PayloadStoreError)) throw error;
+  await appendPayloadStoreFailure(env, "read", backend, error);
+  const ordinal = await ledgerCall<number>(ledger, "export.payload-read-failure", {
+    jobId: pointer.jobId,
+  });
+  const retryDelay = payloadReadRetryDelay(backend, error, ordinal);
+  return retryDelay === undefined
+    ? { kind: "dead-letter", pointer }
+    : { kind: "retry", delaySeconds: retryDelay };
+}
+
+async function completeExport(
+  env: OtelEnv,
+  ledger: DurableObjectStub,
+  pointer: ExportPointer,
+  claim: ExportClaim,
+  backend: PayloadStoreBackend,
+): Promise<QueueDisposition> {
+  const completed = await ledgerCall<boolean>(ledger, "export.complete", { claim });
+  if (!completed) throw new Error("export completion rejected");
+  try {
+    await payloadStoreForPointer(env, pointer).deleteObject(pointer);
+  } catch (error) {
     if (!(error instanceof PayloadStoreError)) throw error;
-    await appendPayloadStoreFailure(env, "read", pointerBackend, error);
-    const ordinal = await ledgerCall<number>(ledger, "export.payload-read-failure", {
-      jobId: durablePointer.jobId,
-    });
-    if (
-      pointerBackend === "kv" &&
-      (error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError) &&
-      ordinal <= KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length
-    ) {
-      return {
-        kind: "retry",
-        delaySeconds: KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120,
-      };
-    }
-    return { kind: "dead-letter", pointer: durablePointer };
+    await appendPayloadStoreFailure(env, "delete", backend, error);
+    return { kind: "dead-letter", pointer };
   }
+  return { kind: "ack" };
+}
 
-  if (result.kind === "success") {
-    const completed = await ledgerCall<boolean>(ledger, "export.complete", {
-      claim: claim.claim,
-    });
-    if (!completed) throw new Error("export completion rejected");
-    try {
-      await payloadStoreForPointer(env, durablePointer).deleteObject(durablePointer);
-    } catch (error) {
-      if (!(error instanceof PayloadStoreError)) throw error;
-      await appendPayloadStoreFailure(env, "delete", pointerBackend, error);
-      return { kind: "dead-letter", pointer: durablePointer };
-    }
-    return { kind: "ack" };
-  }
-
-  await releaseClaim(ledger, claim.claim);
+async function handleDownstreamFailure(
+  env: OtelEnv,
+  ledger: DurableObjectStub,
+  pointer: ExportPointer,
+  claim: ExportClaim,
+  result: Exclude<ExportResult, { kind: "success" }>,
+): Promise<QueueDisposition> {
+  await releaseClaim(ledger, claim);
   const ordinal = await ledgerCall<number>(ledger, "export.downstream-failure", {
-    jobId: durablePointer.jobId,
+    jobId: pointer.jobId,
   });
   await appendOperationalSamples(env, [
-    failureSample(durablePointer.backend, durablePointer.jobId, ordinal, result),
+    failureSample(pointer.backend, pointer.jobId, ordinal, result),
   ]);
   if (result.kind === "terminal" || ordinal >= DOWNSTREAM_EXPORT_ATTEMPT_LIMIT) {
-    await appendOperationalSamples(env, [
-      exhaustedSample(durablePointer.backend, durablePointer.jobId, ordinal),
-    ]);
-    return { kind: "dead-letter", pointer: durablePointer };
+    await appendOperationalSamples(env, [exhaustedSample(pointer.backend, pointer.jobId, ordinal)]);
+    return { kind: "dead-letter", pointer };
   }
 
-  await appendOperationalSamples(env, [
-    retrySample(durablePointer.backend, durablePointer.jobId, ordinal),
-  ]);
+  await appendOperationalSamples(env, [retrySample(pointer.backend, pointer.jobId, ordinal)]);
   const defaultDelay = ordinal === 1 ? 1 : 2;
   const retryAfterSeconds = result.kind === "retryable" ? result.retryAfterSeconds : undefined;
   return { kind: "retry", delaySeconds: Math.max(defaultDelay, retryAfterSeconds ?? 0) };
@@ -254,6 +291,21 @@ export async function deadLetterPointer(env: OtelEnv, pointer: QueuePointer): Pr
 
 function payloadBackend(pointer: QueuePointer): PayloadStoreBackend {
   return pointer.schemaVersion === 1 ? "r2" : pointer.storageBackend;
+}
+
+function payloadReadRetryDelay(
+  backend: PayloadStoreBackend,
+  error: PayloadStoreError,
+  ordinal: number,
+): number | undefined {
+  if (
+    backend !== "kv" ||
+    !(error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError)
+  ) {
+    return undefined;
+  }
+  if (ordinal > KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length) return undefined;
+  return KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120;
 }
 
 function failureSample(

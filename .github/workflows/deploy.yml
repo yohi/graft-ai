@@ -80,6 +80,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    outputs:
+      otel_payload_kv_namespace_id: ${{ steps.read_otel_kv_namespace.outputs.namespace_id }}
     env:
       TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -123,6 +125,18 @@ jobs:
           fi
           terraform apply -input=false -auto-approve "${targets[@]}"
 
+      - name: Read OTel KV namespace ID
+        id: read_otel_kv_namespace
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+          namespace_id="$(terraform output -raw otel_payload_kv_namespace_id)"
+          if [[ ! "$namespace_id" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            printf '%s\n' 'Terraform returned an invalid OTel KV namespace ID.' >&2
+            exit 1
+          fi
+          printf 'namespace_id=%s\n' "$namespace_id" >> "$GITHUB_OUTPUT"
+
   deploy-otel-worker:
     name: Deploy dedicated OTel Worker
     runs-on: ubuntu-latest
@@ -132,7 +146,7 @@ jobs:
     permissions:
       contents: read
     env:
-      TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+      OTEL_PAYLOAD_KV_NAMESPACE_ID: ${{ needs.apply-cloudflare-infrastructure.outputs.otel_payload_kv_namespace_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -148,21 +162,17 @@ jobs:
         working-directory: workers
         run: npm ci --ignore-scripts
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: "1.10.0"
-          terraform_wrapper: false
-
-      - name: Render dedicated OTel Worker config
+      - name: Render deployable OTel Worker config
         working-directory: workers
         run: |
           set -euo pipefail
-          terraform -chdir=../terraform init -input=false
-          kv_namespace_id="$(terraform -chdir=../terraform output -raw otel_payload_kv_namespace_id)"
+          if [[ ! "$OTEL_PAYLOAD_KV_NAMESPACE_ID" =~ ^[0-9a-fA-F]{32}$ ]]; then
+            printf '%s\n' 'The OTel KV namespace ID output is missing or invalid.' >&2
+            exit 1
+          fi
           render_args=(
             --payload-store "$OTEL_PAYLOAD_STORE"
-            --kv-namespace-id "$kv_namespace_id"
+            --kv-namespace-id "$OTEL_PAYLOAD_KV_NAMESPACE_ID"
             --output .wrangler/otel.generated.jsonc
           )
           if [[ "$OTEL_PAYLOAD_STORE" == r2 || "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then

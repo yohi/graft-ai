@@ -34,6 +34,10 @@ const freeTierOtelGuide = readFileSync(
   resolve(root, "docs/free-tier-ai-gateway-otel.md"),
   "utf8",
 );
+const otelRunbook = readFileSync(
+  resolve(root, "docs/cloudflare-worker-ai-gateway-otel.md"),
+  "utf8",
+);
 
 test("PR Terraform plan uses read-only Grafana retention credentials", () => {
   assert.match(ci, /CLOUDFLARE_READONLY_API_TOKEN/);
@@ -92,6 +96,37 @@ test("Grafana Cloud deployment uses OTEL datasource variables in required mode",
     deploy,
     /GRAFANA_(PROMETHEUS|LOKI|TEMPO)_DATASOURCE_UID(?!S_REQUIRED)/,
   );
+});
+
+test("OTel Worker deployment renders the Terraform-created KV namespace config", () => {
+  assert.match(
+    deploy,
+    /-target=cloudflare_workers_kv_namespace\.otel_payloads/,
+  );
+  assert.match(deploy, /otel_payload_kv_namespace_id/);
+  assert.match(deploy, /render-otel-worker-config\.mjs/);
+  assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
+  assert.match(
+    deploy,
+    /secret put "\$name" --config \.wrangler\/otel\.generated\.jsonc/,
+  );
+  assert.match(
+    deploy,
+    /command: deploy --config \.wrangler\/otel\.generated\.jsonc/,
+  );
+
+  assert.match(makefile, /render-otel-worker-config:/);
+  assert.match(makefile, /OTEL_PAYLOAD_KV_NAMESPACE_ID/);
+  assert.match(makefile, /render-otel-worker-config\.mjs/);
+  assert.match(makefile, /workers\/\.wrangler\/otel\.generated\.jsonc/);
+
+  assert.match(
+    otelRunbook,
+    /-target=cloudflare_workers_kv_namespace\.otel_payloads/,
+  );
+  assert.match(otelRunbook, /otel_payload_kv_namespace_id/);
+  assert.match(otelRunbook, /make render-otel-worker-config/);
+  assert.match(otelRunbook, /\.wrangler\/otel\.generated\.jsonc/);
 });
 
 test("Terraform separates the Loki-only token from the telemetry token", () => {

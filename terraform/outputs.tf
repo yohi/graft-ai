@@ -8,6 +8,11 @@ output "otel_worker_url" {
   value       = "https://${local.otel_worker_name}.${var.workers_subdomain}.workers.dev"
 }
 
+output "otel_payload_kv_namespace_id" {
+  description = "Workers KV namespace ID used by the dedicated OTel Worker payload store"
+  value       = cloudflare_workers_kv_namespace.otel_payloads.id
+}
+
 output "logpush_job_name" {
   description = "Name of the created Logpush job"
   value       = var.logpush_job_name

@@ -9,6 +9,13 @@ const expectedQueues = {
   OTEL_PROMETHEUS_QUEUE: "graft-ai-aig-otel-prometheus-v1",
 };
 
+const expectedDlqQueues = {
+  OTEL_INGRESS_DLQ: "graft-ai-aig-otel-ingress-dlq-v1",
+  OTEL_TEMPO_DLQ: "graft-ai-aig-otel-tempo-dlq-v1",
+  OTEL_LOKI_DLQ: "graft-ai-aig-otel-loki-dlq-v1",
+  OTEL_PROMETHEUS_DLQ: "graft-ai-aig-otel-prometheus-dlq-v1",
+};
+
 const expectedConsumers = [
   "graft-ai-aig-otel-ingress-v1",
   "graft-ai-aig-otel-tempo-v1",
@@ -16,17 +23,21 @@ const expectedConsumers = [
   "graft-ai-aig-otel-prometheus-v1",
 ];
 
-export function validateOtelWorkerConfig(config, rawConfig) {
+export function validateOtelWorkerConfig(
+  config,
+  rawConfig,
+  { payloadStore = config.vars?.OTEL_PAYLOAD_STORE ?? "kv", includeR2Binding } = {},
+) {
   validateBasicConfig(config, rawConfig);
   validateQueues(config);
-  validateStorage(config);
+  validateStorage(config, { payloadStore, includeR2Binding });
   validateDurableObjects(config);
 }
 
 function validateBasicConfig(config, rawConfig) {
   if (config.name !== "graft-ai-aig-otel")
     throw new Error("unexpected OTel Worker name");
-  if (config.main !== "src/otel.ts")
+  if (config.main !== "src/otel.ts" && config.main !== "../src/otel.ts")
     throw new Error("OTel Worker must use src/otel.ts");
   if (config.workers_dev !== true)
     throw new Error("OTel Worker must keep workers_dev enabled");
@@ -59,6 +70,12 @@ function validateQueues(config) {
     if (producers.get(binding) !== queue)
       throw new Error(`missing producer ${binding}`);
   }
+  for (const [binding, queue] of Object.entries(expectedDlqQueues)) {
+    if (producers.get(binding) !== queue)
+      throw new Error(`missing DLQ producer ${binding}`);
+  }
+  if (producers.size !== 8)
+    throw new Error("OTel Worker must have four source and four DLQ producers");
   const consumers = config.queues?.consumers ?? [];
   if (consumers.length !== expectedConsumers.length)
     throw new Error("OTel Worker must have four Queue consumers");
@@ -68,16 +85,45 @@ function validateQueues(config) {
     if (
       !consumer ||
       consumer.dead_letter_queue !== expectedDeadLetterQueue ||
-      consumer.max_retries !== 2
+      consumer.max_retries !== 7
     ) {
       throw new Error(`consumer contract is incomplete for ${queue}`);
     }
   }
 }
 
-function validateStorage(config) {
-  if (!config.r2_buckets?.some((entry) => entry.binding === "OTEL_OBJECTS")) {
-    throw new Error("OTEL_OBJECTS R2 binding is missing");
+function validateStorage(config, { payloadStore, includeR2Binding }) {
+  if (payloadStore !== "kv" && payloadStore !== "r2") {
+    throw new Error("OTEL_PAYLOAD_STORE must be kv or r2");
+  }
+  if (config.vars?.OTEL_PAYLOAD_STORE !== payloadStore) {
+    throw new Error("OTEL_PAYLOAD_STORE selector does not match the selected mode");
+  }
+  const kvBindings = config.kv_namespaces ?? [];
+  const kvBinding = kvBindings.find(
+    (entry) => entry.binding === "OTEL_PAYLOAD_KV",
+  );
+  if (
+    !kvBinding ||
+    !/^(?:__OTEL_PAYLOAD_KV_NAMESPACE_ID__|[0-9a-f]{32})$/i.test(kvBinding.id ?? "")
+  ) {
+    throw new Error("OTEL_PAYLOAD_KV namespace binding is missing or invalid");
+  }
+
+  const hasR2Binding = (config.r2_buckets ?? []).some(
+    (entry) =>
+      entry.binding === "OTEL_OBJECTS" &&
+      entry.bucket_name === "graft-ai-aig-otel-v1",
+  );
+  const r2Requested = includeR2Binding ?? hasR2Binding;
+  if (r2Requested && !hasR2Binding) {
+    throw new Error("OTEL_OBJECTS R2 binding is required for this mode");
+  }
+  if (!r2Requested && (config.r2_buckets?.length ?? 0) > 0) {
+    throw new Error("OTEL_OBJECTS R2 binding is not permitted in KV-only mode");
+  }
+  if (payloadStore === "r2" && !r2Requested) {
+    throw new Error("R2 payloadStore requires the R2 binding");
   }
 }
 

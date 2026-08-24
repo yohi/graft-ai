@@ -7,9 +7,11 @@ worker_script_name      = "graft-ai-aig-logpush"
 logpush_job_name        = "graft-ai-aig-logpush"
 workers_subdomain       = "your-account-subdomain"
 
-# The dedicated OTel Worker and R2 bucket names are fixed to match
-# workers/wrangler.otel.jsonc and must not be changed.
+# The dedicated OTel Worker, KV namespace, and optional R2 bucket names are fixed
+# to match workers/wrangler.otel.jsonc and must not be changed. KV is the default;
+# R2 is required only for an explicit R2 deployment or KV/R2 drain.
 # otel_worker_name       = "graft-ai-aig-otel"
+# otel_payload_kv_namespace_title = "graft-ai-aig-otel-payloads-v1"
 # otel_bucket_name       = "graft-ai-aig-otel-v1"
 
 # max_upload_bytes   = 5000000

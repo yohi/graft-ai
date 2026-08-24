@@ -158,30 +158,6 @@ datasource UIDだけを置換します。`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=
 場合は3つすべてをGrafana API呼び出し前に必須とし、expression datasourceの
 `-100` と無関係な UID は保持します。
 
-#### OTel Worker の payload store
-
-専用Workerでは KV がデフォルトで、`OTEL_PAYLOAD_STORE=kv` としてレダクション済み payload を
-`OTEL_PAYLOAD_KV` binding に保存します。`OTEL_OBJECTS` は任意の R2 binding であり、
-`OTEL_PAYLOAD_STORE=r2` または明示的な `OTEL_PAYLOAD_R2_DRAIN=true` の場合だけ
-必要です。Workers Free の KV には 1 GB 保存容量、1,000 writes/day
-（1,000書き込み/日）、100,000 reads/day（100,000読み取り/日）、1,000 deletes/day
-（1,000削除/日）、25 MiB value limit があります。4 MB export payload
-cap はこの value limit 未満で、Free limit 到達時は操作が失敗し paid overage へ
-自動移行しません。
-
-KV の eventual consistency のため最初の Queue delivery は 60秒遅延します。新規
-Queue pointer は schema version 2 と `storageBackend` を永続化します。
-schema-version-1 pointer は常に R2 から読み取り・削除し、schema-version-2 の
-R2 pointer も KV/R2 drain 中は現在の write selector に関係なく R2 を使います。
-
-Cloudflare KV Analytics または GraphQL API を、読み取り、書き込み、削除、保存データ
-という4つの独立した監視軸のsource of truthとします。80,000 reads/day、800
-writes/day、800 deletes/day、0.8 GiB保存データで alert し、quota-related Worker
-failure が確認できた場合だけ page します。削除 quota failure は読み取り・書き込み
-停止を意味しません。R2 選択は quota exhaustion の確認、または次の 00:00 UTC reset
-前の枯渇予測に対する手動対応であり、一時的な削除エラーへの自動反応ではありません。
-R2 lifecycle rule は R2 payload だけに適用し、KV payload は削除しません。
-
 **アラート:** Grafana アラートルール
 （`grafana/alerts/graft-ai-ollama-cloud-rules.json`）は、
 `ollama_cloud_reset_seconds_remaining{period="session"} < 3600`（session リセット1時間前）

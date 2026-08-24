@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validOtlpJson } from "./fixtures";
 import { TRACE_IDLE_ALARM_MS } from "../../src/otel/contracts";
 import { parseOtlpJson } from "../../src/otel/otlp";
@@ -11,10 +11,6 @@ import type { OtelEnv } from "../../src/otel/types";
 
 const otelEnv = env as unknown as OtelEnv;
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe("TraceAggregate", () => {
   it("deduplicates an ingress ID across Durable Object eviction", async () => {
     const trace = parseOtlpJson(validOtlpJson)[0];
@@ -22,10 +18,9 @@ describe("TraceAggregate", () => {
     const traceId = crypto.randomUUID().replaceAll("-", "");
     const testSpan = { ...redactSpan(trace), traceId };
     const stub = otelEnv.OTEL_TRACE_AGGREGATE.getByName(traceId);
-    const receivedAtMs = Date.now();
     const body = {
       ingressId: "ingress-1",
-      receivedAtMs,
+      receivedAtMs: 1_000,
       spans: [testSpan],
     };
 

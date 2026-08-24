@@ -622,15 +622,25 @@ function earliestAlarm(current: number | null, candidate: number): number {
 }
 
 async function sendPointer(env: OtelEnv, pointer: IngressPointer | ExportPointer): Promise<void> {
-  const queue: Queue<IngressPointer | ExportPointer> =
-    pointer.kind === "ingress"
-      ? env.OTEL_INGRESS_QUEUE
-      : pointer.backend === "tempo"
-        ? env.OTEL_TEMPO_QUEUE
-        : pointer.backend === "loki"
-          ? env.OTEL_LOKI_QUEUE
-          : env.OTEL_PROMETHEUS_QUEUE;
-  await queue.send(pointer, {
+  if (pointer.kind === "ingress") {
+    await env.OTEL_INGRESS_QUEUE.send(pointer, {
+      delaySeconds: queueDeliveryDelaySeconds(pointer),
+    });
+    return;
+  }
+  if (pointer.backend === "tempo") {
+    await env.OTEL_TEMPO_QUEUE.send(pointer, {
+      delaySeconds: queueDeliveryDelaySeconds(pointer),
+    });
+    return;
+  }
+  if (pointer.backend === "loki") {
+    await env.OTEL_LOKI_QUEUE.send(pointer, {
+      delaySeconds: queueDeliveryDelaySeconds(pointer),
+    });
+    return;
+  }
+  await env.OTEL_PROMETHEUS_QUEUE.send(pointer, {
     delaySeconds: queueDeliveryDelaySeconds(pointer),
   });
 }

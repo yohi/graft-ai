@@ -10,6 +10,14 @@ const deploy = readFileSync(
   "utf8",
 );
 const otelTerraform = readFileSync(resolve(root, "terraform/otel.tf"), "utf8");
+const terraformVariables = readFileSync(
+  resolve(root, "terraform/variables.tf"),
+  "utf8",
+);
+const terraformOutputs = readFileSync(
+  resolve(root, "terraform/outputs.tf"),
+  "utf8",
+);
 const makefile = readFileSync(resolve(root, "Makefile"), "utf8");
 const setup = readFileSync(resolve(root, "scripts/setup.sh"), "utf8");
 const grafanaMain = readFileSync(
@@ -32,6 +40,14 @@ const alerts = JSON.parse(
 );
 const freeTierOtelGuide = readFileSync(
   resolve(root, "docs/free-tier-ai-gateway-otel.md"),
+  "utf8",
+);
+const readme = readFileSync(resolve(root, "README.md"), "utf8");
+const readmeJa = readFileSync(resolve(root, "README.ja.md"), "utf8");
+const spec = readFileSync(resolve(root, "SPEC.md"), "utf8");
+const specJa = readFileSync(resolve(root, "SPEC.ja.md"), "utf8");
+const otelRunbook = readFileSync(
+  resolve(root, "docs/cloudflare-worker-ai-gateway-otel.md"),
   "utf8",
 );
 
@@ -166,4 +182,88 @@ test("Free Tier OTel guide uses the Tunnel and does not require Logpush", () => 
     );
   }
   assert.match(freeTierOtelGuide, /does not use Workers Logpush/);
+});
+
+test("OTel infrastructure provisions a fixed KV namespace and exposes its ID", () => {
+  assert.match(
+    otelTerraform,
+    /resource\s+"cloudflare_workers_kv_namespace"\s+"otel_payloads"/,
+  );
+  assert.match(
+    otelTerraform,
+    /title\s*=\s*var\.otel_payload_kv_namespace_title/,
+  );
+  assert.match(
+    terraformVariables,
+    /variable\s+"otel_payload_kv_namespace_title"[\s\S]*default\s*=\s*"graft-ai-aig-otel-payloads-v1"/,
+  );
+  assert.match(terraformVariables, /otel_payload_kv_namespace_title is fixed/);
+  assert.match(
+    terraformOutputs,
+    /output\s+"otel_payload_kv_namespace_id"[\s\S]*cloudflare_workers_kv_namespace\.otel_payloads\.id/,
+  );
+});
+
+test("CI and deployment select KV by default and render explicit R2 modes", () => {
+  assert.match(ci, /npm run test:otel:r2/);
+  assert.match(ci, /npm run test:otel:kv-r2-drain/);
+  assert.match(
+    deploy,
+    /OTEL_PAYLOAD_STORE: \$\{\{ vars\.OTEL_PAYLOAD_STORE \|\| 'kv' \}\}/,
+  );
+  assert.match(
+    deploy,
+    /OTEL_PAYLOAD_R2_DRAIN: \$\{\{ vars\.OTEL_PAYLOAD_R2_DRAIN \|\| 'false' \}\}/,
+  );
+  assert.match(deploy, /render-otel-worker-config\.mjs/);
+  assert.match(deploy, /otel_payload_kv_namespace_id/);
+  assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
+  assert.match(makefile, /OTEL_PAYLOAD_STORE \?= kv/);
+  assert.match(makefile, /OTEL_PAYLOAD_R2_DRAIN \?= false/);
+  assert.match(makefile, /OTEL_PAYLOAD_KV_NAMESPACE_ID/);
+  assert.match(makefile, /--include-r2-binding/);
+});
+
+test("OTel documentation defines KV as the default and documents quota-safe migration", () => {
+  for (const text of [readme, spec]) {
+    assert.match(text, /OTEL_PAYLOAD_STORE/);
+    assert.match(text, /default.*KV|KV.*default/i);
+    assert.match(text, /1 GB|1 GiB/);
+    assert.match(text, /1,000.*writes.*day/i);
+    assert.match(text, /100,000.*reads.*day/i);
+    assert.match(text, /1,000.*deletes.*day/i);
+    assert.match(text, /25 MiB/);
+    assert.match(text, /60[- ]second/i);
+    assert.match(text, /OTEL_OBJECTS/);
+  }
+  for (const text of [readmeJa, specJa]) {
+    assert.match(text, /OTEL_PAYLOAD_STORE/);
+    assert.match(text, /KV.*デフォルト|デフォルト.*KV/);
+    assert.match(text, /1 GB|1 GiB/);
+    assert.match(text, /1,000.*書き込み.*日/);
+    assert.match(text, /100,000.*読み取り.*日/);
+    assert.match(text, /1,000.*削除.*日/);
+    assert.match(text, /25 MiB/);
+    assert.match(text, /60秒|60 秒/);
+    assert.match(text, /OTEL_OBJECTS/);
+  }
+  for (const [text, patterns] of [
+    [readme, [/read/i, /write/i, /delete/i, /stored data/i]],
+    [readmeJa, [/読み取り/, /書き込み/, /削除/, /保存データ/]],
+  ]) {
+    for (const pattern of patterns) assert.match(text, pattern);
+  }
+  assert.match(otelRunbook, /schema.?version.?1.*R2/i);
+  assert.match(otelRunbook, /OTEL_PAYLOAD_R2_DRAIN/);
+  assert.match(otelRunbook, /1,000.*writes.*day/i);
+  assert.match(otelRunbook, /1,000.*delet.*day/i);
+  assert.match(
+    otelRunbook,
+    /DEDUPLICATION_TOMBSTONE_MS.*PAYLOAD_RETENTION_FAILSAFE_MS/,
+  );
+  assert.doesNotMatch(
+    readme,
+    /R2 is required for the default OTel deployment/i,
+  );
+  assert.doesNotMatch(otelRunbook, /R2 lifecycle rule cleans up KV/i);
 });

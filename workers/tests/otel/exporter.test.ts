@@ -14,6 +14,7 @@ const otelEnv = {
 } as OtelEnv;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -44,6 +45,40 @@ describe("OTel backend exporter", () => {
       "content-type": "application/json",
       authorization: "Basic tempo-token",
     });
+  });
+
+  it("deletes an export payload once when the ready transition is rejected", async () => {
+    const bytes = new TextEncoder().encode('{"resourceSpans":[]}');
+    const descriptor: JobDescriptor = {
+      jobId: `rejected-ready-${crypto.randomUUID()}`,
+      backend: "tempo",
+      contentType: "application/json",
+      identity: { kind: "trace", traceId: "00112233445566778899aabbccddeeff" },
+      payloadSha256: await sha256Hex(bytes),
+    };
+    const testEnv = { ...otelEnv, OTEL_PAYLOAD_STORE: "kv" } as OtelEnv;
+    const payloadKv = testEnv.OTEL_PAYLOAD_KV;
+    if (!payloadKv) throw new Error("KV payload binding is unavailable");
+
+    const ledger = testEnv.OTEL_LEDGER.getByName(`rejected-ready-${crypto.randomUUID()}`);
+    vi.spyOn(testEnv.OTEL_LEDGER, "getByName").mockReturnValue(ledger);
+    const operations: string[] = [];
+    vi.spyOn(ledger, "fetch").mockImplementation(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { operation: string };
+      operations.push(request.operation);
+      if (request.operation === "export.register") return Response.json({ kind: "reserved" });
+      if (request.operation === "export.ready") return Response.json(false);
+      if (request.operation === "export.release-reservation") return Response.json(true);
+      throw new Error(`unexpected ledger operation: ${request.operation}`);
+    });
+    const deleteSpy = vi.spyOn(payloadKv, "delete");
+
+    await expect(enqueueBackendJob(testEnv, descriptor, bytes)).rejects.toThrow(
+      "export ready transition rejected",
+    );
+
+    expect(operations).toEqual(["export.register", "export.ready", "export.release-reservation"]);
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
   });
 
   it("classifies retryable and terminal backend responses", async () => {

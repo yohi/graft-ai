@@ -46,7 +46,7 @@ series、50GB logs）の制約内で動作するように最適化されてい�
   OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
 
 AI Gateway OTel は専用の `workers.dev` Worker で OTLP/JSON を受信します。
-Worker は R2/Queue に渡す前に資格情報と payload をレダクションし、Tempo、Loki、
+Worker は payload store/Queue に渡す前に資格情報と payload をレダクションし、Tempo、Loki、
 Prometheus を backend ごとの Queue/DLQ から独立して送信します。デプロイ、Secret、
 Queue/DLQ、Grafana 検証、rollback 手順は
 [`docs/cloudflare-worker-ai-gateway-otel.md`](./docs/cloudflare-worker-ai-gateway-otel.md)
@@ -66,6 +66,31 @@ environment variables に設定してください。
 
 旧Tunnel/Alloy経路の手順は[legacy Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md)
 にあります。専用Workerの24時間観測期間が完了するまで、rollback経路として保持します。
+
+### AI Gateway OTel の payload storage と移行
+
+KV がデフォルトで、`OTEL_PAYLOAD_STORE=kv` を使います。Worker は `OTEL_PAYLOAD_KV` に
+payload を保存し、`OTEL_OBJECTS` R2 binding は
+`OTEL_PAYLOAD_STORE=r2` または明示的な `OTEL_PAYLOAD_R2_DRAIN=true` の場合だけ
+有効にします。Workers Free の KV には 1 GB の保存容量、1,000 writes/day
+（1,000書き込み/日）、100,000 reads/day（100,000読み取り/日）、1,000 deletes/day
+（1,000削除/日）、25 MiB の value limit があります。現在の
+4 MB export payload cap はこの value limit 未満です。Free limit に達した場合は
+その操作が失敗し、paid overage へ自動移行しません。
+
+KV の eventual consistency のため、KV pointer の最初の Queue delivery は
+60秒遅延します。新しい pointer は schema version 2 と `storageBackend` を持ち、
+schema-version-1 pointer は常に R2 を選択します。schema-version-2 の R2 pointer
+も drain 中は R2 から読み取り・削除でき、現在の selector で解釈し直しません。
+
+KV Analytics または Cloudflare GraphQL API では、読み取り、書き込み、削除、
+保存データを別々に監視します。80,000 reads/day、800 writes/day、800 deletes/day、
+0.8 GiB 保存データで alert し、quota-related Worker failure が確認された場合に
+page します。削除 quota の失敗だけで読み取り・書き込み停止とは判断しません。
+R2 への切替は Cloudflare が quota exhaustion を確認した場合、または次の UTC
+reset 前に閾値到達が予測される場合の手動判断です。一時的な削除エラーだけで
+自動切替しません。R2 lifecycle rule は R2 payload だけを削除し、KV payload は
+削除しません。drain 完了後に dual binding を外して KV-only に戻します。
 
 ### スケジュール実行 Worker
 

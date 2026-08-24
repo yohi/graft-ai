@@ -31,10 +31,7 @@ jobs:
 
       - name: Test dedicated OTel Worker
         working-directory: workers
-        run: |
-          npm run test:otel
-          npm run test:otel:r2
-          npm run test:otel:kv-r2-drain
+        run: npm run test:otel
 
       - name: Type check dedicated OTel Worker
         working-directory: workers

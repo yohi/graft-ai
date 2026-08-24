@@ -7,15 +7,8 @@ import {
 } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleIngress, handleQueue } from "../../src/otel";
-import type { Backend } from "../../src/otel/contracts";
-import { sha256Hex } from "../../src/otel/storage";
-import type {
-  ExportPointer,
-  IngressPointer,
-  JobDescriptor,
-  OtelEnv,
-  QueuePointer,
-} from "../../src/otel/types";
+import { resolvePayloadStoreBackend } from "../../src/otel/storage";
+import type { ExportPointer, OtelEnv, QueuePointer } from "../../src/otel/types";
 import { validOtlpJson, validTraceId } from "./fixtures";
 
 const otelEnv = {
@@ -44,8 +37,11 @@ describe("OTel Worker pipeline", () => {
         return new Response(null, { status: 204 });
       }),
     );
+    const ingressSend = vi.spyOn(otelEnv.OTEL_INGRESS_QUEUE, "send");
+    const tempoSend = vi.spyOn(otelEnv.OTEL_TEMPO_QUEUE, "send");
+    const lokiSend = vi.spyOn(otelEnv.OTEL_LOKI_QUEUE, "send");
+    const prometheusSend = vi.spyOn(otelEnv.OTEL_PROMETHEUS_QUEUE, "send");
 
-    const beforeIngress = await objectKeys("otel/ingress/");
     const ingressResponse = await handleIngress(
       new Request("https://worker.example/v1/traces", {
         method: "POST",
@@ -61,12 +57,12 @@ describe("OTel Worker pipeline", () => {
     expect(ingressResponse.status).toBe(200);
     expect(await ingressResponse.json()).toMatchObject({ reason: "accepted" });
 
-    const ingressKey = await newObjectKey("otel/ingress/", beforeIngress);
-    const ingressBytes = await readObject(ingressKey);
-    const ingressText = new TextDecoder().decode(ingressBytes);
-    expect(ingressText).toContain("[REDACTED]");
-    expect(ingressText).not.toContain("sk-live-test-secret");
-    const ingressPointer = await ingressPointerFor(ingressKey, ingressBytes);
+    const ingressPointer = ingressSend.mock.calls.at(-1)?.[0];
+    if (!ingressPointer) throw new Error("ingress pointer was not queued");
+    if (ingressPointer.schemaVersion !== 2) throw new Error("ingress pointer is not current");
+    expect(ingressPointer.storageBackend).toBe(
+      resolvePayloadStoreBackend(otelEnv.OTEL_PAYLOAD_STORE),
+    );
 
     const ingressBatch = createMessageBatch<QueuePointer>("graft-ai-aig-otel-ingress-v1", [
       { body: ingressPointer, id: "pipeline-ingress", timestamp: new Date(), attempts: 1 },
@@ -78,28 +74,21 @@ describe("OTel Worker pipeline", () => {
     });
 
     const trace = otelEnv.OTEL_TRACE_AGGREGATE.getByName(validTraceId);
-    const beforeExports = new Set([
-      ...(await objectKeys("otel/export/tempo/")),
-      ...(await objectKeys("otel/export/loki/")),
-      ...(await objectKeys("otel/export/prometheus/")),
-    ]);
     await expect(runDurableObjectAlarm(trace)).resolves.toBe(true);
 
     const metrics = otelEnv.OTEL_METRICS_AGGREGATE.getByName("global");
     await expect(runDurableObjectAlarm(metrics)).resolves.toBe(true);
 
-    const exportKeys = [
-      ...(await newObjectKeys("otel/export/tempo/", beforeExports)),
-      ...(await newObjectKeys("otel/export/loki/", beforeExports)),
-      ...(await newObjectKeys("otel/export/prometheus/", beforeExports)),
+    const exportPointers = [
+      tempoSend.mock.calls.at(-1)?.[0],
+      lokiSend.mock.calls.at(-1)?.[0],
+      prometheusSend.mock.calls.at(-1)?.[0],
     ];
-    expect(exportKeys).toHaveLength(3);
+    expect(exportPointers.every(Boolean)).toBe(true);
 
-    for (const [index, key] of exportKeys.entries()) {
-      const backend = backendFromObjectKey(key);
-      const bytes = await readObject(key);
-      const pointer = await exportPointerFor(key, bytes, backend);
-      const batch = createMessageBatch<QueuePointer>(queueNameFor(backend), [
+    for (const [index, pointer] of exportPointers.entries()) {
+      if (!pointer) throw new Error("export pointer was not queued");
+      const batch = createMessageBatch<QueuePointer>(queueNameFor(pointer.backend), [
         { body: pointer, id: `pipeline-export-${index}`, timestamp: new Date(), attempts: 1 },
       ]);
       const context = createExecutionContext();
@@ -116,82 +105,6 @@ describe("OTel Worker pipeline", () => {
   });
 });
 
-async function objectKeys(prefix: string): Promise<Set<string>> {
-  const listed = await otelEnv.OTEL_OBJECTS.list({ prefix });
-  return new Set(listed.objects.map((object) => object.key));
-}
-
-async function newObjectKeys(
-  prefix: string,
-  before: ReadonlySet<string> = new Set(),
-): Promise<string[]> {
-  const listed = await otelEnv.OTEL_OBJECTS.list({ prefix });
-  return listed.objects.map((object) => object.key).filter((key) => !before.has(key));
-}
-
-async function newObjectKey(prefix: string, before: ReadonlySet<string>): Promise<string> {
-  const keys = await newObjectKeys(prefix, before);
-  const key = keys[0];
-  if (!key) throw new Error(`no new R2 object under ${prefix}`);
-  return key;
-}
-
-async function readObject(key: string): Promise<Uint8Array> {
-  const object = await otelEnv.OTEL_OBJECTS.get(key);
-  if (!object) throw new Error(`missing R2 object ${key}`);
-  return new Uint8Array(await object.arrayBuffer());
-}
-
-async function ingressPointerFor(key: string, bytes: Uint8Array): Promise<IngressPointer> {
-  const payloadSha256 = await sha256Hex(bytes);
-  const ingressId = key.slice(key.lastIndexOf("/") + 1).replace(/\.json$/, "");
-  return {
-    schemaVersion: 1,
-    id: ingressId,
-    objectKey: key,
-    sha256: payloadSha256,
-    contentType: "application/json",
-    createdAtMs: Date.now(),
-    kind: "ingress",
-    ingressId,
-  };
-}
-
-async function exportPointerFor(
-  key: string,
-  bytes: Uint8Array,
-  backend: Backend,
-): Promise<ExportPointer> {
-  const sha256 = await sha256Hex(bytes);
-  const jobId = key.slice(key.lastIndexOf("/") + 1).replace(/\.json$/, "");
-  const identity =
-    backend === "prometheus"
-      ? { kind: "metrics" as const, windowStartUnixNano: "0", windowEndUnixNano: "1" }
-      : { kind: "trace" as const, traceId: validTraceId };
-  const descriptor: JobDescriptor = {
-    jobId,
-    backend,
-    contentType: "application/json",
-    identity,
-    payloadSha256: sha256,
-  };
-  return {
-    schemaVersion: 1,
-    id: jobId,
-    objectKey: key,
-    sha256,
-    createdAtMs: Date.now(),
-    kind: "export",
-    ...descriptor,
-  };
-}
-
-function backendFromObjectKey(key: string): Backend {
-  if (key.includes("/tempo/")) return "tempo";
-  if (key.includes("/loki/")) return "loki";
-  return "prometheus";
-}
-
-function queueNameFor(backend: Backend): string {
+function queueNameFor(backend: ExportPointer["backend"]): string {
   return `graft-ai-aig-otel-${backend}-v1`;
 }

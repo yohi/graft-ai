@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueBackendJob, exportPointer } from "../../src/otel/exporter";
-import { sha256Hex } from "../../src/otel/storage";
+import { payloadStoreForPointer, sha256Hex } from "../../src/otel/storage";
 import type { JobDescriptor, OtelEnv } from "../../src/otel/types";
 
 const otelEnv = {
@@ -121,8 +121,8 @@ describe("OTel backend exporter", () => {
       ),
     ).rejects.toThrow("export job collision");
 
-    const stored = await otelEnv.OTEL_OBJECTS.get(original.objectKey);
-    expect(stored).not.toBeNull();
-    expect(await stored?.text()).toBe(new TextDecoder().decode(originalBytes));
+    await expect(
+      payloadStoreForPointer(otelEnv, original).readBytesObject(original),
+    ).resolves.toEqual(originalBytes);
   });
 });

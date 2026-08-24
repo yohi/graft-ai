@@ -1,7 +1,19 @@
 import { BACKEND_EXPORT_TIMEOUT_MS, MAX_GRAFANA_OTLP_BYTES, type Backend } from "./contracts";
 import { ledgerCall, type ExportRegistrationResult } from "./ledger";
-import { exportObjectKey, putBytesObject, readBytesObject, sha256Hex } from "./storage";
-import type { ExportPointer, ExportResult, JobDescriptor, OtelEnv } from "./types";
+import {
+  exportObjectKey,
+  payloadStoreForPointer,
+  payloadStoreForWrite,
+  queueDeliveryDelaySeconds,
+  sha256Hex,
+} from "./storage";
+import type {
+  CurrentObjectPointer,
+  ExportPointer,
+  ExportResult,
+  JobDescriptor,
+  OtelEnv,
+} from "./types";
 
 export async function enqueueBackendJob(
   env: OtelEnv,
@@ -13,20 +25,12 @@ export async function enqueueBackendJob(
   if (descriptor.payloadSha256 !== payloadSha256)
     throw new Error("export payload checksum mismatch");
   const nowMs = Date.now();
-  const pointer: ExportPointer = {
-    ...descriptor,
-    schemaVersion: 1,
-    id: descriptor.jobId,
-    objectKey: exportObjectKey(
-      descriptor.backend,
-      descriptor.jobId,
-      new Date(nowMs).toISOString().slice(0, 10),
-    ),
-    sha256: payloadSha256,
-    createdAtMs: nowMs,
-    kind: "export",
-    payloadSha256,
-  };
+  const store = payloadStoreForWrite(env);
+  const objectKey = exportObjectKey(
+    descriptor.backend,
+    descriptor.jobId,
+    new Date(nowMs).toISOString().slice(0, 10),
+  );
   const ledger = env.OTEL_LEDGER.getByName("global");
   const registered = await ledgerCall<ExportRegistrationResult>(ledger, "export.register", {
     descriptor,
@@ -37,7 +41,9 @@ export async function enqueueBackendJob(
     if (!registered.pointer) {
       if (registered.status !== "reserved") throw new Error("export pointer missing");
     } else if (registered.status === "ready") {
-      await backendQueue(env, registered.pointer.backend).send(registered.pointer);
+      await backendQueue(env, registered.pointer.backend).send(registered.pointer, {
+        delaySeconds: queueDeliveryDelaySeconds(registered.pointer),
+      });
       const enqueued = await ledgerCall<boolean>(ledger, "export.enqueued", {
         jobId: registered.pointer.jobId,
       });
@@ -50,26 +56,42 @@ export async function enqueueBackendJob(
     }
   }
 
+  let object: CurrentObjectPointer;
   try {
-    await putBytesObject(env.OTEL_OBJECTS, pointer.objectKey, bytes, "export");
+    object = await store.putBytesObject(objectKey, bytes, "export");
   } catch (error) {
     await ledgerCall(ledger, "export.release-reservation", { jobId: descriptor.jobId });
     throw error;
   }
-  const ready = await ledgerCall<boolean>(ledger, "export.ready", {
-    jobId: descriptor.jobId,
-    pointer,
-    nowMs,
-  });
-  if (!ready) {
-    const released = await ledgerCall<boolean>(ledger, "export.release-reservation", {
+  const pointer: ExportPointer = {
+    ...object,
+    ...descriptor,
+    id: descriptor.jobId,
+    kind: "export",
+    payloadSha256,
+  };
+  try {
+    const ready = await ledgerCall<boolean>(ledger, "export.ready", {
       jobId: descriptor.jobId,
+      pointer,
+      nowMs,
     });
-    if (released) await env.OTEL_OBJECTS.delete(pointer.objectKey);
-    throw new Error("export ready transition rejected");
+    if (!ready) {
+      const released = await ledgerCall<boolean>(ledger, "export.release-reservation", {
+        jobId: descriptor.jobId,
+      });
+      if (released) await store.deleteObject(pointer);
+      throw new Error("export ready transition rejected");
+    }
+  } catch (error) {
+    await ledgerCall(ledger, "export.release-reservation", { jobId: descriptor.jobId });
+    await store.deleteObject(pointer);
+    throw error;
   }
 
-  await backendQueue(env, descriptor.backend).send(pointer);
+  await backendQueue(env, descriptor.backend).send(pointer, {
+    delaySeconds: queueDeliveryDelaySeconds(pointer),
+  });
   const enqueued = await ledgerCall<boolean>(ledger, "export.enqueued", {
     jobId: descriptor.jobId,
   });
@@ -78,7 +100,7 @@ export async function enqueueBackendJob(
 }
 
 export async function exportPointer(pointer: ExportPointer, env: OtelEnv): Promise<ExportResult> {
-  const bytes = await readBytesObject(env.OTEL_OBJECTS, pointer);
+  const bytes = await payloadStoreForPointer(env, pointer).readBytesObject(pointer);
   const config = backendConfig(pointer.backend, env);
   if (!config.url || !config.authorization) return { kind: "terminal", status: 503 };
 

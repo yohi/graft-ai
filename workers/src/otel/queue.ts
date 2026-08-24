@@ -1,9 +1,23 @@
+import {
+  DOWNSTREAM_EXPORT_ATTEMPT_LIMIT,
+  KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS,
+  type Backend,
+  type PayloadStoreBackend,
+} from "./contracts";
 import { exportPointer } from "./exporter";
-import type { Backend } from "./contracts";
 import { ledgerCall, type ExportClaimResult, type IngressRecord } from "./ledger";
-import { readJsonObject } from "./storage";
-import type { ExportPointer, IngressPointer, MetricSample, OtelEnv, QueuePointer } from "./types";
 import type { OtelIngressEnvelope } from "./ingress";
+import { payloadStoreForPointer } from "./storage";
+import { PayloadStoreError, PayloadStoreNotFoundError, PayloadStoreTemporaryError } from "./types";
+import type {
+  ExportClaim,
+  ExportPointer,
+  ExportResult,
+  IngressPointer,
+  MetricSample,
+  OtelEnv,
+  QueuePointer,
+} from "./types";
 
 const INGRESS_QUEUE_NAME = "graft-ai-aig-otel-ingress-v1";
 const BACKEND_QUEUE_NAMES: Readonly<Record<string, Backend>> = {
@@ -12,6 +26,11 @@ const BACKEND_QUEUE_NAMES: Readonly<Record<string, Backend>> = {
   "graft-ai-aig-otel-prometheus-v1": "prometheus",
 };
 
+export type QueueDisposition =
+  | Readonly<{ kind: "ack" }>
+  | Readonly<{ kind: "retry"; delaySeconds: number }>
+  | Readonly<{ kind: "dead-letter"; pointer: QueuePointer }>;
+
 export async function handleQueue(
   batch: MessageBatch<QueuePointer>,
   env: OtelEnv,
@@ -19,39 +38,61 @@ export async function handleQueue(
 ): Promise<void> {
   const backend = BACKEND_QUEUE_NAMES[batch.queue];
   if (batch.queue !== INGRESS_QUEUE_NAME && !backend) throw new Error("unsupported queue");
-  let deadLettered = false;
   for (const message of batch.messages) {
     try {
+      let disposition: QueueDisposition;
       if (batch.queue === INGRESS_QUEUE_NAME) {
         if (message.body.kind !== "ingress") throw new Error("unsupported pointer");
-        await consumeIngress(message.body, env);
-        message.ack();
-        continue;
+        disposition = await consumeIngress(message.body, env);
+      } else {
+        if (message.body.kind !== "export" || message.body.backend !== backend) {
+          throw new Error("backend pointer mismatch");
+        }
+        disposition = await consumeExport(message.body, env, backend);
       }
-      if (message.body.kind !== "export" || message.body.backend !== backend) {
-        throw new Error("backend pointer mismatch");
-      }
-      await consumeExport(message.body, message, env);
-    } catch (error) {
-      if (error instanceof ExportDeadLetterError) {
-        deadLettered = true;
-        continue;
-      }
+      await applyDisposition(message, disposition, env);
+    } catch {
       message.retry({ delaySeconds: 1 });
     }
   }
-  if (deadLettered) throw new Error("one or more export messages moved to the DLQ");
 }
 
-async function consumeIngress(pointer: IngressPointer, env: OtelEnv): Promise<void> {
+async function consumeIngress(pointer: IngressPointer, env: OtelEnv): Promise<QueueDisposition> {
   if (pointer.kind !== "ingress") throw new Error("unsupported pointer");
   const ledger = env.OTEL_LEDGER.getByName("global");
   const record = await ledgerCall<IngressRecord | null>(ledger, "ingress.record", {
     ingressId: pointer.ingressId,
   });
-  if (!record || record.status === "complete" || record.status === "expired") return;
+  if (!record || record.status === "complete" || record.status === "expired") {
+    return { kind: "ack" };
+  }
   const durablePointer = record.pointer ?? pointer;
-  const envelope = await readJsonObject<OtelIngressEnvelope>(env.OTEL_OBJECTS, durablePointer);
+  const backend = payloadBackend(durablePointer);
+  let envelope: OtelIngressEnvelope;
+  try {
+    envelope = await payloadStoreForPointer(
+      env,
+      durablePointer,
+    ).readJsonObject<OtelIngressEnvelope>(durablePointer);
+  } catch (error) {
+    if (!(error instanceof PayloadStoreError)) throw error;
+    await appendPayloadStoreFailure(env, "read", backend, error);
+    const ordinal = await ledgerCall<number>(ledger, "ingress.payload-read-failure", {
+      ingressId: pointer.ingressId,
+    });
+    if (
+      backend === "kv" &&
+      (error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError) &&
+      ordinal <= KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length
+    ) {
+      return {
+        kind: "retry",
+        delaySeconds: KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120,
+      };
+    }
+    return { kind: "dead-letter", pointer: durablePointer };
+  }
+
   const byTrace = new Map<string, typeof envelope.spans>();
   for (const span of envelope.spans) {
     const spans = byTrace.get(span.traceId) ?? [];
@@ -76,14 +117,24 @@ async function consumeIngress(pointer: IngressPointer, env: OtelEnv): Promise<vo
     ingressId: pointer.ingressId,
   });
   if (!completed) throw new Error("ingress completion rejected");
-  await env.OTEL_OBJECTS.delete(durablePointer.objectKey);
+  try {
+    await payloadStoreForPointer(env, durablePointer).deleteObject(durablePointer);
+  } catch (error) {
+    if (!(error instanceof PayloadStoreError)) throw error;
+    await appendPayloadStoreFailure(env, "delete", backend, error);
+    return { kind: "dead-letter", pointer: durablePointer };
+  }
+  return { kind: "ack" };
 }
 
 async function consumeExport(
   pointer: ExportPointer,
-  message: Message<QueuePointer>,
   env: OtelEnv,
-): Promise<void> {
+  backend: Backend | undefined,
+): Promise<QueueDisposition> {
+  if (pointer.kind !== "export" || pointer.backend !== backend) {
+    throw new Error("backend pointer mismatch");
+  }
   const ledger = env.OTEL_LEDGER.getByName("global");
   const ownerId = crypto.randomUUID();
   const claim = await ledgerCall<ExportClaimResult>(ledger, "export.claim", {
@@ -91,53 +142,118 @@ async function consumeExport(
     ownerId,
     nowMs: Date.now(),
   });
-  if (claim.kind === "complete" || claim.kind === "expired") {
-    message.ack();
-    return;
-  }
-  if (claim.kind !== "claimed") throw new Error(`export claim unavailable: ${claim.kind}`);
+  if (claim.kind === "complete" || claim.kind === "expired") return { kind: "ack" };
+  if (claim.kind !== "claimed") return { kind: "retry", delaySeconds: 1 };
 
-  let result;
+  const durablePointer = claim.pointer;
+  const pointerBackend = payloadBackend(durablePointer);
+  let result: ExportResult;
   try {
-    result = await exportPointer(pointer, env);
+    result = await exportPointer(durablePointer, env);
   } catch (error) {
     await releaseClaim(ledger, claim.claim);
-    throw error;
+    if (!(error instanceof PayloadStoreError)) throw error;
+    await appendPayloadStoreFailure(env, "read", pointerBackend, error);
+    const ordinal = await ledgerCall<number>(ledger, "export.payload-read-failure", {
+      jobId: durablePointer.jobId,
+    });
+    if (
+      pointerBackend === "kv" &&
+      (error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError) &&
+      ordinal <= KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length
+    ) {
+      return {
+        kind: "retry",
+        delaySeconds: KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120,
+      };
+    }
+    return { kind: "dead-letter", pointer: durablePointer };
   }
 
   if (result.kind === "success") {
-    const completed = await ledgerCall<boolean>(ledger, "export.complete", { claim: claim.claim });
+    const completed = await ledgerCall<boolean>(ledger, "export.complete", {
+      claim: claim.claim,
+    });
     if (!completed) throw new Error("export completion rejected");
-    await env.OTEL_OBJECTS.delete(pointer.objectKey);
-    message.ack();
-    return;
+    try {
+      await payloadStoreForPointer(env, durablePointer).deleteObject(durablePointer);
+    } catch (error) {
+      if (!(error instanceof PayloadStoreError)) throw error;
+      await appendPayloadStoreFailure(env, "delete", pointerBackend, error);
+      return { kind: "dead-letter", pointer: durablePointer };
+    }
+    return { kind: "ack" };
   }
 
   await releaseClaim(ledger, claim.claim);
+  const ordinal = await ledgerCall<number>(ledger, "export.downstream-failure", {
+    jobId: durablePointer.jobId,
+  });
   await appendOperationalSamples(env, [
-    failureSample(pointer.backend, pointer.jobId, message.attempts, result),
+    failureSample(durablePointer.backend, durablePointer.jobId, ordinal, result),
   ]);
-  if (result.kind === "terminal" || message.attempts >= 3) {
+  if (result.kind === "terminal" || ordinal >= DOWNSTREAM_EXPORT_ATTEMPT_LIMIT) {
     await appendOperationalSamples(env, [
-      exhaustedSample(pointer.backend, pointer.jobId, message.attempts),
+      exhaustedSample(durablePointer.backend, durablePointer.jobId, ordinal),
     ]);
-    throw new ExportDeadLetterError();
+    return { kind: "dead-letter", pointer: durablePointer };
   }
 
   await appendOperationalSamples(env, [
-    retrySample(pointer.backend, pointer.jobId, message.attempts),
+    retrySample(durablePointer.backend, durablePointer.jobId, ordinal),
   ]);
-  const defaultDelay = message.attempts <= 1 ? 1 : 2;
+  const defaultDelay = ordinal === 1 ? 1 : 2;
   const retryAfterSeconds = result.kind === "retryable" ? result.retryAfterSeconds : undefined;
-  const delaySeconds = Math.max(defaultDelay, retryAfterSeconds ?? 0);
-  message.retry({ delaySeconds });
+  return { kind: "retry", delaySeconds: Math.max(defaultDelay, retryAfterSeconds ?? 0) };
 }
 
-class ExportDeadLetterError extends Error {
-  constructor() {
-    super("export message moved to the DLQ");
-    this.name = "ExportDeadLetterError";
+async function applyDisposition(
+  message: Message<QueuePointer>,
+  disposition: QueueDisposition,
+  env: OtelEnv,
+): Promise<void> {
+  switch (disposition.kind) {
+    case "ack":
+      message.ack();
+      return;
+    case "retry":
+      message.retry({ delaySeconds: disposition.delaySeconds });
+      return;
+    case "dead-letter":
+      await deadLetterPointer(env, disposition.pointer);
+      message.ack();
+      return;
+    default:
+      return assertNever(disposition);
   }
+}
+
+export async function deadLetterPointer(env: OtelEnv, pointer: QueuePointer): Promise<void> {
+  if (pointer.kind === "ingress") {
+    if (!env.OTEL_INGRESS_DLQ) throw new Error("OTEL_INGRESS_DLQ binding is missing");
+    await env.OTEL_INGRESS_DLQ.send(pointer);
+    return;
+  }
+  switch (pointer.backend) {
+    case "tempo":
+      if (!env.OTEL_TEMPO_DLQ) throw new Error("OTEL_TEMPO_DLQ binding is missing");
+      await env.OTEL_TEMPO_DLQ.send(pointer);
+      return;
+    case "loki":
+      if (!env.OTEL_LOKI_DLQ) throw new Error("OTEL_LOKI_DLQ binding is missing");
+      await env.OTEL_LOKI_DLQ.send(pointer);
+      return;
+    case "prometheus":
+      if (!env.OTEL_PROMETHEUS_DLQ) throw new Error("OTEL_PROMETHEUS_DLQ binding is missing");
+      await env.OTEL_PROMETHEUS_DLQ.send(pointer);
+      return;
+    default:
+      return assertNever(pointer.backend);
+  }
+}
+
+function payloadBackend(pointer: QueuePointer): PayloadStoreBackend {
+  return pointer.schemaVersion === 1 ? "r2" : pointer.storageBackend;
 }
 
 function failureSample(
@@ -182,6 +298,27 @@ function statusClass(
   return result.kind === "retryable" ? result.reason : "terminal";
 }
 
+async function appendPayloadStoreFailure(
+  env: OtelEnv,
+  operation: "read" | "write" | "delete",
+  backend: PayloadStoreBackend,
+  error: PayloadStoreError,
+): Promise<void> {
+  await appendOperationalSamples(env, [
+    {
+      sampleId: `otel-payload-store:${operation}:${backend}:${error.errorClass}:${crypto.randomUUID()}`,
+      name: "otel_payload_store_operation_failures_total",
+      kind: "sum",
+      value: 1,
+      labels: {
+        operation,
+        storage_backend: backend,
+        error_class: error.errorClass,
+      },
+    },
+  ]);
+}
+
 async function appendOperationalSamples(
   env: OtelEnv,
   samples: readonly MetricSample[],
@@ -198,10 +335,11 @@ async function appendOperationalSamples(
   } catch {}
 }
 
-async function releaseClaim(
-  ledger: DurableObjectStub,
-  claim: Readonly<Record<string, unknown>>,
-): Promise<void> {
+async function releaseClaim(ledger: DurableObjectStub, claim: ExportClaim): Promise<void> {
   const released = await ledgerCall<boolean>(ledger, "export.release", { claim });
   if (!released) throw new Error("export release rejected");
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unexpected queue disposition: ${String(value)}`);
 }

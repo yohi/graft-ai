@@ -3,7 +3,7 @@ import {
   DEDUPLICATION_TOMBSTONE_MS,
   MAX_CONCURRENT_REQUESTS,
   MAX_INGRESS_RESERVATIONS,
-  R2_RETENTION_FAILSAFE_MS,
+  PAYLOAD_RETENTION_FAILSAFE_MS,
 } from "./contracts";
 import type {
   ActiveRequestLease,
@@ -14,6 +14,7 @@ import type {
   MetricSample,
   OtelEnv,
 } from "./types";
+import { payloadStoreForPointer, queueDeliveryDelaySeconds } from "./storage";
 
 type Lease = ActiveRequestLease & Readonly<{ ownerId: string }>;
 type IngressStatus = "reserved" | "ready" | "enqueued" | "complete" | "expired";
@@ -26,6 +27,7 @@ type IngressEntry = Readonly<{
   ownerId: string;
   fencingToken: string;
   tombstoneUntilMs: number;
+  payloadReadFailures?: number;
 }>;
 
 type ExportEntry = Readonly<{
@@ -34,6 +36,8 @@ type ExportEntry = Readonly<{
   pointer?: ExportPointer;
   claim?: ExportClaim;
   tombstoneUntilMs: number;
+  payloadReadFailures?: number;
+  downstreamFailures?: number;
 }>;
 
 type LedgerState = Readonly<{
@@ -141,6 +145,8 @@ export class OtelLedger {
         return { ok: true };
       case "ingress.complete":
         return this.completeIngress(requiredString(input, "ingressId"));
+      case "ingress.payload-read-failure":
+        return this.recordIngressPayloadReadFailure(requiredString(input, "ingressId"));
       case "ingress.release":
         return this.releaseIngress(
           requiredString(input, "ingressId"),
@@ -172,6 +178,10 @@ export class OtelLedger {
         return this.releaseExportReservation(requiredString(input, "jobId"));
       case "export.complete":
         return this.completeExport(readClaim(input["claim"]));
+      case "export.payload-read-failure":
+        return this.recordExportPayloadReadFailure(requiredString(input, "jobId"));
+      case "export.downstream-failure":
+        return this.recordExportDownstreamFailure(requiredString(input, "jobId"));
       default:
         throw new TypeError("unknown ledger operation");
     }
@@ -240,6 +250,7 @@ export class OtelLedger {
       ownerId: input.ownerId,
       fencingToken: input.fencingToken,
       tombstoneUntilMs: input.nowMs + DEDUPLICATION_TOMBSTONE_MS,
+      payloadReadFailures: 0,
     };
     await this.writeState({ ...state, ingress: { ...state.ingress, [input.ingressId]: entry } });
     await this.scheduleAlarm(input.nowMs + DEDUPLICATION_TOMBSTONE_MS);
@@ -306,6 +317,21 @@ export class OtelLedger {
     return true;
   }
 
+  async recordIngressPayloadReadFailure(ingressId: string): Promise<number> {
+    const state = await this.readState(Date.now());
+    const entry = state.ingress[ingressId];
+    if (!entry) throw new LedgerStaleError("ingress entry missing");
+    const payloadReadFailures = (entry.payloadReadFailures ?? 0) + 1;
+    await this.writeState({
+      ...state,
+      ingress: {
+        ...state.ingress,
+        [ingressId]: { ...entry, payloadReadFailures },
+      },
+    });
+    return payloadReadFailures;
+  }
+
   async getIngress(ingressId: string): Promise<IngressRecord | null> {
     const state = await this.readState(Date.now());
     const entry = state.ingress[ingressId];
@@ -332,6 +358,8 @@ export class OtelLedger {
       payloadSha256: descriptor.payloadSha256,
       status: "reserved",
       tombstoneUntilMs: nowMs + DEDUPLICATION_TOMBSTONE_MS,
+      payloadReadFailures: 0,
+      downstreamFailures: 0,
     };
     await this.writeState({ ...state, exports: { ...state.exports, [descriptor.jobId]: entry } });
     await this.scheduleAlarm(nowMs + DEDUPLICATION_TOMBSTONE_MS);
@@ -429,6 +457,36 @@ export class OtelLedger {
     return true;
   }
 
+  async recordExportPayloadReadFailure(jobId: string): Promise<number> {
+    const state = await this.readState(Date.now());
+    const entry = state.exports[jobId];
+    if (!entry) throw new LedgerStaleError("export entry missing");
+    const payloadReadFailures = (entry.payloadReadFailures ?? 0) + 1;
+    await this.writeState({
+      ...state,
+      exports: {
+        ...state.exports,
+        [jobId]: { ...entry, payloadReadFailures },
+      },
+    });
+    return payloadReadFailures;
+  }
+
+  async recordExportDownstreamFailure(jobId: string): Promise<number> {
+    const state = await this.readState(Date.now());
+    const entry = state.exports[jobId];
+    if (!entry) throw new LedgerStaleError("export entry missing");
+    const downstreamFailures = (entry.downstreamFailures ?? 0) + 1;
+    await this.writeState({
+      ...state,
+      exports: {
+        ...state.exports,
+        [jobId]: { ...entry, downstreamFailures },
+      },
+    });
+    return downstreamFailures;
+  }
+
   async alarm(): Promise<void> {
     await this.state.blockConcurrencyWhile(async () => {
       const nowMs = Date.now();
@@ -508,15 +566,18 @@ export class OtelLedger {
 
   private async expirePointer(pointer: IngressPointer | ExportPointer): Promise<void> {
     try {
-      await this.env.OTEL_OBJECTS.delete(pointer.objectKey);
+      await payloadStoreForPointer(this.env, pointer).deleteObject(pointer);
     } catch {}
     try {
       const sample: MetricSample = {
-        sampleId: `r2-retention:${pointer.kind}:${pointer.id}`,
-        name: "otel_r2_retention_expired_total",
+        sampleId: `payload-retention:${pointer.kind}:${pointer.id}`,
+        name: "otel_payload_retention_expired_total",
         kind: "sum",
         value: 1,
-        labels: { kind: pointer.kind },
+        labels: {
+          kind: pointer.kind,
+          storage_backend: pointer.schemaVersion === 1 ? "r2" : pointer.storageBackend,
+        },
       };
       await this.env.OTEL_METRICS_AGGREGATE.getByName("global").fetch("https://metrics/append", {
         method: "POST",
@@ -540,7 +601,7 @@ export class OtelLedger {
 function isRetentionExpired(entry: IngressEntry | ExportEntry, nowMs: number): boolean {
   return (
     (entry.status === "ready" || entry.status === "enqueued" || entry.status === "claimed") &&
-    entry.tombstoneUntilMs + R2_RETENTION_FAILSAFE_MS <= nowMs
+    entry.tombstoneUntilMs + PAYLOAD_RETENTION_FAILSAFE_MS <= nowMs
   );
 }
 
@@ -552,7 +613,7 @@ function retentionAlarm(
   if (entry.status !== "ready" && entry.status !== "enqueued" && entry.status !== "claimed") {
     return current;
   }
-  const deadline = entry.tombstoneUntilMs + R2_RETENTION_FAILSAFE_MS;
+  const deadline = entry.tombstoneUntilMs + PAYLOAD_RETENTION_FAILSAFE_MS;
   return deadline > nowMs ? earliestAlarm(current, deadline) : current;
 }
 
@@ -562,18 +623,26 @@ function earliestAlarm(current: number | null, candidate: number): number {
 
 async function sendPointer(env: OtelEnv, pointer: IngressPointer | ExportPointer): Promise<void> {
   if (pointer.kind === "ingress") {
-    await env.OTEL_INGRESS_QUEUE.send(pointer);
+    await env.OTEL_INGRESS_QUEUE.send(pointer, {
+      delaySeconds: queueDeliveryDelaySeconds(pointer),
+    });
     return;
   }
   if (pointer.backend === "tempo") {
-    await env.OTEL_TEMPO_QUEUE.send(pointer);
+    await env.OTEL_TEMPO_QUEUE.send(pointer, {
+      delaySeconds: queueDeliveryDelaySeconds(pointer),
+    });
     return;
   }
   if (pointer.backend === "loki") {
-    await env.OTEL_LOKI_QUEUE.send(pointer);
+    await env.OTEL_LOKI_QUEUE.send(pointer, {
+      delaySeconds: queueDeliveryDelaySeconds(pointer),
+    });
     return;
   }
-  await env.OTEL_PROMETHEUS_QUEUE.send(pointer);
+  await env.OTEL_PROMETHEUS_QUEUE.send(pointer, {
+    delaySeconds: queueDeliveryDelaySeconds(pointer),
+  });
 }
 
 export async function ledgerCall<T>(

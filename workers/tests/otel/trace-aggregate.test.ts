@@ -1,27 +1,32 @@
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { validOtlpJson } from "./fixtures";
 import { TRACE_IDLE_ALARM_MS } from "../../src/otel/contracts";
 import { parseOtlpJson } from "../../src/otel/otlp";
 import { redactSpan } from "../../src/otel/redaction";
+import { payloadStoreForPointer, resolvePayloadStoreBackend } from "../../src/otel/storage";
 import { TraceAggregate } from "../../src/otel/trace-aggregate";
 import type { OtelEnv } from "../../src/otel/types";
 
-const otelEnv = env as unknown as {
-  readonly OTEL_TRACE_AGGREGATE: DurableObjectNamespace;
-  readonly OTEL_OBJECTS: R2Bucket;
-};
+const otelEnv = env as unknown as OtelEnv;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("TraceAggregate", () => {
   it("deduplicates an ingress ID across Durable Object eviction", async () => {
     const trace = parseOtlpJson(validOtlpJson)[0];
     if (!trace) throw new Error("fixture did not produce a span");
-    const stub = otelEnv.OTEL_TRACE_AGGREGATE.getByName(trace.traceId);
+    const traceId = crypto.randomUUID().replaceAll("-", "");
+    const testSpan = { ...redactSpan(trace), traceId };
+    const stub = otelEnv.OTEL_TRACE_AGGREGATE.getByName(traceId);
+    const receivedAtMs = Date.now();
     const body = {
       ingressId: "ingress-1",
-      receivedAtMs: 1_000,
-      spans: [redactSpan(trace)],
+      receivedAtMs,
+      spans: [testSpan],
     };
 
     const first = await stub.fetch("https://trace/ingest", {
@@ -103,14 +108,27 @@ describe("TraceAggregate", () => {
       receivedAtMs: Date.now(),
       spans: [redactSpan(trace)],
     };
+    const tempoSend = vi.spyOn(otelEnv.OTEL_TEMPO_QUEUE, "send");
+    const lokiSend = vi.spyOn(otelEnv.OTEL_LOKI_QUEUE, "send");
 
     await stub.fetch("https://trace/ingest", { method: "POST", body: JSON.stringify(body) });
     await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
 
-    const tempoObjects = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/export/tempo/" });
-    const lokiObjects = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/export/loki/" });
-    expect(tempoObjects.objects.length).toBe(1);
-    expect(lokiObjects.objects.length).toBe(1);
+    const tempoPointer = tempoSend.mock.calls.at(-1)?.[0];
+    const lokiPointer = lokiSend.mock.calls.at(-1)?.[0];
+    if (!tempoPointer || !lokiPointer) throw new Error("sampled pointers were not queued");
+    if (tempoPointer.schemaVersion !== 2 || lokiPointer.schemaVersion !== 2) {
+      throw new Error("sampled pointers are not current");
+    }
+    const expectedBackend = resolvePayloadStoreBackend(otelEnv.OTEL_PAYLOAD_STORE);
+    expect(tempoPointer.storageBackend).toBe(expectedBackend);
+    expect(lokiPointer.storageBackend).toBe(expectedBackend);
+    await expect(
+      payloadStoreForPointer(otelEnv, tempoPointer).readBytesObject(tempoPointer),
+    ).resolves.toBeInstanceOf(Uint8Array);
+    await expect(
+      payloadStoreForPointer(otelEnv, lokiPointer).readBytesObject(lokiPointer),
+    ).resolves.toBeInstanceOf(Uint8Array);
   });
 });
 

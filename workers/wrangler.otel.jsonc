@@ -10,7 +10,8 @@
     "GATEWAY_NAME": "main",
     "ENV_LABEL": "prod",
     "OTEL_SAMPLING_RATE": "1",
-    "OTEL_GRAFANA_CLOUD_LOGS_RETENTION": "14d"
+    "OTEL_GRAFANA_CLOUD_LOGS_RETENTION": "14d",
+    "OTEL_PAYLOAD_STORE": "kv"
   },
   "queues": {
     "producers": [
@@ -23,6 +24,22 @@
       {
         "binding": "OTEL_PROMETHEUS_QUEUE",
         "queue": "graft-ai-aig-otel-prometheus-v1"
+      },
+      {
+        "binding": "OTEL_INGRESS_DLQ",
+        "queue": "graft-ai-aig-otel-ingress-dlq-v1"
+      },
+      {
+        "binding": "OTEL_TEMPO_DLQ",
+        "queue": "graft-ai-aig-otel-tempo-dlq-v1"
+      },
+      {
+        "binding": "OTEL_LOKI_DLQ",
+        "queue": "graft-ai-aig-otel-loki-dlq-v1"
+      },
+      {
+        "binding": "OTEL_PROMETHEUS_DLQ",
+        "queue": "graft-ai-aig-otel-prometheus-dlq-v1"
       }
     ],
     "consumers": [
@@ -30,7 +47,7 @@
         "queue": "graft-ai-aig-otel-ingress-v1",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "max_retries": 2,
+        "max_retries": 7,
         "retry_delay": 1,
         "max_concurrency": 10,
         "dead_letter_queue": "graft-ai-aig-otel-ingress-dlq-v1"
@@ -39,7 +56,7 @@
         "queue": "graft-ai-aig-otel-tempo-v1",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "max_retries": 2,
+        "max_retries": 7,
         "retry_delay": 1,
         "max_concurrency": 10,
         "dead_letter_queue": "graft-ai-aig-otel-tempo-dlq-v1"
@@ -48,7 +65,7 @@
         "queue": "graft-ai-aig-otel-loki-v1",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "max_retries": 2,
+        "max_retries": 7,
         "retry_delay": 1,
         "max_concurrency": 10,
         "dead_letter_queue": "graft-ai-aig-otel-loki-dlq-v1"
@@ -57,15 +74,18 @@
         "queue": "graft-ai-aig-otel-prometheus-v1",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "max_retries": 2,
+        "max_retries": 7,
         "retry_delay": 1,
         "max_concurrency": 10,
         "dead_letter_queue": "graft-ai-aig-otel-prometheus-dlq-v1"
       }
     ]
   },
-  "r2_buckets": [
-    { "binding": "OTEL_OBJECTS", "bucket_name": "graft-ai-aig-otel-v1" }
+  "kv_namespaces": [
+    {
+      "binding": "OTEL_PAYLOAD_KV",
+      "id": "__OTEL_PAYLOAD_KV_NAMESPACE_ID__"
+    }
   ],
   "durable_objects": {
     "bindings": [

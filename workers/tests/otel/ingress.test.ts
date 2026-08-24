@@ -1,7 +1,8 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { handleIngress } from "../../src/otel";
-import type { OtelEnv } from "../../src/otel/types";
+import { payloadStoreForPointer } from "../../src/otel/storage";
+import type { IngressPointer, OtelEnv } from "../../src/otel/types";
 import { validOtlpJson } from "./fixtures";
 
 const otelEnv = {
@@ -25,6 +26,37 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
 }
 
 describe("OTel ingress", () => {
+  it("uses KV and delays the first ingress delivery when the selector is unset", async () => {
+    const sent: Array<Readonly<{ pointer: IngressPointer; options?: QueueSendOptions }>> = [];
+    const queue = {
+      send: vi.fn(async (pointer: IngressPointer, options?: QueueSendOptions) => {
+        sent.push({ pointer, ...(options ? { options } : {}) });
+      }),
+    } as unknown as Queue<IngressPointer>;
+    const testEnv = {
+      ...otelEnv,
+      OTEL_PAYLOAD_STORE: undefined,
+      OTEL_INGRESS_QUEUE: queue,
+    } as OtelEnv;
+    const body = structuredClone(validOtlpJson) as typeof validOtlpJson;
+    const firstResource = body.resourceSpans[0]?.resource;
+    if (!firstResource) throw new Error("fixture resource missing");
+    firstResource.attributes = [
+      ...(firstResource.attributes ?? []),
+      { key: "test.kv-default", value: { stringValue: crypto.randomUUID() } },
+    ];
+
+    const response = await handleIngress(request(body), testEnv);
+
+    expect(response.status).toBe(200);
+    const delivery = sent[0];
+    if (!delivery || delivery.pointer.schemaVersion !== 2) {
+      throw new Error("ingress pointer is not current");
+    }
+    expect(delivery?.pointer.storageBackend).toBe("kv");
+    expect(delivery?.options).toEqual({ delaySeconds: 60 });
+  });
+
   it("returns the documented rejection statuses before persistence", async () => {
     await expect(
       handleIngress(new Request("https://worker.example/v1/metrics"), otelEnv),
@@ -38,18 +70,30 @@ describe("OTel ingress", () => {
   });
 
   it("persists only a redacted envelope and returns an accepted response", async () => {
-    const before = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/ingress/" });
-    const beforeKeys = new Set(before.objects.map((entry) => entry.key));
-    const response = await handleIngress(request(validOtlpJson), otelEnv);
+    const sent: IngressPointer[] = [];
+    const queue = {
+      send: vi.fn(async (pointer: IngressPointer) => {
+        sent.push(pointer);
+      }),
+    } as unknown as Queue<IngressPointer>;
+    const testEnv = { ...otelEnv, OTEL_INGRESS_QUEUE: queue } as OtelEnv;
+    const body = structuredClone(validOtlpJson) as typeof validOtlpJson;
+    const firstResource = body.resourceSpans[0]?.resource;
+    if (!firstResource) throw new Error("fixture resource missing");
+    firstResource.attributes = [
+      ...(firstResource.attributes ?? []),
+      { key: "test.redacted-envelope", value: { stringValue: crypto.randomUUID() } },
+    ];
+
+    const response = await handleIngress(request(body), testEnv);
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ reason: "accepted" });
 
-    const listed = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/ingress/" });
-    expect(listed.objects.length).toBeGreaterThan(0);
-    const created = listed.objects.find((entry) => !beforeKeys.has(entry.key));
-    expect(created).toBeDefined();
-    const object = await otelEnv.OTEL_OBJECTS.get(created?.key ?? "");
-    const text = await object?.text();
+    const pointer = sent.at(-1);
+    if (!pointer) throw new Error("ingress pointer was not queued");
+    if (pointer.schemaVersion !== 2) throw new Error("ingress pointer is not current");
+    const bytes = await payloadStoreForPointer(testEnv, pointer).readBytesObject(pointer);
+    const text = new TextDecoder().decode(bytes);
     expect(text).toContain("[REDACTED]");
     expect(text).not.toContain("sk-live-test-secret");
   });

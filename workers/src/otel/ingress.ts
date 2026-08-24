@@ -4,12 +4,18 @@ import { ledgerCall, type ReservationResult } from "./ledger";
 import { parseOtlpJson } from "./otlp";
 import { redactSpan } from "./redaction";
 import type { RateLimitResult } from "./rate-limit";
-import { ingressObjectKey, putJsonObject, sha256Hex } from "./storage";
+import {
+  ingressObjectKey,
+  payloadStoreForWrite,
+  queueDeliveryDelaySeconds,
+  sha256Hex,
+} from "./storage";
 import type {
   ActiveRequestLease,
   IngressPointer,
   MetricSample,
   OtelEnv,
+  PayloadStore,
   RedactedSpan,
 } from "./types";
 
@@ -99,7 +105,9 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       if (reservation.status === "complete" || reservation.status === "enqueued") return accepted();
       if (reservation.status === "ready" && reservation.pointer) {
         try {
-          await env.OTEL_INGRESS_QUEUE.send(reservation.pointer);
+          await env.OTEL_INGRESS_QUEUE.send(reservation.pointer, {
+            delaySeconds: queueDeliveryDelaySeconds(reservation.pointer),
+          });
           await ledgerCall(ledger, "ingress.enqueued", {
             ingressId,
             ownerId: reservation.ownerId,
@@ -119,9 +127,11 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
     }
 
     let pointer: IngressPointer;
+    let store: PayloadStore | null = null;
     try {
+      store = payloadStoreForWrite(env);
       const objectKey = ingressObjectKey(ingressId, new Date(nowMs).toISOString().slice(0, 10));
-      const object = await putJsonObject(env.OTEL_OBJECTS, objectKey, envelope);
+      const object = await store.putJsonObject(objectKey, envelope, "ingress");
       pointer = { ...object, kind: "ingress", ingressId };
     } catch {
       await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
@@ -137,11 +147,13 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       });
     } catch {
       const released = await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
-      if (released) await env.OTEL_OBJECTS.delete(pointer.objectKey);
+      if (released && store) await store.deleteObject(pointer);
       return json({ error: "persistence_failed" }, 503);
     }
     try {
-      await env.OTEL_INGRESS_QUEUE.send(pointer);
+      await env.OTEL_INGRESS_QUEUE.send(pointer, {
+        delaySeconds: queueDeliveryDelaySeconds(pointer),
+      });
       await ledgerCall(ledger, "ingress.enqueued", {
         ingressId,
         ownerId,

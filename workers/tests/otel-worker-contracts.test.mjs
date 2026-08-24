@@ -12,9 +12,10 @@ test("dedicated OTel Worker owns its isolated runtime contract", () => {
   assert.equal(config.name, "graft-ai-aig-otel");
   assert.equal(config.main, "src/otel.ts");
   assert.equal(config.workers_dev, true);
-  assert.equal(config.queues.producers.length, 4);
+  assert.equal(config.queues.producers.length, 8);
   assert.equal(config.queues.consumers.length, 4);
-  assert.equal(config.r2_buckets[0].binding, "OTEL_OBJECTS");
+  assert.ok(config.queues.consumers.every((consumer) => consumer.max_retries === 7));
+  assert.equal(config.kv_namespaces[0].binding, "OTEL_PAYLOAD_KV");
   assert.deepEqual(Object.keys(config.exports).sort(), [
     "OtelLedger",
     "OtelMetricsAggregate",

@@ -1,12 +1,14 @@
 import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import type { MetricSample } from "../../src/otel/types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { payloadStoreForPointer, resolvePayloadStoreBackend } from "../../src/otel/storage";
+import type { MetricSample, OtelEnv } from "../../src/otel/types";
 
-const otelEnv = env as unknown as {
-  readonly OTEL_METRICS_AGGREGATE: DurableObjectNamespace;
-  readonly OTEL_OBJECTS: R2Bucket;
-};
+const otelEnv = env as unknown as OtelEnv;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("OtelMetricsAggregate", () => {
   it("deduplicates samples and flushes at the two-hundred-sample bound", async () => {
@@ -62,7 +64,7 @@ describe("OtelMetricsAggregate", () => {
       value: 1,
       labels: { env: "prod", gateway: "main" },
     };
-    const before = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/export/prometheus/" });
+    const prometheusSend = vi.spyOn(otelEnv.OTEL_PROMETHEUS_QUEUE, "send");
 
     await stub.fetch("https://metrics/append", {
       method: "POST",
@@ -70,7 +72,11 @@ describe("OtelMetricsAggregate", () => {
     });
     await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
 
-    const objects = await otelEnv.OTEL_OBJECTS.list({ prefix: "otel/export/prometheus/" });
-    expect(objects.objects.length).toBe(before.objects.length + 1);
+    const pointer = prometheusSend.mock.calls.at(-1)?.[0];
+    if (!pointer) throw new Error("Prometheus pointer was not queued");
+    if (pointer.schemaVersion !== 2) throw new Error("Prometheus pointer is not current");
+    expect(pointer.storageBackend).toBe(resolvePayloadStoreBackend(otelEnv.OTEL_PAYLOAD_STORE));
+    const bytes = await payloadStoreForPointer(otelEnv, pointer).readBytesObject(pointer);
+    expect(bytes.byteLength).toBeGreaterThan(0);
   });
 });

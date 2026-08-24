@@ -1,4 +1,4 @@
-import type { Backend, LOKI_LABEL_KEYS, METRIC_LABEL_KEYS } from "./contracts";
+import type { Backend, LOKI_LABEL_KEYS, METRIC_LABEL_KEYS, PayloadStoreBackend } from "./contracts";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -66,14 +66,20 @@ export type BackendJobIdentity =
       windowEndUnixNano: string;
     }>;
 
-export type ObjectPointer = Readonly<{
-  schemaVersion: 1;
+export type ObjectPointerBase = Readonly<{
   id: string;
   objectKey: string;
   sha256: string;
   contentType: "application/json";
   createdAtMs: number;
 }>;
+
+export type LegacyObjectPointer = ObjectPointerBase & Readonly<{ schemaVersion: 1 }>;
+
+export type CurrentObjectPointer = ObjectPointerBase &
+  Readonly<{ schemaVersion: 2; storageBackend: PayloadStoreBackend }>;
+
+export type ObjectPointer = LegacyObjectPointer | CurrentObjectPointer;
 
 export type IngressPointer = ObjectPointer & Readonly<{ kind: "ingress"; ingressId: string }>;
 
@@ -107,12 +113,83 @@ export type ExportResult =
     }>
   | Readonly<{ kind: "terminal"; status: number }>;
 
+export type PayloadStoreErrorClass =
+  "not_found" | "temporary" | "quota" | "integrity" | "configuration";
+
+export interface PayloadStore {
+  readonly backend: PayloadStoreBackend;
+  putJsonObject<T>(
+    objectKey: string,
+    value: T,
+    kind: "ingress" | "export",
+  ): Promise<CurrentObjectPointer>;
+  putBytesObject(
+    objectKey: string,
+    bytes: Uint8Array,
+    kind: "ingress" | "export",
+  ): Promise<CurrentObjectPointer>;
+  readJsonObject<T>(pointer: ObjectPointer): Promise<T>;
+  readBytesObject(pointer: ObjectPointer): Promise<Uint8Array>;
+  deleteObject(pointer: ObjectPointer): Promise<void>;
+}
+
+export class PayloadStoreError extends Error {
+  constructor(
+    readonly errorClass: PayloadStoreErrorClass,
+    message: string,
+  ) {
+    super(message);
+    this.name = "PayloadStoreError";
+  }
+}
+
+export class PayloadStoreNotFoundError extends PayloadStoreError {
+  constructor(message = "payload object missing") {
+    super("not_found", message);
+    this.name = "PayloadStoreNotFoundError";
+  }
+}
+
+export class PayloadStoreTemporaryError extends PayloadStoreError {
+  constructor(message = "payload store temporarily unavailable") {
+    super("temporary", message);
+    this.name = "PayloadStoreTemporaryError";
+  }
+}
+
+export class PayloadStoreQuotaError extends PayloadStoreError {
+  constructor(message = "payload store quota exceeded") {
+    super("quota", message);
+    this.name = "PayloadStoreQuotaError";
+  }
+}
+
+export class PayloadStoreIntegrityError extends PayloadStoreError {
+  constructor(message = "payload object integrity check failed") {
+    super("integrity", message);
+    this.name = "PayloadStoreIntegrityError";
+  }
+}
+
+export class PayloadStoreConfigurationError extends PayloadStoreError {
+  constructor(message = "payload store binding is not configured") {
+    super("configuration", message);
+    this.name = "PayloadStoreConfigurationError";
+  }
+}
+
 export interface OtelEnv {
   readonly OTEL_INGRESS_QUEUE: Queue<IngressPointer>;
   readonly OTEL_TEMPO_QUEUE: Queue<ExportPointer>;
   readonly OTEL_LOKI_QUEUE: Queue<ExportPointer>;
   readonly OTEL_PROMETHEUS_QUEUE: Queue<ExportPointer>;
-  readonly OTEL_OBJECTS: R2Bucket;
+  readonly OTEL_PAYLOAD_STORE?: string;
+  readonly OTEL_PAYLOAD_KV?: KVNamespace;
+  readonly OTEL_OBJECTS?: R2Bucket;
+  readonly OTEL_INGRESS_DLQ?: Queue<IngressPointer>;
+  readonly OTEL_TEMPO_DLQ?: Queue<ExportPointer>;
+  readonly OTEL_LOKI_DLQ?: Queue<ExportPointer>;
+  readonly OTEL_PROMETHEUS_DLQ?: Queue<ExportPointer>;
   readonly OTEL_RATE_LIMIT: DurableObjectNamespace;
   readonly OTEL_LEDGER: DurableObjectNamespace;
   readonly OTEL_TRACE_AGGREGATE: DurableObjectNamespace;

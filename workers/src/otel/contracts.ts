@@ -11,7 +11,15 @@ export const TRACE_IDLE_ALARM_MS = 1_000;
 export const METRICS_FLUSH_INTERVAL_MS = 30_000;
 export const METRICS_FLUSH_SAMPLE_LIMIT = 200;
 export const DEDUPLICATION_TOMBSTONE_MS = 25 * 60 * 60 * 1_000;
-export const R2_RETENTION_FAILSAFE_MS = 7 * 24 * 60 * 60 * 1_000;
+export const PAYLOAD_RETENTION_FAILSAFE_MS = 7 * 24 * 60 * 60 * 1_000;
+export const PAYLOAD_RETENTION_TTL_SECONDS = PAYLOAD_RETENTION_FAILSAFE_MS / 1_000;
+export const KV_PROPAGATION_DELAY_SECONDS = 60;
+export const KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS = [5, 15, 30, 60, 120] as const;
+export const PAYLOAD_STORE_TEMPORARY_RETRY_DELAY_SECONDS = 5;
+export const DOWNSTREAM_EXPORT_ATTEMPT_LIMIT = 3;
+export const OTEL_QUEUE_MAX_RETRIES = 7;
+export const PAYLOAD_STORE_BACKENDS = ["kv", "r2"] as const;
+export type PayloadStoreBackend = (typeof PAYLOAD_STORE_BACKENDS)[number];
 export const MAX_JSON_DEPTH = 64;
 
 export const BACKEND_EXPORT_TIMEOUT_MS = {

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { enqueueBackendJob } from "../../src/otel/exporter";
 import type { JobDescriptor, OtelEnv } from "../../src/otel/types";
 
@@ -30,6 +30,11 @@ vi.mock("../../src/otel/storage", () => ({
 }));
 
 describe("export cleanup", () => {
+  beforeEach(() => {
+    mockLedgerCall.mockReset();
+    mockDeleteObject.mockClear();
+  });
+
   it("releases the reservation and deletes the payload once when ready is rejected", async () => {
     mockLedgerCall.mockImplementation(async (_stub: DurableObjectStub, operation: string) => {
       if (operation === "export.register") return { kind: "reserved" };
@@ -53,6 +58,27 @@ describe("export cleanup", () => {
       "export.ready",
       "export.release-reservation",
     ]);
+    expect(mockDeleteObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the payload when releasing the reservation fails", async () => {
+    mockLedgerCall.mockImplementation(async (_stub: DurableObjectStub, operation: string) => {
+      if (operation === "export.register") return { kind: "reserved" };
+      if (operation === "export.ready") return false;
+      if (operation === "export.release-reservation") throw new Error("release failed");
+      throw new Error(`unexpected ledger operation: ${operation}`);
+    });
+    const descriptor: JobDescriptor = {
+      jobId: "release-failure-job",
+      backend: "tempo",
+      contentType: "application/json",
+      identity: { kind: "trace", traceId: "00112233445566778899aabbccddeeff" },
+      payloadSha256: "payload-hash",
+    };
+
+    await expect(
+      enqueueBackendJob(env as unknown as OtelEnv, descriptor, new Uint8Array([1, 2, 3])),
+    ).rejects.toThrow("release failed");
     expect(mockDeleteObject).toHaveBeenCalledTimes(1);
   });
 });

@@ -80,8 +80,11 @@ export async function enqueueBackendJob(
       throw new Error("export ready transition rejected");
     }
   } catch (error) {
-    await ledgerCall(ledger, "export.release-reservation", { jobId: descriptor.jobId });
-    await store.deleteObject(pointer);
+    try {
+      await ledgerCall(ledger, "export.release-reservation", { jobId: descriptor.jobId });
+    } finally {
+      await store.deleteObject(pointer);
+    }
     throw error;
   }
 

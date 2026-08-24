@@ -5,7 +5,7 @@ variable "cloudflare_account_id" {
 }
 
 variable "cloudflare_api_token" {
-  description = "Cloudflare API Token with Logpush, account-level Queues Write (or Queues Edit), and account-level R2 Storage Write permissions"
+  description = "Cloudflare API Token with Logpush, account-level Queues Write (or Queues Edit), and Workers KV Storage Write permissions by default; add R2 Storage Write only for an R2-selected or KV/R2-drain OTel deployment"
   type        = string
   sensitive   = true
 }
@@ -96,6 +96,17 @@ variable "otel_bucket_name" {
   validation {
     condition     = var.otel_bucket_name == "graft-ai-aig-otel-v1"
     error_message = "otel_bucket_name is fixed at graft-ai-aig-otel-v1 to match wrangler.otel.jsonc."
+  }
+}
+
+variable "otel_payload_kv_namespace_title" {
+  description = "Fixed Workers KV namespace title for dedicated OTel payloads"
+  type        = string
+  default     = "graft-ai-aig-otel-payloads-v1"
+
+  validation {
+    condition     = var.otel_payload_kv_namespace_title == "graft-ai-aig-otel-payloads-v1"
+    error_message = "otel_payload_kv_namespace_title is fixed to graft-ai-aig-otel-payloads-v1 to match the OTel Wrangler renderer."
   }
 }
 

@@ -118,11 +118,7 @@ export type PayloadStoreErrorClass =
 
 export interface PayloadStore {
   readonly backend: PayloadStoreBackend;
-  putJsonObject<T>(
-    objectKey: string,
-    value: T,
-    kind: "ingress" | "export",
-  ): Promise<CurrentObjectPointer>;
+  putJsonObject<T>(objectKey: string, value: T): Promise<CurrentObjectPointer>;
   putBytesObject(
     objectKey: string,
     bytes: Uint8Array,

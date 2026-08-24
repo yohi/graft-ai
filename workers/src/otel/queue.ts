@@ -1,7 +1,6 @@
 import {
   DOWNSTREAM_EXPORT_ATTEMPT_LIMIT,
   KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS,
-  PAYLOAD_STORE_TEMPORARY_RETRY_DELAY_SECONDS,
   type Backend,
   type PayloadStoreBackend,
 } from "./contracts";
@@ -299,11 +298,12 @@ function payloadReadRetryDelay(
   error: PayloadStoreError,
   ordinal: number,
 ): number | undefined {
-  if (error instanceof PayloadStoreTemporaryError) {
-    if (ordinal > KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length) return undefined;
-    return PAYLOAD_STORE_TEMPORARY_RETRY_DELAY_SECONDS;
+  if (
+    backend !== "kv" ||
+    !(error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError)
+  ) {
+    return undefined;
   }
-  if (backend !== "kv" || !(error instanceof PayloadStoreNotFoundError)) return undefined;
   if (ordinal > KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length) return undefined;
   return KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120;
 }

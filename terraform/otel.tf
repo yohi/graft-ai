@@ -36,6 +36,11 @@ resource "cloudflare_queue" "otel_dlq" {
   }
 }
 
+resource "cloudflare_workers_kv_namespace" "otel_payloads" {
+  account_id = var.cloudflare_account_id
+  title      = var.otel_payload_kv_namespace_title
+}
+
 resource "cloudflare_r2_bucket" "otel" {
   account_id = var.cloudflare_account_id
   name       = local.otel_bucket_name

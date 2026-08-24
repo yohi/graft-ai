@@ -20,7 +20,8 @@ rollback path until the controlled observation window is complete.
 
 ## Required secrets
 
-Register these seven values as Wrangler secrets for `wrangler.otel.jsonc`:
+Register these seven values as Wrangler secrets for the generated OTel Worker
+configuration at `workers/.wrangler/otel.generated.jsonc`:
 
 ```text
 OTEL_INGEST_TOKEN
@@ -37,17 +38,22 @@ The Grafana telemetry credential must have `traces:write`, `metrics:write`, and
 `logs:write`. Never place endpoint credentials in Wrangler `vars`, Terraform
 tfvars, source files, Queue messages, or documentation.
 
+Render the configuration after provisioning the Terraform-owned resources and
+before registering secrets. The target reads
+`otel_payload_kv_namespace_id` and replaces the KV namespace sentinel with the
+real ID. The complete sequence is shown below.
+
 For an interactive local registration, run each command from `workers/` and
 enter the value only at the hidden prompt:
 
 ```bash
-npx wrangler secret put OTEL_INGEST_TOKEN --config wrangler.otel.jsonc
-npx wrangler secret put OTEL_RATE_LIMIT_HMAC_KEY --config wrangler.otel.jsonc
-npx wrangler secret put GRAFANA_CLOUD_OTLP_TRACES_URL --config wrangler.otel.jsonc
-npx wrangler secret put GRAFANA_CLOUD_OTLP_METRICS_URL --config wrangler.otel.jsonc
-npx wrangler secret put GRAFANA_CLOUD_OTLP_AUTHORIZATION --config wrangler.otel.jsonc
-npx wrangler secret put GRAFANA_CLOUD_LOKI_URL --config wrangler.otel.jsonc
-npx wrangler secret put GRAFANA_CLOUD_LOKI_AUTHORIZATION --config wrangler.otel.jsonc
+npx wrangler secret put OTEL_INGEST_TOKEN --config .wrangler/otel.generated.jsonc
+npx wrangler secret put OTEL_RATE_LIMIT_HMAC_KEY --config .wrangler/otel.generated.jsonc
+npx wrangler secret put GRAFANA_CLOUD_OTLP_TRACES_URL --config .wrangler/otel.generated.jsonc
+npx wrangler secret put GRAFANA_CLOUD_OTLP_METRICS_URL --config .wrangler/otel.generated.jsonc
+npx wrangler secret put GRAFANA_CLOUD_OTLP_AUTHORIZATION --config .wrangler/otel.generated.jsonc
+npx wrangler secret put GRAFANA_CLOUD_LOKI_URL --config .wrangler/otel.generated.jsonc
+npx wrangler secret put GRAFANA_CLOUD_LOKI_AUTHORIZATION --config .wrangler/otel.generated.jsonc
 ```
 
 ## Pre-deployment checks
@@ -61,9 +67,9 @@ make otel-worker-validate
 
 `otel-worker-validate` checks the isolated Wrangler contract, Queue/DLQ
 topology, JSON-only configuration, forbidden inline credentials, and the
-Wrangler dry run. Terraform owns the four source Queues, four DLQs, the R2
-bucket, and its seven-day `otel/` lifecycle rule. Wrangler owns Queue consumers
-and Durable Object exports.
+Wrangler dry run. Terraform owns the four source Queues, four DLQs, the OTel KV
+namespace, the R2 bucket, and its seven-day `otel/` lifecycle rule. Wrangler
+owns Queue consumers and Durable Object exports.
 
 Provision account resources before deploying the Worker:
 
@@ -72,13 +78,17 @@ terraform -chdir=terraform init
 terraform -chdir=terraform apply \
   -target=cloudflare_queue.otel \
   -target=cloudflare_queue.otel_dlq \
+  -target=cloudflare_workers_kv_namespace.otel_payloads \
   -target=cloudflare_r2_bucket.otel \
   -target=cloudflare_r2_bucket_lifecycle.otel
+export OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)"
+make render-otel-worker-config OTEL_PAYLOAD_KV_NAMESPACE_ID="$OTEL_PAYLOAD_KV_NAMESPACE_ID"
 make deploy-otel-worker
 ```
 
-The production workflow performs the same order, synchronizes the seven
-secrets, and deploys only `wrangler.otel.jsonc`. It does not change the existing
+The production workflow performs the same apply, output, render, secret
+synchronization, and deploy order. It deploys only the generated
+`.wrangler/otel.generated.jsonc` configuration and does not change the existing
 AI Gateway exporter configuration.
 
 ## AI Gateway configuration

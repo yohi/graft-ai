@@ -27,12 +27,12 @@ const CONTENT_TYPE = "application/json" as const;
 abstract class PayloadStoreBase implements PayloadStore {
   abstract readonly backend: PayloadStoreBackend;
 
-  async putJsonObject<T>(objectKey: string, value: T): Promise<CurrentObjectPointer> {
-    return this.putBytesObject(
-      objectKey,
-      new TextEncoder().encode(JSON.stringify(value)),
-      payloadKindForObjectKey(objectKey),
-    );
+  async putJsonObject<T>(
+    objectKey: string,
+    value: T,
+    kind: "ingress" | "export",
+  ): Promise<CurrentObjectPointer> {
+    return this.putBytesObject(objectKey, new TextEncoder().encode(JSON.stringify(value)), kind);
   }
 
   async readJsonObject<T>(pointer: ObjectPointer): Promise<T> {
@@ -200,10 +200,6 @@ function payloadStoreForBackend(env: OtelEnv, backend: PayloadStoreBackend): Pay
     throw new PayloadStoreConfigurationError("OTEL_OBJECTS binding is missing");
   }
   return new R2PayloadStore(env.OTEL_OBJECTS);
-}
-
-function payloadKindForObjectKey(objectKey: string): "ingress" | "export" {
-  return objectKey.includes("/export/") ? "export" : "ingress";
 }
 
 function payloadMetadata(sha256: string, kind: "ingress" | "export"): PayloadMetadata {

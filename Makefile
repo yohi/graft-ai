@@ -1,5 +1,8 @@
 .PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules deploy-otel-worker otel-worker-test otel-worker-validate otel-worker-smoke clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
 
+OTEL_PAYLOAD_STORE ?= kv
+OTEL_PAYLOAD_R2_DRAIN ?= false
+
 install:
 	cd workers && npm install
 	cd workers && npx wrangler types
@@ -51,6 +54,8 @@ otel-smoke: otel-validate
 
 otel-worker-test:
 	cd workers && npm run test:otel
+	cd workers && npm run test:otel:r2
+	cd workers && npm run test:otel:kv-r2-drain
 
 otel-worker-validate:
 	node scripts/verify-otel-worker-config.mjs
@@ -60,8 +65,22 @@ otel-worker-validate:
 otel-worker-smoke:
 	node scripts/otel-worker-smoke.mjs
 
+# R2 opt-in: OTEL_PAYLOAD_STORE=r2 OTEL_PAYLOAD_KV_NAMESPACE_ID=<id> make deploy-otel-worker
+# R2-to-KV drain: OTEL_PAYLOAD_STORE=kv OTEL_PAYLOAD_R2_DRAIN=true OTEL_PAYLOAD_KV_NAMESPACE_ID=<id> make deploy-otel-worker
 deploy-otel-worker:
-	cd workers && npx wrangler deploy --config wrangler.otel.jsonc
+	@test -n "$(OTEL_PAYLOAD_KV_NAMESPACE_ID)" || (printf '%s\n' 'OTEL_PAYLOAD_KV_NAMESPACE_ID is required.' >&2; exit 1)
+	@case "$(OTEL_PAYLOAD_STORE)" in kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STORE must be kv or r2.' >&2; exit 1 ;; esac
+	@case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false) ;; *) printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false.' >&2; exit 1 ;; esac
+	@if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2; exit 1; fi
+	@cd workers && \
+		set -eu; \
+		r2_flag=""; \
+		if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] || [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then r2_flag="--include-r2-binding"; fi; \
+		node ../scripts/render-otel-worker-config.mjs \
+			--payload-store "$(OTEL_PAYLOAD_STORE)" \
+			--kv-namespace-id "$(OTEL_PAYLOAD_KV_NAMESPACE_ID)" \
+			--output .wrangler/otel.generated.jsonc $$r2_flag; \
+		npx wrangler deploy --config .wrangler/otel.generated.jsonc
 typecheck:
 	cd workers && npm run typecheck:ci
 

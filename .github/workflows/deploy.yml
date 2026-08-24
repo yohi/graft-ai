@@ -7,6 +7,10 @@ on:
 
 permissions: {}
 
+env:
+  OTEL_PAYLOAD_STORE: ${{ vars.OTEL_PAYLOAD_STORE || 'kv' }}
+  OTEL_PAYLOAD_R2_DRAIN: ${{ vars.OTEL_PAYLOAD_R2_DRAIN || 'false' }}
+
 concurrency:
   group: production-deploy
   cancel-in-progress: false
@@ -52,6 +56,22 @@ jobs:
             exit 1
           fi
 
+      - name: Validate OTel payload store selection
+        run: |
+          set -euo pipefail
+          case "$OTEL_PAYLOAD_STORE" in
+            kv|r2) ;;
+            *) printf 'OTEL_PAYLOAD_STORE must be kv or r2, got %s\n' "$OTEL_PAYLOAD_STORE" >&2; exit 1 ;;
+          esac
+          case "$OTEL_PAYLOAD_R2_DRAIN" in
+            true|false) ;;
+            *) printf 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false, got %s\n' "$OTEL_PAYLOAD_R2_DRAIN" >&2; exit 1 ;;
+          esac
+          if [[ "$OTEL_PAYLOAD_STORE" == r2 && "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then
+            printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2
+            exit 1
+          fi
+
   apply-cloudflare-infrastructure:
     name: Apply OTel Cloudflare infrastructure
     runs-on: ubuntu-latest
@@ -85,16 +105,23 @@ jobs:
           terraform_version: "1.10.0"
           terraform_wrapper: false
 
-      - name: Apply Queue and R2 resources
+      - name: Apply Queue, DLQ, KV, and selected R2 resources
         working-directory: terraform
         run: |
           set -euo pipefail
           terraform init -input=false
-          terraform apply -input=false -auto-approve \
-            -target=cloudflare_queue.otel \
-            -target=cloudflare_queue.otel_dlq \
-            -target=cloudflare_r2_bucket.otel \
-            -target=cloudflare_r2_bucket_lifecycle.otel
+          targets=(
+            -target=cloudflare_queue.otel
+            -target=cloudflare_queue.otel_dlq
+            -target=cloudflare_workers_kv_namespace.otel_payloads
+          )
+          if [[ "$OTEL_PAYLOAD_STORE" == r2 || "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then
+            targets+=(
+              -target=cloudflare_r2_bucket.otel
+              -target=cloudflare_r2_bucket_lifecycle.otel
+            )
+          fi
+          terraform apply -input=false -auto-approve "${targets[@]}"
 
   deploy-otel-worker:
     name: Deploy dedicated OTel Worker
@@ -104,6 +131,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+    env:
+      TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -118,6 +147,28 @@ jobs:
       - name: Install Worker dependencies
         working-directory: workers
         run: npm ci --ignore-scripts
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: "1.10.0"
+          terraform_wrapper: false
+
+      - name: Render dedicated OTel Worker config
+        working-directory: workers
+        run: |
+          set -euo pipefail
+          terraform -chdir=../terraform init -input=false
+          kv_namespace_id="$(terraform -chdir=../terraform output -raw otel_payload_kv_namespace_id)"
+          render_args=(
+            --payload-store "$OTEL_PAYLOAD_STORE"
+            --kv-namespace-id "$kv_namespace_id"
+            --output .wrangler/otel.generated.jsonc
+          )
+          if [[ "$OTEL_PAYLOAD_STORE" == r2 || "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then
+            render_args+=(--include-r2-binding)
+          fi
+          node ../scripts/render-otel-worker-config.mjs "${render_args[@]}"
 
       - name: Sync dedicated OTel Worker secrets
         working-directory: workers
@@ -153,7 +204,7 @@ jobs:
             exit 1
           fi
           for name in "${secret_names[@]}"; do
-            printf '%s' "${!name}" | npx wrangler secret put "$name" --config wrangler.otel.jsonc
+            printf '%s' "${!name}" | npx wrangler secret put "$name" --config .wrangler/otel.generated.jsonc
           done
 
       - name: Deploy with Wrangler
@@ -162,7 +213,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers
-          command: deploy --config wrangler.otel.jsonc
+          command: deploy --config .wrangler/otel.generated.jsonc
 
   deploy-proxy-worker:
     name: Deploy Proxy Worker

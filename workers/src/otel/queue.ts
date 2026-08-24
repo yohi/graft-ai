@@ -93,17 +93,10 @@ async function consumeIngress(pointer: IngressPointer, env: OtelEnv): Promise<Qu
     const ordinal = await ledgerCall<number>(ledger, "ingress.payload-read-failure", {
       ingressId: pointer.ingressId,
     });
-    if (
-      backend === "kv" &&
-      (error instanceof PayloadStoreNotFoundError || error instanceof PayloadStoreTemporaryError) &&
-      ordinal <= KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS.length
-    ) {
-      return {
-        kind: "retry",
-        delaySeconds: KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS[ordinal - 1] ?? 120,
-      };
-    }
-    return { kind: "dead-letter", pointer: durablePointer };
+    const retryDelay = payloadReadRetryDelay(backend, error, ordinal);
+    return retryDelay === undefined
+      ? { kind: "dead-letter", pointer: durablePointer }
+      : { kind: "retry", delaySeconds: retryDelay };
   }
 
   const byTrace = new Map<string, typeof envelope.spans>();

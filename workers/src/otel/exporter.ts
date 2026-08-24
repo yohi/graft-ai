@@ -77,10 +77,6 @@ export async function enqueueBackendJob(
       nowMs,
     });
     if (!ready) {
-      const released = await ledgerCall<boolean>(ledger, "export.release-reservation", {
-        jobId: descriptor.jobId,
-      });
-      if (released) await store.deleteObject(pointer);
       throw new Error("export ready transition rejected");
     }
   } catch (error) {

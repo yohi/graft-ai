@@ -87,6 +87,9 @@ otel-worker-infrastructure:
 
 render-otel-worker-config:
 	@set -eu; \
+	case "$(OTEL_PAYLOAD_STORE)" in kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STORE must be kv or r2.' >&2; exit 1 ;; esac; \
+	case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false) ;; *) printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false.' >&2; exit 1 ;; esac; \
+	if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2; exit 1; fi; \
 	namespace_id="$(OTEL_PAYLOAD_KV_NAMESPACE_ID)"; \
 	if [ -z "$$namespace_id" ]; then namespace_id="$$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)"; fi; \
 	test -n "$$namespace_id"; \

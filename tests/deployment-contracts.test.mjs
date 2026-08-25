@@ -129,6 +129,33 @@ test("OTel Worker deployment renders the Terraform-created KV namespace config",
   assert.match(otelRunbook, /\.wrangler\/otel\.generated\.jsonc/);
 });
 
+test("OTel config rendering validates payload controls before namespace resolution", () => {
+  const renderTarget =
+    makefile.match(
+      /render-otel-worker-config:\n([\s\S]*?)(?=\n\ndeploy-otel-worker:)/,
+    )?.[1] ?? "";
+  const namespaceResolution = renderTarget.indexOf("namespace_id=");
+  const validationSteps = [
+    'case "$(OTEL_PAYLOAD_STORE)" in kv|r2)',
+    'case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false)',
+    'if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]',
+  ];
+
+  assert.notEqual(namespaceResolution, -1);
+  for (const validationStep of validationSteps) {
+    const validationPosition = renderTarget.indexOf(validationStep);
+    assert.notEqual(
+      validationPosition,
+      -1,
+      `missing validation: ${validationStep}`,
+    );
+    assert.ok(
+      validationPosition < namespaceResolution,
+      `validation must precede namespace resolution: ${validationStep}`,
+    );
+  }
+});
+
 test("Terraform separates the Loki-only token from the telemetry token", () => {
   const lokiPolicyStart = grafanaMain.indexOf(
     'resource "grafana_cloud_access_policy" "loki_ingest"',

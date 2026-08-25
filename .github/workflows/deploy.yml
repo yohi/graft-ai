@@ -7,6 +7,10 @@ on:
 
 permissions: {}
 
+env:
+  OTEL_PAYLOAD_STORE: ${{ vars.OTEL_PAYLOAD_STORE || 'kv' }}
+  OTEL_PAYLOAD_R2_DRAIN: ${{ vars.OTEL_PAYLOAD_R2_DRAIN || 'false' }}
+
 concurrency:
   group: production-deploy
   cancel-in-progress: false
@@ -52,6 +56,22 @@ jobs:
             exit 1
           fi
 
+      - name: Validate OTel payload store selection
+        run: |
+          set -euo pipefail
+          case "$OTEL_PAYLOAD_STORE" in
+            kv|r2) ;;
+            *) printf 'OTEL_PAYLOAD_STORE must be kv or r2, got %s\n' "$OTEL_PAYLOAD_STORE" >&2; exit 1 ;;
+          esac
+          case "$OTEL_PAYLOAD_R2_DRAIN" in
+            true|false) ;;
+            *) printf 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false, got %s\n' "$OTEL_PAYLOAD_R2_DRAIN" >&2; exit 1 ;;
+          esac
+          if [[ "$OTEL_PAYLOAD_STORE" == r2 && "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then
+            printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2
+            exit 1
+          fi
+
   apply-cloudflare-infrastructure:
     name: Apply OTel Cloudflare infrastructure
     runs-on: ubuntu-latest
@@ -87,17 +107,23 @@ jobs:
           terraform_version: "1.10.0"
           terraform_wrapper: false
 
-      - name: Apply Queue, KV, and R2 resources
+      - name: Apply Queue, DLQ, KV, and selected R2 resources
         working-directory: terraform
         run: |
           set -euo pipefail
           terraform init -input=false
-          terraform apply -input=false -auto-approve \
-            -target=cloudflare_queue.otel \
-            -target=cloudflare_queue.otel_dlq \
-            -target=cloudflare_workers_kv_namespace.otel_payloads \
-            -target=cloudflare_r2_bucket.otel \
-            -target=cloudflare_r2_bucket_lifecycle.otel
+          targets=(
+            -target=cloudflare_queue.otel
+            -target=cloudflare_queue.otel_dlq
+            -target=cloudflare_workers_kv_namespace.otel_payloads
+          )
+          if [[ "$OTEL_PAYLOAD_STORE" == r2 || "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then
+            targets+=(
+              -target=cloudflare_r2_bucket.otel
+              -target=cloudflare_r2_bucket_lifecycle.otel
+            )
+          fi
+          terraform apply -input=false -auto-approve "${targets[@]}"
 
       - name: Read OTel KV namespace ID
         id: read_otel_kv_namespace
@@ -144,10 +170,15 @@ jobs:
             printf '%s\n' 'The OTel KV namespace ID output is missing or invalid.' >&2
             exit 1
           fi
-          node ../scripts/render-otel-worker-config.mjs \
-            --payload-store kv \
-            --kv-namespace-id "$OTEL_PAYLOAD_KV_NAMESPACE_ID" \
+          render_args=(
+            --payload-store "$OTEL_PAYLOAD_STORE"
+            --kv-namespace-id "$OTEL_PAYLOAD_KV_NAMESPACE_ID"
             --output .wrangler/otel.generated.jsonc
+          )
+          if [[ "$OTEL_PAYLOAD_STORE" == r2 || "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then
+            render_args+=(--include-r2-binding)
+          fi
+          node ../scripts/render-otel-worker-config.mjs "${render_args[@]}"
 
       - name: Sync dedicated OTel Worker secrets
         working-directory: workers

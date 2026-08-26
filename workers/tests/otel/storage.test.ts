@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import {
+  exportObjectKey,
   payloadStoreForPointer,
   payloadStoreForWrite,
   queueDeliveryDelaySeconds,
@@ -30,6 +31,29 @@ describe.each(configuredBackends)("%s payload store", (backend) => {
     });
 
     await expect(store.deleteObject(pointer)).resolves.toBeUndefined();
+    await expect(store.deleteObject(pointer)).resolves.toBeUndefined();
+  });
+
+  it("marks JSON under export paths with export metadata", async () => {
+    const store = payloadStoreForWrite({
+      ...otelEnv,
+      OTEL_PAYLOAD_STORE: backend,
+    });
+    const objectKey = exportObjectKey("tempo", crypto.randomUUID(), "2026-08-25");
+    const pointer = await store.putJsonObject(objectKey, { safe: "[REDACTED]" }, "export");
+
+    if (backend === "kv") {
+      const namespace = otelEnv.OTEL_PAYLOAD_KV;
+      if (!namespace) throw new Error("KV binding is missing");
+      const stored = await namespace.getWithMetadata(objectKey, { type: "arrayBuffer" });
+      expect(stored.metadata).toMatchObject({ kind: "export" });
+    } else {
+      const bucket = otelEnv.OTEL_OBJECTS;
+      if (!bucket) throw new Error("R2 binding is missing");
+      const stored = await bucket.head(objectKey);
+      expect(stored?.customMetadata).toMatchObject({ kind: "export" });
+    }
+
     await expect(store.deleteObject(pointer)).resolves.toBeUndefined();
   });
 });

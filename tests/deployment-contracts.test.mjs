@@ -110,6 +110,64 @@ test("Grafana Cloud deployment uses OTEL datasource variables in required mode",
   );
 });
 
+test("OTel Worker deployment renders the Terraform-created KV namespace config", () => {
+  assert.match(
+    deploy,
+    /-target=cloudflare_workers_kv_namespace\.otel_payloads/,
+  );
+  assert.match(deploy, /otel_payload_kv_namespace_id/);
+  assert.match(deploy, /render-otel-worker-config\.mjs/);
+  assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
+  assert.match(
+    deploy,
+    /secret put "\$name" --config \.wrangler\/otel\.generated\.jsonc/,
+  );
+  assert.match(
+    deploy,
+    /command: deploy --config \.wrangler\/otel\.generated\.jsonc/,
+  );
+
+  assert.match(makefile, /render-otel-worker-config:/);
+  assert.match(makefile, /OTEL_PAYLOAD_KV_NAMESPACE_ID/);
+  assert.match(makefile, /render-otel-worker-config\.mjs/);
+  assert.match(makefile, /workers\/\.wrangler\/otel\.generated\.jsonc/);
+
+  assert.match(
+    otelRunbook,
+    /-target=cloudflare_workers_kv_namespace\.otel_payloads/,
+  );
+  assert.match(otelRunbook, /otel_payload_kv_namespace_id/);
+  assert.match(otelRunbook, /make render-otel-worker-config/);
+  assert.match(otelRunbook, /\.wrangler\/otel\.generated\.jsonc/);
+});
+
+test("OTel config rendering validates payload controls before namespace resolution", () => {
+  const renderTarget =
+    makefile.match(
+      /render-otel-worker-config:\n([\s\S]*?)(?=\n\ndeploy-otel-worker:)/,
+    )?.[1] ?? "";
+  const namespaceResolution = renderTarget.indexOf("namespace_id=");
+  const validationSteps = [
+    'case "$(OTEL_PAYLOAD_STORE)" in kv|r2)',
+    'case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false)',
+    'if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]',
+  ];
+
+  assert.notEqual(namespaceResolution, -1);
+  for (const validationStep of validationSteps) {
+    const validationPosition = renderTarget.indexOf(validationStep);
+    assert.notEqual(
+      validationPosition,
+      -1,
+      `missing validation: ${validationStep}`,
+    );
+    assert.ok(
+      validationPosition < namespaceResolution,
+      `validation must precede namespace resolution: ${validationStep}`,
+    );
+  }
+});
+
 test("Terraform separates the Loki-only token from the telemetry token", () => {
   const lokiPolicyStart = grafanaMain.indexOf(
     'resource "grafana_cloud_access_policy" "loki_ingest"',

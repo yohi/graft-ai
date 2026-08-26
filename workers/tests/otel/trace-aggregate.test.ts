@@ -22,10 +22,11 @@ describe("TraceAggregate", () => {
     const traceId = crypto.randomUUID().replaceAll("-", "");
     const testSpan = { ...redactSpan(trace), traceId };
     const stub = otelEnv.OTEL_TRACE_AGGREGATE.getByName(traceId);
-    const receivedAtMs = Date.now();
+    const testTimeMs = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(testTimeMs);
     const body = {
       ingressId: "ingress-1",
-      receivedAtMs,
+      receivedAtMs: testTimeMs,
       spans: [testSpan],
     };
 

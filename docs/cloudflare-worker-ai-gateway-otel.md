@@ -20,7 +20,8 @@ rollback path until the controlled observation window is complete.
 
 ## Required secrets
 
-Register these seven values as Wrangler secrets for the rendered OTel config:
+Register these seven values as Wrangler secrets for the generated OTel Worker
+configuration at `workers/.wrangler/otel.generated.jsonc`:
 
 ```text
 OTEL_INGEST_TOKEN
@@ -36,6 +37,11 @@ The Grafana telemetry credential must have `traces:write`, `metrics:write`, and
 `logs:write`. The Loki-only credential, when used separately, must have only
 `logs:write`. Never place endpoint credentials in Wrangler `vars`, Terraform
 tfvars, source files, Queue messages, or documentation.
+
+Render the configuration after provisioning the Terraform-owned resources and
+before registering secrets. The target reads
+`otel_payload_kv_namespace_id` and replaces the KV namespace sentinel with the
+real ID. The complete sequence is shown below.
 
 For an interactive local registration, run each command from `workers/` and
 enter the value only at the hidden prompt:
@@ -78,7 +84,8 @@ make deploy-otel-worker
 ```
 
 The production workflow performs the same order, reads the non-secret KV
-namespace ID from Terraform output, renders `.wrangler/otel.generated.jsonc`,
+namespace ID from Terraform output, runs
+`make render-otel-worker-config` to render `.wrangler/otel.generated.jsonc`,
 synchronizes the seven secrets, and deploys that generated config. It does not
 change the existing AI Gateway exporter configuration.
 

@@ -24,6 +24,7 @@ const otelEnv = {
 } as OtelEnv;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 

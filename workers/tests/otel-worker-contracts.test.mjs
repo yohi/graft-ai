@@ -21,6 +21,8 @@ test("dedicated OTel Worker owns its isolated runtime contract", () => {
   ]);
   assert.equal(config.r2_buckets, undefined);
   assert.ok(config.queues.producers.some((entry) => entry.binding === "OTEL_INGRESS_DLQ"));
+  assert.ok(config.queues.consumers.every((consumer) => consumer.max_retries === 7));
+  assert.equal(config.kv_namespaces[0].binding, "OTEL_PAYLOAD_KV");
   assert.deepEqual(Object.keys(config.exports).sort(), [
     "OtelLedger",
     "OtelMetricsAggregate",
@@ -30,6 +32,26 @@ test("dedicated OTel Worker owns its isolated runtime contract", () => {
   assert.doesNotMatch(
     JSON.stringify(config),
     /"(?:authorization|OTEL_INGEST_TOKEN|OTEL_RATE_LIMIT_HMAC_KEY)"\s*:/i,
+  );
+});
+
+test("rejects duplicate Queue producer bindings", () => {
+  const invalid = structuredClone(config);
+  invalid.queues.producers[1].binding = invalid.queues.producers[0].binding;
+
+  assert.throws(
+    () => validateOtelWorkerConfig(invalid, JSON.stringify(invalid)),
+    /duplicate producer binding/,
+  );
+});
+
+test("rejects extra Queue producer entries", () => {
+  const invalid = structuredClone(config);
+  invalid.queues.producers.push(structuredClone(invalid.queues.producers[0]));
+
+  assert.throws(
+    () => validateOtelWorkerConfig(invalid, JSON.stringify(invalid)),
+    /four source and four DLQ producers/,
   );
 });
 
@@ -43,9 +65,7 @@ test("renders KV-default, R2, and KV/R2-drain binding contracts", () => {
     includeR2Binding: false,
   });
   assert.equal(kv.vars.OTEL_PAYLOAD_STORE, "kv");
-  assert.deepEqual(kv.kv_namespaces, [
-    { binding: "OTEL_PAYLOAD_KV", id: options.kvNamespaceId },
-  ]);
+  assert.deepEqual(kv.kv_namespaces, [{ binding: "OTEL_PAYLOAD_KV", id: options.kvNamespaceId }]);
   assert.equal(kv.r2_buckets, undefined);
   assert.doesNotThrow(() =>
     validateOtelWorkerConfig(kv, JSON.stringify(kv), {
@@ -108,18 +128,24 @@ test("rejects invalid selector, namespace ID, and unsafe binding combinations", 
     /R2 binding/,
   );
   assert.throws(
-    () => validateOtelWorkerConfig({ ...config, r2_buckets: [{ binding: "OTEL_OBJECTS" }] }, JSON.stringify(config), {
-      payloadStore: "kv",
-      includeR2Binding: false,
-    }),
+    () =>
+      validateOtelWorkerConfig(
+        { ...config, r2_buckets: [{ binding: "OTEL_OBJECTS" }] },
+        JSON.stringify(config),
+        {
+          payloadStore: "kv",
+          includeR2Binding: false,
+        },
+      ),
     /R2 binding/,
   );
   assert.throws(
-    () => validateOtelWorkerConfig(
-      { ...config, vars: { ...config.vars, OTEL_PAYLOAD_STORE: "r2" } },
-      JSON.stringify(config),
-      { payloadStore: "kv", includeR2Binding: false },
-    ),
+    () =>
+      validateOtelWorkerConfig(
+        { ...config, vars: { ...config.vars, OTEL_PAYLOAD_STORE: "r2" } },
+        JSON.stringify(config),
+        { payloadStore: "kv", includeR2Binding: false },
+      ),
     /selector/,
   );
 });

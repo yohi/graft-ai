@@ -7,7 +7,7 @@ AI Gateway
   -> https://<worker>.workers.dev/v1/traces
   -> authenticated Worker
   -> redaction
-  -> R2 redacted envelope
+  -> KV redacted envelope (R2 is an explicit opt-in)
   -> ingress Queue
   -> Trace/Metrics Durable Objects
   -> backend Queues and DLQs
@@ -67,9 +67,10 @@ make otel-worker-validate
 
 `otel-worker-validate` checks the isolated Wrangler contract, Queue/DLQ
 topology, JSON-only configuration, forbidden inline credentials, and the
-Wrangler dry run. Terraform owns the four source Queues, four DLQs, the OTel KV
-namespace, the R2 bucket, and its seven-day `otel/` lifecycle rule. Wrangler
-owns Queue consumers and Durable Object exports.
+Wrangler dry run. Terraform owns the four source Queues, four DLQs, and the
+Workers KV namespace. The R2 bucket and its seven-day `otel/` lifecycle rule are
+retained for explicit R2 and drain deployments. Wrangler owns Queue consumers
+and Durable Object exports.
 
 Provision account resources before deploying the Worker:
 
@@ -78,18 +79,97 @@ terraform -chdir=terraform init
 terraform -chdir=terraform apply \
   -target=cloudflare_queue.otel \
   -target=cloudflare_queue.otel_dlq \
-  -target=cloudflare_workers_kv_namespace.otel_payloads \
-  -target=cloudflare_r2_bucket.otel \
-  -target=cloudflare_r2_bucket_lifecycle.otel
-export OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)"
-make render-otel-worker-config OTEL_PAYLOAD_KV_NAMESPACE_ID="$OTEL_PAYLOAD_KV_NAMESPACE_ID"
+  -target=cloudflare_workers_kv_namespace.otel_payloads
 make deploy-otel-worker
 ```
 
-The production workflow performs the same apply, output, render, secret
-synchronization, and deploy order. It deploys only the generated
-`.wrangler/otel.generated.jsonc` configuration and does not change the existing
-AI Gateway exporter configuration.
+The production workflow performs the same order, reads the non-secret KV
+namespace ID from Terraform output, runs
+`make render-otel-worker-config` to render `.wrangler/otel.generated.jsonc`,
+synchronizes the seven secrets, and deploys that generated config. It does not
+change the existing AI Gateway exporter configuration.
+
+## Payload storage, quotas, and migration
+
+`OTEL_PAYLOAD_STORE=kv` is the default. The current Worker binds the KV
+namespace as `OTEL_PAYLOAD_KV`; `OTEL_OBJECTS` is optional. Workers Free provides
+1 GB of KV storage, 1,000 writes/day, 100,000 reads/day, 1,000 deletes/day, and
+a 25 MiB value limit. The export cap is 4 MB. A free-limit error fails the
+operation and does not silently enable paid overage. Monitor read, write, delete,
+and stored-data series separately in KV Analytics or the Cloudflare GraphQL API;
+alert at 80,000 reads/day, 800 writes/day, 800 deletes/day, or 0.8 GiB stored
+data, and page on confirmed quota-related Worker failures. A delete quota failure
+does not prove that reads or writes are unavailable.
+
+KV is eventually consistent. The first Queue delivery for a pointer to a KV
+payload is delayed by 60 seconds, and bounded stale-read retries use
+`KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS`. Queue messages contain no raw payload;
+they carry payload-store pointers:
+schema-version-1 pointers always select R2, while schema-version-2 pointers
+persist their backend identity. The `DEDUPLICATION_TOMBSTONE_MS` and
+`PAYLOAD_RETENTION_FAILSAFE_MS` windows must both be considered before removing
+the final dual binding.
+
+### Initial KV deployment
+
+Apply the source Queues, DLQs, and KV namespace, obtain the Terraform output, and
+deploy the generated KV-only config:
+
+```bash
+terraform -chdir=terraform apply \
+  -target=cloudflare_queue.otel \
+  -target=cloudflare_queue.otel_dlq \
+  -target=cloudflare_workers_kv_namespace.otel_payloads
+OTEL_PAYLOAD_STORE=kv \
+  OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)" \
+  make deploy-otel-worker
+make otel-worker-smoke
+```
+
+### R2 opt-in
+
+Use R2 only after enabling the R2 subscription and granting R2 Storage Write:
+
+```bash
+OTEL_PAYLOAD_STORE=r2 \
+  OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)" \
+  make deploy-otel-worker
+```
+
+The renderer includes both `OTEL_PAYLOAD_KV` and `OTEL_OBJECTS`, so existing KV
+pointers remain readable while new pointers use R2. Verify the selected backend
+with the synthetic OTLP smoke test.
+
+### R2-to-KV drain
+
+Set `OTEL_PAYLOAD_STORE=kv OTEL_PAYLOAD_R2_DRAIN=true` and deploy the dual-binding
+configuration:
+
+```bash
+OTEL_PAYLOAD_STORE=kv \
+  OTEL_PAYLOAD_R2_DRAIN=true \
+  OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)" \
+  make deploy-otel-worker
+cd workers && npm run test:otel:kv-r2-drain
+```
+
+Verify that new payloads use KV while schema-version-1 and schema-version-2 R2
+pointers both read and delete through R2. Replay every recoverable R2 pointer
+from its matching source Queue when draining a DLQ. Keep the dual binding until
+source Queues are empty and at least
+`DEDUPLICATION_TOMBSTONE_MS + PAYLOAD_RETENTION_FAILSAFE_MS` has elapsed since the
+final R2 write. Keep it through the configured 24-hour DLQ retention for entries
+that are intentionally not replayed. Do not delete the R2 bucket during a
+normal rollback.
+
+### KV quota or delete incident
+
+Select R2 for new writes only when Cloudflare confirms a quota error or a
+threshold forecasts exhaustion before the next 00:00 UTC reset. Deploy the
+dual-binding R2 config and keep KV until old KV pointers complete or their
+seven-day `expirationTtl` expires. For a transient non-quota delete failure,
+keep the KV selector, alert and investigate, and rely on KV expiration as the
+cleanup failsafe. The R2 lifecycle rule never cleans up KV payloads.
 
 ## AI Gateway configuration
 
@@ -104,9 +184,9 @@ Content type: json
 
 The only accepted request is `POST /v1/traces` with
 `Content-Type: application/json` and no compression or `identity` compression.
-The Worker returns `200` after the redacted R2 pointer and ingress Queue
-handoff are durable. Queue and backend delivery are at-least-once; do not treat
-the Grafana HTTP POST as exactly-once.
+The Worker returns `200` after the redacted payload-store pointer and ingress
+Queue handoff are durable. Queue and backend delivery are at-least-once; do not
+treat the Grafana HTTP POST as exactly-once.
 
 ## Grafana verification
 
@@ -133,16 +213,17 @@ OtelIngressRateLimited
 ## DLQ and replay safety
 
 Inspect source Queues and backend-specific DLQs with Wrangler. A DLQ message is
-an R2 pointer, not a raw OTLP payload. Preserve the pointer and its ledger
-state during investigation. Confirm the R2 checksum and object retention before
-replaying it; never edit the payload or construct a replacement pointer by
-hand.
+a payload-store pointer, not a raw OTLP payload. Preserve the pointer and its
+ledger state during investigation. For R2-backed pointers, including
+schema-version-1 pointers and schema-version-2 pointers retained during an R2
+drain, confirm the R2 checksum and object retention before replaying them;
+never edit the payload or construct a replacement pointer by hand.
 
 Terminal Grafana responses and exhausted retries are deliberately left
 visible to the matching DLQ. Network failures, timeouts, and `408`/`429`/`5xx`
 responses remain retryable for up to three attempts. Confirmed completion is
-recorded before the R2 object is deleted. A response lost after bytes may have
-been sent remains an explicit at-least-once outcome.
+recorded before the payload-store object is deleted. A response lost after bytes
+may have been sent remains an explicit at-least-once outcome.
 
 Observe for at least 24 hours. Confirm that no DLQ grows unexpectedly,
 `otel_backend_export_exhausted_total` remains stable, Queue saturation stays

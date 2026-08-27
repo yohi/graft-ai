@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueBackendJob } from "../../src/otel/exporter";
 import { handleQueue } from "../../src/otel/queue";
 import { payloadStoreForPointer, sha256Hex } from "../../src/otel/storage";
@@ -10,6 +10,11 @@ const otelEnv = {
   GRAFANA_CLOUD_OTLP_TRACES_URL: "https://tempo.example/v1/traces",
   GRAFANA_CLOUD_OTLP_AUTHORIZATION: "Basic tempo-token",
 } as OtelEnv;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("OTel backend Queue consumer", () => {
   it("acknowledges a successful export and does not post a duplicate", async () => {
@@ -115,4 +120,48 @@ describe("OTel backend Queue consumer", () => {
     expect(message.retry).toHaveBeenNthCalledWith(1, { delaySeconds: 5 });
     expect(message.retry).toHaveBeenNthCalledWith(2, { delaySeconds: 15 });
   });
+
+  it.skipIf(!otelEnv.OTEL_OBJECTS)(
+    "retries an R2 payload read after a temporary failure",
+    async () => {
+      const testEnv = { ...otelEnv, OTEL_PAYLOAD_STORE: "r2" } as OtelEnv;
+      const bytes = new TextEncoder().encode('{"resourceSpans":[]}');
+      const descriptor: JobDescriptor = {
+        jobId: `queue-r2-temporary-read-${crypto.randomUUID()}`,
+        backend: "tempo",
+        contentType: "application/json",
+        identity: { kind: "trace", traceId: "223344556677889900aabbccddeeff11" },
+        payloadSha256: await sha256Hex(bytes),
+      };
+      const pointer = await enqueueBackendJob(testEnv, descriptor, bytes);
+      try {
+        const objects = testEnv.OTEL_OBJECTS;
+        if (!objects) throw new Error("R2 payload binding is unavailable");
+        const getSpy = vi
+          .spyOn(objects, "get")
+          .mockRejectedValue(new Error("temporary R2 read failure"));
+
+        const message = {
+          body: pointer,
+          attempts: 1,
+          id: "message-r2-temporary-read",
+          timestamp: new Date(),
+          ack: vi.fn(),
+          retry: vi.fn(),
+        } as unknown as Message<QueuePointer>;
+        const batch = {
+          queue: "graft-ai-aig-otel-tempo-v1",
+          messages: [message],
+        } as unknown as MessageBatch<QueuePointer>;
+
+        await handleQueue(batch, testEnv, {} as ExecutionContext);
+
+        expect(getSpy).toHaveBeenCalled();
+        expect(message.ack).not.toHaveBeenCalled();
+        expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 5 });
+      } finally {
+        await payloadStoreForPointer(testEnv, pointer).deleteObject(pointer);
+      }
+    },
+  );
 });

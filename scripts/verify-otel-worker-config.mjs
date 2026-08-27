@@ -7,14 +7,13 @@ const expectedQueues = {
   OTEL_TEMPO_QUEUE: "graft-ai-aig-otel-tempo-v1",
   OTEL_LOKI_QUEUE: "graft-ai-aig-otel-loki-v1",
   OTEL_PROMETHEUS_QUEUE: "graft-ai-aig-otel-prometheus-v1",
-};
-
-const expectedDlqQueues = {
   OTEL_INGRESS_DLQ: "graft-ai-aig-otel-ingress-dlq-v1",
   OTEL_TEMPO_DLQ: "graft-ai-aig-otel-tempo-dlq-v1",
   OTEL_LOKI_DLQ: "graft-ai-aig-otel-loki-dlq-v1",
   OTEL_PROMETHEUS_DLQ: "graft-ai-aig-otel-prometheus-dlq-v1",
 };
+
+const expectedQueueMaxRetries = 7;
 
 const expectedConsumers = [
   "graft-ai-aig-otel-ingress-v1",
@@ -26,7 +25,10 @@ const expectedConsumers = [
 export function validateOtelWorkerConfig(
   config,
   rawConfig,
-  { payloadStore = config.vars?.OTEL_PAYLOAD_STORE ?? "kv", includeR2Binding } = {},
+  {
+    payloadStore = config.vars?.OTEL_PAYLOAD_STORE ?? "kv",
+    includeR2Binding,
+  } = {},
 ) {
   validateBasicConfig(config, rawConfig);
   validateQueues(config);
@@ -60,19 +62,17 @@ function validateBasicConfig(config, rawConfig) {
 }
 
 function validateQueues(config) {
+  const producerEntries = config.queues?.producers ?? [];
+  if (producerEntries.length !== 8)
+    throw new Error("OTel Worker must have four source and four DLQ producers");
   const producers = new Map(
-    (config.queues?.producers ?? []).map((entry) => [
-      entry.binding,
-      entry.queue,
-    ]),
+    producerEntries.map((entry) => [entry.binding, entry.queue]),
   );
+  if (producers.size !== producerEntries.length)
+    throw new Error("OTel Worker must not have duplicate producer bindings");
   for (const [binding, queue] of Object.entries(expectedQueues)) {
     if (producers.get(binding) !== queue)
       throw new Error(`missing producer ${binding}`);
-  }
-  for (const [binding, queue] of Object.entries(expectedDlqQueues)) {
-    if (producers.get(binding) !== queue)
-      throw new Error(`missing DLQ producer ${binding}`);
   }
   if (producers.size !== 8)
     throw new Error("OTel Worker must have four source and four DLQ producers");
@@ -85,7 +85,7 @@ function validateQueues(config) {
     if (
       !consumer ||
       consumer.dead_letter_queue !== expectedDeadLetterQueue ||
-      consumer.max_retries !== 7
+      consumer.max_retries !== expectedQueueMaxRetries
     ) {
       throw new Error(`consumer contract is incomplete for ${queue}`);
     }
@@ -97,7 +97,9 @@ function validateStorage(config, { payloadStore, includeR2Binding }) {
     throw new Error("OTEL_PAYLOAD_STORE must be kv or r2");
   }
   if (config.vars?.OTEL_PAYLOAD_STORE !== payloadStore) {
-    throw new Error("OTEL_PAYLOAD_STORE selector does not match the selected mode");
+    throw new Error(
+      "OTEL_PAYLOAD_STORE selector does not match the selected mode",
+    );
   }
   const kvBindings = config.kv_namespaces ?? [];
   const kvBinding = kvBindings.find(
@@ -105,7 +107,9 @@ function validateStorage(config, { payloadStore, includeR2Binding }) {
   );
   if (
     !kvBinding ||
-    !/^(?:__OTEL_PAYLOAD_KV_NAMESPACE_ID__|[0-9a-f]{32})$/i.test(kvBinding.id ?? "")
+    !/^(?:__OTEL_PAYLOAD_KV_NAMESPACE_ID__|[0-9a-f]{32})$/i.test(
+      kvBinding.id ?? "",
+    )
   ) {
     throw new Error("OTEL_PAYLOAD_KV namespace binding is missing or invalid");
   }

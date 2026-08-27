@@ -153,6 +153,31 @@ when `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true`, all three must be configured
 before any Grafana API call. Expression datasource UID `-100` and unrelated
 UIDs remain unchanged.
 
+#### OTel Worker payload store
+
+The dedicated Worker defaults to `OTEL_PAYLOAD_STORE=kv` and stores redacted
+payloads in the `OTEL_PAYLOAD_KV` binding. `OTEL_OBJECTS` is an optional R2
+binding, required only for `OTEL_PAYLOAD_STORE=r2` or an explicit
+`OTEL_PAYLOAD_R2_DRAIN=true` deployment. Workers Free provides a 1 GB KV
+storage allowance, 1,000 writes/day, 100,000 reads/day, 1,000 deletes/day, and
+a 25 MiB value limit. The 4 MB export payload cap is below that value limit;
+free-limit exhaustion fails the operation rather than enabling paid overage.
+
+KV eventual consistency requires a 60-second first Queue delivery delay. New
+Queue pointers use schema version 2 and persist `storageBackend`. Schema-version-1
+pointers always read and delete through R2, and schema-version-2 R2 pointers
+remain R2-backed during a KV/R2 drain regardless of the current write selector.
+
+Cloudflare KV Analytics or the GraphQL API is the source of truth for four
+independent monitoring dimensions: read operations, write operations, delete
+operations, and stored data. Alert at 80,000 reads/day, 800 writes/day, 800
+deletes/day, or 0.8 GiB stored data; page only on a confirmed quota-related
+Worker failure. A delete quota failure does not prove that writes or reads are
+unavailable. R2 selection is a manual response to confirmed quota exhaustion or
+a forecast before the next 00:00 UTC reset, never an automatic reaction to one
+transient delete error. R2 lifecycle rules apply only to R2 payloads and never
+clean up KV payloads.
+
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 
 A scheduled Worker (cron `* * * * *`) derives session and weekly rate-limit

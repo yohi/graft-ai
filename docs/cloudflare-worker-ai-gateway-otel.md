@@ -101,9 +101,10 @@ alert at 80,000 reads/day, 800 writes/day, 800 deletes/day, or 0.8 GiB stored
 data, and page on confirmed quota-related Worker failures. A delete quota failure
 does not prove that reads or writes are unavailable.
 
-KV is eventually consistent. The first Queue delivery for a KV pointer is
-delayed by 60 seconds, and bounded stale-read retries use
-`KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS`. Queue pointers contain no raw payload:
+KV is eventually consistent. The first Queue delivery for a pointer to a KV
+payload is delayed by 60 seconds, and bounded stale-read retries use
+`KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS`. Queue messages contain no raw payload;
+they carry payload-store pointers:
 schema-version-1 pointers always select R2, while schema-version-2 pointers
 persist their backend identity. The `DEDUPLICATION_TOMBSTONE_MS` and
 `PAYLOAD_RETENTION_FAILSAFE_MS` windows must both be considered before removing
@@ -183,9 +184,9 @@ Content type: json
 
 The only accepted request is `POST /v1/traces` with
 `Content-Type: application/json` and no compression or `identity` compression.
-The Worker returns `200` after the redacted R2 pointer and ingress Queue
-handoff are durable. Queue and backend delivery are at-least-once; do not treat
-the Grafana HTTP POST as exactly-once.
+The Worker returns `200` after the redacted payload-store pointer and ingress
+Queue handoff are durable. Queue and backend delivery are at-least-once; do not
+treat the Grafana HTTP POST as exactly-once.
 
 ## Grafana verification
 
@@ -212,16 +213,17 @@ OtelIngressRateLimited
 ## DLQ and replay safety
 
 Inspect source Queues and backend-specific DLQs with Wrangler. A DLQ message is
-an R2 pointer, not a raw OTLP payload. Preserve the pointer and its ledger
-state during investigation. Confirm the R2 checksum and object retention before
-replaying it; never edit the payload or construct a replacement pointer by
-hand.
+a payload-store pointer, not a raw OTLP payload. Preserve the pointer and its
+ledger state during investigation. For R2-backed pointers, including
+schema-version-1 pointers and schema-version-2 pointers retained during an R2
+drain, confirm the R2 checksum and object retention before replaying them;
+never edit the payload or construct a replacement pointer by hand.
 
 Terminal Grafana responses and exhausted retries are deliberately left
 visible to the matching DLQ. Network failures, timeouts, and `408`/`429`/`5xx`
 responses remain retryable for up to three attempts. Confirmed completion is
-recorded before the R2 object is deleted. A response lost after bytes may have
-been sent remains an explicit at-least-once outcome.
+recorded before the payload-store object is deleted. A response lost after bytes
+may have been sent remains an explicit at-least-once outcome.
 
 Observe for at least 24 hours. Confirm that no DLQ grows unexpectedly,
 `otel_backend_export_exhausted_total` remains stable, Queue saturation stays

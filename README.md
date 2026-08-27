@@ -46,10 +46,10 @@ The current support status and planned roadmap items are summarized below:
 - **Provider Metrics Worker:** Fetches Codex, OpenAI API, and OpenCodeGo usage
   every minute and pushes OTLP/v1 metrics to Grafana Cloud Prometheus.
 - **AI Gateway OTel pipeline:** Receives OTLP/JSON through a dedicated
-  `workers.dev` Worker, redacts credentials before R2/Queue handoff, elects
-  request spans, applies one deterministic trace decision, and asynchronously
-  exports Tempo metadata, redacted Loki payload logs, and unsampled Prometheus
-  RED metrics.
+  `workers.dev` Worker, redacts credentials before payload store/Queue handoff,
+  elects request spans, applies one deterministic trace decision, and
+  asynchronously exports Tempo metadata, redacted Loki payload logs, and
+  unsampled Prometheus RED metrics.
 
 The OTel Worker path is independent of Logpush and proxy routing. The
 deployment, secret, Queue/DLQ, Grafana verification, and rollback procedure is
@@ -79,8 +79,9 @@ dedicated Worker has completed its controlled observation window.
 Configure the AI Gateway exporter with the dedicated Worker URL, a Bearer token
 stored as the `OTEL_INGEST_TOKEN` Wrangler secret, and JSON content type. The
 Worker stores only redacted payloads under `otel/` in the configured payload
-store; Queue messages contain only SHA-256-verified pointers. Backend queues and
-DLQs are isolated per Tempo, Loki, and Prometheus destination.
+store; Queue messages contain only SHA-256-verified payload-store pointers.
+Backend queues and DLQs are isolated per Tempo, Loki, and Prometheus
+destination.
 
 #### OTel payload storage and migration
 

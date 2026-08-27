@@ -35,6 +35,26 @@ test("dedicated OTel Worker owns its isolated runtime contract", () => {
   );
 });
 
+test("rejects duplicate Queue producer bindings", () => {
+  const invalid = structuredClone(config);
+  invalid.queues.producers[1].binding = invalid.queues.producers[0].binding;
+
+  assert.throws(
+    () => validateOtelWorkerConfig(invalid, JSON.stringify(invalid)),
+    /duplicate producer binding/,
+  );
+});
+
+test("rejects extra Queue producer entries", () => {
+  const invalid = structuredClone(config);
+  invalid.queues.producers.push(structuredClone(invalid.queues.producers[0]));
+
+  assert.throws(
+    () => validateOtelWorkerConfig(invalid, JSON.stringify(invalid)),
+    /four source and four DLQ producers/,
+  );
+});
+
 test("renders KV-default, R2, and KV/R2-drain binding contracts", () => {
   const options = {
     kvNamespaceId: "00000000000000000000000000000000",

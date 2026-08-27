@@ -62,12 +62,14 @@ function validateBasicConfig(config, rawConfig) {
 }
 
 function validateQueues(config) {
+  const producerEntries = config.queues?.producers ?? [];
+  if (producerEntries.length !== 8)
+    throw new Error("OTel Worker must have four source and four DLQ producers");
   const producers = new Map(
-    (config.queues?.producers ?? []).map((entry) => [
-      entry.binding,
-      entry.queue,
-    ]),
+    producerEntries.map((entry) => [entry.binding, entry.queue]),
   );
+  if (producers.size !== producerEntries.length)
+    throw new Error("OTel Worker must not have duplicate producer bindings");
   for (const [binding, queue] of Object.entries(expectedQueues)) {
     if (producers.get(binding) !== queue)
       throw new Error(`missing producer ${binding}`);

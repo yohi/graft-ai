@@ -134,30 +134,34 @@ describe("OTel backend Queue consumer", () => {
         payloadSha256: await sha256Hex(bytes),
       };
       const pointer = await enqueueBackendJob(testEnv, descriptor, bytes);
-      const objects = testEnv.OTEL_OBJECTS;
-      if (!objects) throw new Error("R2 payload binding is unavailable");
-      const getSpy = vi
-        .spyOn(objects, "get")
-        .mockRejectedValue(new Error("temporary R2 read failure"));
+      try {
+        const objects = testEnv.OTEL_OBJECTS;
+        if (!objects) throw new Error("R2 payload binding is unavailable");
+        const getSpy = vi
+          .spyOn(objects, "get")
+          .mockRejectedValue(new Error("temporary R2 read failure"));
 
-      const message = {
-        body: pointer,
-        attempts: 1,
-        id: "message-r2-temporary-read",
-        timestamp: new Date(),
-        ack: vi.fn(),
-        retry: vi.fn(),
-      } as unknown as Message<QueuePointer>;
-      const batch = {
-        queue: "graft-ai-aig-otel-tempo-v1",
-        messages: [message],
-      } as unknown as MessageBatch<QueuePointer>;
+        const message = {
+          body: pointer,
+          attempts: 1,
+          id: "message-r2-temporary-read",
+          timestamp: new Date(),
+          ack: vi.fn(),
+          retry: vi.fn(),
+        } as unknown as Message<QueuePointer>;
+        const batch = {
+          queue: "graft-ai-aig-otel-tempo-v1",
+          messages: [message],
+        } as unknown as MessageBatch<QueuePointer>;
 
-      await handleQueue(batch, testEnv, {} as ExecutionContext);
+        await handleQueue(batch, testEnv, {} as ExecutionContext);
 
-      expect(getSpy).toHaveBeenCalled();
-      expect(message.ack).not.toHaveBeenCalled();
-      expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 5 });
+        expect(getSpy).toHaveBeenCalled();
+        expect(message.ack).not.toHaveBeenCalled();
+        expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 5 });
+      } finally {
+        await payloadStoreForPointer(testEnv, pointer).deleteObject(pointer);
+      }
     },
   );
 });

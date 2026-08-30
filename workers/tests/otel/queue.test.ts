@@ -189,7 +189,7 @@ describe("OTel backend Queue consumer", () => {
       if (!kvNamespace) throw new Error("KV payload binding is unavailable");
       const getSpy = vi
         .spyOn(kvNamespace, "getWithMetadata")
-        .mockImplementation(async () => ({ value: null, metadata: null }) as any);
+        .mockRejectedValue(new Error("temporary KV read failure"));
 
       const dlq = {
         send: vi.fn(async (_pointer: QueuePointer) => undefined),

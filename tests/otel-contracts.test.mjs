@@ -11,6 +11,7 @@ import {
 } from "../deploy/otel/contracts/encoding.mjs";
 import {
   extractPrometheusRetentionValues,
+  hasOnlyLoopbackGrafanaPorts,
   hasCanonicalPrometheusRetention,
 } from "../scripts/verify-otel-config.mjs";
 
@@ -289,4 +290,16 @@ test("detects invalid or multiple self-hosted Prometheus retention flags", () =>
   ]) {
     assert.equal(hasCanonicalPrometheusRetention(invalidCompose), false);
   }
+});
+
+test("requires every Grafana host port mapping to use loopback", () => {
+  const validBlock = [
+    "  grafana:",
+    "    ports:",
+    '      - "127.0.0.1:3000:3000"',
+  ].join("\n");
+  const mixedBlock = [validBlock, '      - "0.0.0.0:3001:3000"'].join("\n");
+
+  assert.equal(hasOnlyLoopbackGrafanaPorts(validBlock), true);
+  assert.equal(hasOnlyLoopbackGrafanaPorts(mixedBlock), false);
 });

@@ -91,8 +91,11 @@ render-otel-worker-config:
 	case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false) ;; *) printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false.' >&2; exit 1 ;; esac; \
 	if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2; exit 1; fi; \
 	namespace_id="$(OTEL_PAYLOAD_KV_NAMESPACE_ID)"; \
-	if [ -z "$$namespace_id" ]; then namespace_id="$$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)"; fi; \
-	test -n "$$namespace_id"; \
+	case "$$namespace_id" in \
+	  "") printf '%s\n' 'Set OTEL_PAYLOAD_KV_NAMESPACE_ID before rendering the OTel Worker config.' >&2; exit 1 ;; \
+	  *[!0-9a-fA-F]*) printf '%s\n' 'OTEL_PAYLOAD_KV_NAMESPACE_ID must be a 32-character hex string.' >&2; exit 1 ;; \
+	esac; \
+	if [ "$${#namespace_id}" -ne 32 ]; then printf '%s\n' 'OTEL_PAYLOAD_KV_NAMESPACE_ID must be a 32-character hex string.' >&2; exit 1; fi; \
 	r2_flag=""; \
 	if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] || [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then r2_flag="--include-r2-binding"; fi; \
 	node scripts/render-otel-worker-config.mjs \

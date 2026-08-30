@@ -110,14 +110,23 @@ test("resolveGrafanaDatasourceUids preserves self-hosted defaults when required 
   });
   assert.deepEqual(
     resolveGrafanaDatasourceUids({
-      GRAFANA_OTEL_LOKI_DATASOURCE_UID: " cloud-loki ",
       GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED: "false",
     }),
     {
       prometheus: "otel-prometheus",
-      loki: "cloud-loki",
+      loki: "otel-loki",
       tempo: "otel-tempo",
     },
+  );
+});
+
+test("resolveGrafanaDatasourceUids rejects partial optional UID configuration", () => {
+  assert.throws(
+    () =>
+      resolveGrafanaDatasourceUids({
+        GRAFANA_OTEL_LOKI_DATASOURCE_UID: "cloud-loki",
+      }),
+    /Partial Grafana Cloud OTel datasource UID/,
   );
 });
 

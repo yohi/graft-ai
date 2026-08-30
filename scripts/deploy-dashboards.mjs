@@ -81,6 +81,13 @@ export function resolveGrafanaDatasourceUids(env = process.env) {
         `Grafana Cloud OTel datasource UIDs are required when GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true. Missing: ${missing.join(", ")}`,
       );
     }
+  } else {
+    const provided = Object.values(configured).filter(Boolean);
+    if (provided.length > 0 && provided.length < 3) {
+      throw new Error(
+        "Partial Grafana Cloud OTel datasource UID configuration is not allowed. Provide all three UIDs or none.",
+      );
+    }
   }
 
   return {

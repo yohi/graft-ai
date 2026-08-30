@@ -59,7 +59,7 @@ function verifyOtelConfig() {
   if (!compose.includes("OTEL_TRUSTED_PROXY_CIDRS: 172.30.0.10/32")) {
     throw new Error("production Compose must trust only the cloudflared address");
   }
-  for (const service of ["alloy", "tempo", "loki", "prometheus", "cloudflared", "grafana"]) {
+  for (const service of ["alloy", "tempo", "loki", "prometheus", "cloudflared"]) {
     const block = compose.match(new RegExp(`\\n  ${service}:[\\s\\S]*?(?=\\n  [a-z]|\\nvolumes:)`))?.[0] ?? "";
     if (block === "") {
       throw new Error(`${service} block not found in OTel Compose`);
@@ -67,6 +67,14 @@ function verifyOtelConfig() {
     if (block.includes("\n    ports:")) {
       throw new Error(`${service} must not publish a host port`);
     }
+  }
+  const grafanaBlock = compose.match(/\n  grafana:[\s\S]*?(?=\n  [a-z]|\nvolumes:)/)?.[0] ?? "";
+  if (grafanaBlock === "") {
+    throw new Error("grafana block not found in OTel Compose");
+  }
+  const grafanaPortMatch = grafanaBlock.match(/\n    ports:\s*\n      - "([^"]+)"/);
+  if (!grafanaPortMatch || !grafanaPortMatch[1].startsWith("127.0.0.1:")) {
+    throw new Error("grafana must publish a loopback host port only");
   }
   if (!compose.includes("--web.enable-otlp-receiver") || !compose.includes("--enable-feature=otlp-deltatocumulative")) {
     throw new Error("Prometheus OTLP receiver is not enabled with delta-to-cumulative conversion");

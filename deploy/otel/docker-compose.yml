@@ -19,6 +19,8 @@ services:
       - prometheus
     networks:
       - otel
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
 
   alloy:
     build:

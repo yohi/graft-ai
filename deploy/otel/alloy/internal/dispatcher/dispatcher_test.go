@@ -84,6 +84,23 @@ func TestRetryPolicy_retries_transient_statuses_only(t *testing.T) {
 	}
 }
 
+func TestRetryPolicy_clamps_wait_delay_to_five_seconds(t *testing.T) {
+	policy := DefaultRetryPolicy()
+	policy.Backoff = []time.Duration{10 * time.Second, 20 * time.Second}
+	policy.Jitter = func(d time.Duration) time.Duration { return d }
+	policy.Sleep = func(ctx context.Context, d time.Duration) error {
+		if d > 5*time.Second {
+			t.Fatalf("delay %v exceeds 5s cap", d)
+		}
+		return nil
+	}
+	for i := range len(policy.Backoff) {
+		if err := policy.wait(context.Background(), i); err != nil {
+			t.Fatalf("wait %d: %v", i, err)
+		}
+	}
+}
+
 func TestDispatcher_records_evicted_items_as_queue_drops(t *testing.T) {
 	dispatcher, err := NewDispatcher(DispatcherConfig{Backends: map[Backend]BackendConfig{
 		Tempo: {URL: "http://tempo.invalid", MaxItems: 1, MaxBytes: 1024},

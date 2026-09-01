@@ -314,6 +314,10 @@ not drift between implementations.
 - Durable Object aggregation parameters: the trace aggregate flushes trace
   state after a one-second idle alarm; the metrics aggregate flushes DELTA
   sample windows every 30 seconds or 200 samples, whichever comes first.
+- Before envelope serialization, object keys inside JSON-encoded string
+  payload attributes are recursively sorted in lexical order while array order
+  is preserved. This canonicalization makes equivalent payloads produce the
+  same canonical envelope bytes, `ingressId`, and `payloadSha256`.
 - `ingressId = SHA-256("graft-ai-otel-ingress-v1" || NUL || canonical_redacted_envelope_bytes)`;
   a matching ID with the same payload hash is an accepted duplicate, while an
   existing ID with a different hash is a collision that fails without mutating

@@ -60,6 +60,11 @@ Loki に push します。
 | Loki             | Grafana Cloud managed                                                | 変換後 logs を14日間保存します。                                         |
 | Proxy Worker     | Wrangler (`workers/src/proxy.ts`)                                    | X-Proxy-Secret を検証し、AI Gateway に転送して上流レスポンスを返します。 |
 | Tail Worker      | 有料プランのオプションコンポーネント                                 | Free Tier proxy-only mode では使用しません。                             |
+| Ollama Cloud Worker   | Wrangler (`workers/src/ollama-cloud.ts`)                             | 厳密な ISO 8601 anchor から reset metrics を算出し、OTLP metrics を push します。 |
+| Ollama Cloud alerts   | Grafana Alerting API (`grafana/alerts/`)                              | Prometheus metrics から session/weekly reset alert を発火します。             |
+| Dashboard             | `grafana/dashboards/graft-ai-overview.json`                           | 13 パネルの Grafana dashboard を gcx API 経由で import します。                |
+| Ollama dashboard      | `grafana/dashboards/graft-ai-ollama-cloud.json`                       | Ollama Cloud reset metrics dashboard を gcx API 経由で import します。         |
+| Grafana Access Policy | Terraform (`terraform/grafana/`) または手動                           | OTel と Loki/Prometheus delivery 用の `logs:write`、`metrics:write`、`traces:write` scope を持つ Cloud Access Policy を管理します。 |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
@@ -312,6 +317,10 @@ R2 lifecycle rule は R2 payload だけに適用し、KV payload は削除しま
 - Durable Object aggregation のパラメータ: trace aggregate は 1 秒の idle alarm で
   trace state を flush し、metrics aggregate は 30 秒または 200 sample の先着で
   DELTA sample window を flush します。
+- envelope を serialize する前に、文字列として格納された payload JSON 内の
+  オブジェクトキーを再帰的に辞書順でソートします（配列の順序は保持します）。この
+  canonicalization により、同値の payload は同じ canonical envelope bytes、`ingressId`、
+  `payloadSha256` を生成します。
 - `ingressId = SHA-256("graft-ai-otel-ingress-v1" || NUL || canonical_redacted_envelope_bytes)`
   です。同一 ID で payload hash が一致すれば accepted duplicate、hash が異なれば元の
   状態を変更せず collision として失敗させます。AI Gateway の delivery ID

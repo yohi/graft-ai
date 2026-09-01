@@ -119,6 +119,11 @@ output "grafana_otlp_url" {
   value       = data.grafana_cloud_stack.this.otlp_url
 }
 
+output "grafana_otlp_username" {
+  description = "Grafana Cloud OTLP gateway username (stack ID)"
+  value       = tostring(data.grafana_cloud_stack.this.id)
+}
+
 output "grafana_access_policy_token" {
   description = "Telemetry Access Policy Token with logs:write, metrics:write, and traces:write"
   value       = grafana_cloud_access_policy_token.telemetry_write.token

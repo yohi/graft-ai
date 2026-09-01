@@ -83,6 +83,15 @@ store; Queue messages contain only SHA-256-verified payload-store pointers.
 Backend queues and DLQs are isolated per Tempo, Loki, and Prometheus
 destination.
 
+The metrics Durable Object keeps serialized cumulative state below 1,500,000
+UTF-8 bytes, below the SQLite-backed Durable Object 2 MiB value limit. Per-series
+start times are stored on the samples and the last-flush record contains only
+compact metadata. When cumulative state or an export payload reaches its cap,
+the Worker rolls over to the current flush window; if that window alone is too
+large, `/append` returns HTTP 413 with `metrics_window_too_large` and enqueues
+nothing instead of silently dropping samples. An alarm reports the same failure
+outside the Durable Object concurrency gate.
+
 #### OTel payload storage and migration
 
 `OTEL_PAYLOAD_STORE=kv` is the default. The Worker binds the payload namespace

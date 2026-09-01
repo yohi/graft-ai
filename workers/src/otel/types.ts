@@ -45,6 +45,7 @@ export type MetricSample = Readonly<{
   count?: string;
   bucketCounts?: readonly string[];
   explicitBounds?: readonly number[];
+  startTimeUnixNano?: string;
 }>;
 
 export type MetricWindow = Readonly<{

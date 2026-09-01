@@ -1,14 +1,26 @@
-import { METRICS_FLUSH_INTERVAL_MS, METRICS_FLUSH_SAMPLE_LIMIT } from "./contracts";
+import {
+  MAX_GRAFANA_OTLP_BYTES,
+  MAX_METRICS_STATE_BYTES,
+  METRICS_FLUSH_INTERVAL_MS,
+  METRICS_FLUSH_SAMPLE_LIMIT,
+} from "./contracts";
 import { enqueueBackendJob, metricsJobId } from "./exporter";
+import {
+  aggregateKey,
+  isRecord,
+  METRICS_WINDOW_TOO_LARGE_MESSAGE,
+  mergeSample,
+  mergeSamples,
+  readNumber,
+  readSamples,
+  stateSizeBytes,
+  toNanoseconds,
+  type FlushResult,
+  type MetricsState,
+} from "./metrics-aggregate-state";
 import { encodeMetricsJson } from "./otlp-json";
 import { sha256Hex } from "./storage";
-import type { JsonValue, MetricSample, OtelEnv } from "./types";
-
-type MetricsState = Readonly<{
-  windowStartMs: number | null;
-  samples: readonly MetricSample[];
-  sampleIds: readonly string[];
-}>;
+import type { OtelEnv } from "./types";
 
 export class OtelMetricsAggregate {
   constructor(
@@ -37,7 +49,7 @@ export class OtelMetricsAggregate {
       let aggregate = [...current.samples];
       let accepted = 0;
       for (const sample of samples) {
-        const id = sampleId(sample);
+        const id = sample.sampleId;
         if (ids.has(id)) continue;
         ids.add(id);
         aggregate = mergeSample(aggregate, sample);
@@ -46,19 +58,32 @@ export class OtelMetricsAggregate {
       const windowStartMs = current.windowStartMs ?? (accepted > 0 ? nowMs : null);
       const shouldFlush = ids.size >= METRICS_FLUSH_SAMPLE_LIMIT;
       if (shouldFlush) {
-        await this.flush(aggregate, windowStartMs ?? nowMs, nowMs);
-        await this.state.storage.put("metrics", {
-          windowStartMs: null,
-          samples: [],
-          sampleIds: [],
-        } satisfies MetricsState);
+        const result = await this.flush(
+          {
+            ...current,
+            windowStartMs,
+            samples: aggregate,
+            sampleIds: [...ids],
+          },
+          nowMs,
+        );
+        if (result.kind === "too_large") return metricsWindowTooLargeResponse();
+        await this.state.storage.put("metrics", result.state satisfies MetricsState);
         return Response.json({ accepted, pending: 0, flushed: true });
       }
-      await this.state.storage.put("metrics", {
+      const pendingState: MetricsState = {
+        ...current,
         windowStartMs,
         samples: aggregate,
         sampleIds: [...ids],
-      } satisfies MetricsState);
+      };
+      if (stateSizeBytes(pendingState) > MAX_METRICS_STATE_BYTES) {
+        const result = await this.flush(pendingState, nowMs);
+        if (result.kind === "too_large") return metricsWindowTooLargeResponse();
+        await this.state.storage.put("metrics", result.state satisfies MetricsState);
+        return Response.json({ accepted, pending: 0, flushed: true });
+      }
+      await this.state.storage.put("metrics", pendingState);
       if (windowStartMs !== null)
         await this.state.storage.setAlarm(windowStartMs + METRICS_FLUSH_INTERVAL_MS);
       return Response.json({ accepted, pending: ids.size, flushed: false });
@@ -66,28 +91,73 @@ export class OtelMetricsAggregate {
   }
 
   async alarm(): Promise<void> {
-    await this.state.blockConcurrencyWhile(async () => {
+    const tooLarge = await this.state.blockConcurrencyWhile(async () => {
       const current = await this.state.storage.get<MetricsState>("metrics");
-      if (!current || current.samples.length === 0 || current.windowStartMs === null) return;
-      await this.flush(current.samples, current.windowStartMs, Date.now());
-      await this.state.storage.put("metrics", {
+      if (!current || current.samples.length === 0 || current.windowStartMs === null) return false;
+      const result = await this.flush(current, Date.now());
+      if (result.kind === "too_large") return true;
+      await this.state.storage.put("metrics", result.state satisfies MetricsState);
+      return false;
+    });
+    if (tooLarge) throw new Error(METRICS_WINDOW_TOO_LARGE_MESSAGE);
+  }
+
+  private async flush(current: MetricsState, endMs: number): Promise<FlushResult> {
+    const cumulativeSamples = mergeSamples(current.cumulativeSamples ?? [], current.samples);
+    const cumulativeStartMs = current.cumulativeStartMs ?? current.windowStartMs ?? endMs;
+    const legacyStartTimesMs = current.cumulativeStartTimesMs ?? {};
+    const samplesWithStartTimes = cumulativeSamples.map((sample) => ({
+      ...sample,
+      startTimeUnixNano:
+        sample.startTimeUnixNano ??
+        toNanoseconds(
+          legacyStartTimesMs[aggregateKey(sample)] ?? current.windowStartMs ?? cumulativeStartMs,
+        ),
+    }));
+    const fullState: MetricsState = {
+      windowStartMs: null,
+      samples: [],
+      sampleIds: [],
+      cumulativeSamples: samplesWithStartTimes,
+      cumulativeStartMs,
+    };
+    let exportStartMs = cumulativeStartMs;
+    let exportSamples = samplesWithStartTimes;
+    let payload = encodeMetricsJson(exportSamples, {
+      startTimeUnixNano: toNanoseconds(exportStartMs),
+      endTimeUnixNano: toNanoseconds(endMs),
+    });
+    if (
+      payload.byteLength > MAX_GRAFANA_OTLP_BYTES ||
+      stateSizeBytes(fullState) > MAX_METRICS_STATE_BYTES
+    ) {
+      exportStartMs = current.windowStartMs ?? endMs;
+      exportSamples = current.samples.map((sample) => ({
+        ...sample,
+        startTimeUnixNano: toNanoseconds(exportStartMs),
+      }));
+      payload = encodeMetricsJson(exportSamples, {
+        startTimeUnixNano: toNanoseconds(exportStartMs),
+        endTimeUnixNano: toNanoseconds(endMs),
+      });
+      const rolloverState: MetricsState = {
         windowStartMs: null,
         samples: [],
         sampleIds: [],
-      } satisfies MetricsState);
-    });
-  }
-
-  private async flush(
-    samples: readonly MetricSample[],
-    startMs: number,
-    endMs: number,
-  ): Promise<void> {
+        cumulativeSamples: exportSamples,
+        cumulativeStartMs: exportStartMs,
+      };
+      if (
+        payload.byteLength > MAX_GRAFANA_OTLP_BYTES ||
+        stateSizeBytes(rolloverState) > MAX_METRICS_STATE_BYTES
+      ) {
+        return { kind: "too_large" };
+      }
+    }
     const window = {
-      startTimeUnixNano: toNanoseconds(startMs),
+      startTimeUnixNano: toNanoseconds(exportStartMs),
       endTimeUnixNano: toNanoseconds(endMs),
     };
-    const payload = encodeMetricsJson(samples, window);
     const payloadSha256 = await sha256Hex(payload);
     const jobId = await metricsJobId(
       "prometheus",
@@ -112,89 +182,23 @@ export class OtelMetricsAggregate {
     );
     await this.state.storage.put("lastFlush", {
       window,
-      samples,
+      sampleCount: exportSamples.length,
+      payloadBytes: payload.byteLength,
       payloadSha256,
     });
+    return {
+      kind: "flushed",
+      state: {
+        windowStartMs: null,
+        samples: [],
+        sampleIds: [],
+        cumulativeSamples: exportSamples,
+        cumulativeStartMs: exportStartMs,
+      },
+    };
   }
 }
 
-function mergeSample(samples: readonly MetricSample[], sample: MetricSample): MetricSample[] {
-  const key = aggregateKey(sample);
-  const index = samples.findIndex((candidate) => aggregateKey(candidate) === key);
-  if (index < 0) return [...samples, sample];
-  const existing = samples[index];
-  if (!existing || existing.kind !== sample.kind) return [...samples, sample];
-  const merged: MetricSample =
-    sample.kind === "sum"
-      ? { ...existing, value: existing.value + sample.value }
-      : {
-          ...existing,
-          value: existing.value + sample.value,
-          count: addInteger(existing.count ?? "0", sample.count ?? "0"),
-          bucketCounts: mergeIntegers(existing.bucketCounts ?? [], sample.bucketCounts ?? []),
-        };
-  return samples.map((candidate, candidateIndex) =>
-    candidateIndex === index ? merged : candidate,
-  );
-}
-
-function aggregateKey(sample: MetricSample): string {
-  return JSON.stringify({
-    name: sample.name,
-    kind: sample.kind,
-    labels: Object.fromEntries(
-      Object.entries(sample.labels).sort(([left], [right]) => left.localeCompare(right)),
-    ),
-  });
-}
-
-function sampleId(sample: MetricSample): string {
-  return sample.sampleId;
-}
-
-function readSamples(value: unknown): readonly MetricSample[] | null {
-  if (!Array.isArray(value)) return null;
-  const samples: MetricSample[] = [];
-  for (const item of value) {
-    if (
-      !isRecord(item) ||
-      typeof item["name"] !== "string" ||
-      (item["kind"] !== "sum" && item["kind"] !== "histogram")
-    )
-      return null;
-    if (typeof item["sampleId"] !== "string" || item["sampleId"].length === 0) return null;
-    if (
-      typeof item["value"] !== "number" ||
-      !Number.isFinite(item["value"]) ||
-      !isRecord(item["labels"])
-    )
-      return null;
-    samples.push(item as unknown as MetricSample);
-  }
-  return samples;
-}
-
-function mergeIntegers(left: readonly string[], right: readonly string[]): readonly string[] {
-  const length = Math.max(left.length, right.length);
-  return Array.from({ length }, (_, index) => addInteger(left[index] ?? "0", right[index] ?? "0"));
-}
-
-function addInteger(left: string, right: string): string {
-  try {
-    return String(BigInt(left) + BigInt(right));
-  } catch {
-    return "0";
-  }
-}
-
-function toNanoseconds(milliseconds: number): string {
-  return String(BigInt(Math.trunc(milliseconds)) * 1_000_000n);
-}
-
-function readNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function isRecord(value: unknown): value is Record<string, JsonValue | unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function metricsWindowTooLargeResponse(): Response {
+  return Response.json({ error: "metrics_window_too_large" }, { status: 413 });
 }

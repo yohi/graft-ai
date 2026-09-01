@@ -10,6 +10,8 @@ export const RATE_LIMIT_RETRY_AFTER_MINIMUM_SECONDS = 1;
 export const TRACE_IDLE_ALARM_MS = 1_000;
 export const METRICS_FLUSH_INTERVAL_MS = 30_000;
 export const METRICS_FLUSH_SAMPLE_LIMIT = 200;
+// Keep the serialized metrics state below the SQLite-backed Durable Object 2 MiB row limit.
+export const MAX_METRICS_STATE_BYTES = 1_500_000;
 export const KV_PROPAGATION_DELAY_SECONDS = 60;
 export const KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS = [5, 15, 30, 60, 120] as const;
 export const DOWNSTREAM_EXPORT_ATTEMPT_LIMIT = 3;

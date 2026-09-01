@@ -51,6 +51,7 @@ export function aggregateKey(sample: MetricSample): string {
     labels: Object.fromEntries(
       Object.entries(sample.labels).sort(([left], [right]) => left.localeCompare(right)),
     ),
+    ...(sample.kind === "histogram" ? { explicitBounds: sample.explicitBounds ?? [] } : {}),
   });
 }
 
@@ -58,46 +59,52 @@ export function readSamples(value: unknown): readonly MetricSample[] | null {
   if (!Array.isArray(value)) return null;
   const samples: MetricSample[] = [];
   for (const item of value) {
-    if (!isRecord(item)) return null;
-    const name = item["name"];
-    const kind = item["kind"];
-    const sampleId = item["sampleId"];
-    const value = item["value"];
-    if (
-      typeof name !== "string" ||
-      (kind !== "sum" && kind !== "histogram") ||
-      typeof sampleId !== "string" ||
-      sampleId.length === 0 ||
-      typeof value !== "number" ||
-      !Number.isFinite(value)
-    )
-      return null;
-    const labels = readLabels(item["labels"]);
-    const count = readOptionalString(item["count"]);
-    const bucketCounts = readOptionalStringArray(item["bucketCounts"]);
-    const explicitBounds = readOptionalNumberArray(item["explicitBounds"]);
-    const startTimeUnixNano = readOptionalString(item["startTimeUnixNano"]);
-    if (
-      !labels ||
-      count === null ||
-      bucketCounts === null ||
-      explicitBounds === null ||
-      startTimeUnixNano === null
-    )
-      return null;
-    samples.push({
-      sampleId,
-      name,
-      kind,
-      value,
-      labels,
-      ...(count === undefined ? {} : { count }),
-      ...(bucketCounts === undefined ? {} : { bucketCounts }),
-      ...(explicitBounds === undefined ? {} : { explicitBounds }),
-      ...(startTimeUnixNano === undefined ? {} : { startTimeUnixNano }),
-    });
+    const sample = readSample(item);
+    if (!sample) return null;
+    samples.push(sample);
   }
   return samples;
+}
+
+function readSample(value: unknown): MetricSample | null {
+  if (!isRecord(value)) return null;
+  const name = value["name"];
+  const kind = value["kind"];
+  const sampleId = value["sampleId"];
+  const sampleValue = value["value"];
+  if (
+    typeof name !== "string" ||
+    (kind !== "sum" && kind !== "histogram") ||
+    typeof sampleId !== "string" ||
+    sampleId.length === 0 ||
+    typeof sampleValue !== "number" ||
+    !Number.isFinite(sampleValue)
+  )
+    return null;
+  const labels = readLabels(value["labels"]);
+  const count = readOptionalString(value["count"]);
+  const bucketCounts = readOptionalStringArray(value["bucketCounts"]);
+  const explicitBounds = readOptionalNumberArray(value["explicitBounds"]);
+  const startTimeUnixNano = readOptionalString(value["startTimeUnixNano"]);
+  if (
+    !labels ||
+    count === null ||
+    bucketCounts === null ||
+    explicitBounds === null ||
+    startTimeUnixNano === null
+  )
+    return null;
+  return {
+    sampleId,
+    name,
+    kind,
+    value: sampleValue,
+    labels,
+    ...(count === undefined ? {} : { count }),
+    ...(bucketCounts === undefined ? {} : { bucketCounts }),
+    ...(explicitBounds === undefined ? {} : { explicitBounds }),
+    ...(startTimeUnixNano === undefined ? {} : { startTimeUnixNano }),
+  };
 }
 
 function readLabels(value: unknown): Readonly<Record<string, string>> | null {

@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { runDurableObjectAlarm } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { payloadStoreForPointer, resolvePayloadStoreBackend } from "../../src/otel/storage";
+import { mergeSample } from "../../src/otel/metrics-aggregate-state";
 import type { MetricSample, OtelEnv } from "../../src/otel/types";
 
 const otelEnv = env as OtelEnv;
@@ -11,6 +12,44 @@ afterEach(() => {
 });
 
 describe("OtelMetricsAggregate", () => {
+  it("keeps histogram schemas separate while merging identical bounds", () => {
+    const first: MetricSample = {
+      sampleId: "histogram-first",
+      name: "request_duration_seconds",
+      kind: "histogram",
+      value: 1,
+      labels: { env: "prod" },
+      count: "1",
+      bucketCounts: ["1", "0", "0"],
+      explicitBounds: [1, 10],
+    };
+    const sameBounds: MetricSample = {
+      ...first,
+      sampleId: "histogram-same-bounds",
+      value: 2,
+      bucketCounts: ["0", "1", "0"],
+    };
+    const differentBounds: MetricSample = {
+      ...first,
+      sampleId: "histogram-different-bounds",
+      value: 3,
+      bucketCounts: ["0", "0", "1"],
+      explicitBounds: [10, 100],
+    };
+
+    const sameSeries = mergeSample([first], sameBounds);
+    const separatedSeries = mergeSample(sameSeries, differentBounds);
+
+    expect(sameSeries).toHaveLength(1);
+    expect(sameSeries[0]).toMatchObject({ count: "2", bucketCounts: ["1", "1", "0"] });
+    expect(separatedSeries).toHaveLength(2);
+    expect(separatedSeries[1]).toMatchObject({
+      count: "1",
+      bucketCounts: ["0", "0", "1"],
+      explicitBounds: [10, 100],
+    });
+  });
+
   it("deduplicates samples and flushes at the two-hundred-sample bound", async () => {
     const stub = otelEnv.OTEL_METRICS_AGGREGATE.getByName(`metrics-${crypto.randomUUID()}`);
     const nowMs = Date.now();

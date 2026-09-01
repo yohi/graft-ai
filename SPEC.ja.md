@@ -321,9 +321,13 @@ R2 lifecycle rule は R2 payload だけに適用し、KV payload は削除しま
   state は 1,500,000 UTF-8 bytes に制限します。series ごとの start time は sample 内に
   持たせ、last flush には compact な metadata だけを保存します。cumulative payload
   または state が cap を超える場合は current flush window へ rollover してその window
-  の cumulative start time をリセットします。current window 単独でも大きすぎる場合は
-  sample を破棄せず、`/append` が `metrics_window_too_large` の HTTP 413 を返して
-  enqueue しません。alarm は concurrency gate の外側で同じ失敗を報告します。
+  の cumulative start time をリセットします。current window 単独でも大きすぎる場合は、
+  受信した input sample を Durable Object state に保存せず、既存 state も変更せず、
+  enqueue もせずに、`/append` が `metrics_window_too_large` の HTTP 413 を返して
+  リクエストを拒否します。送信側はこの 413 を sample の受理・保持済みと解釈せず、
+  window を縮小するか複数に分割し、収まる単位で再送する必要があります。単一 sample
+  自体が上限を超える場合は、window の分割では解決しないため、その sample の内容を
+  見直す必要があります。alarm は concurrency gate の外側で同じ失敗を報告します。
 - envelope を serialize する前に、文字列として格納された payload JSON 内の
   オブジェクトキーを再帰的に辞書順でソートします（配列の順序は保持します）。この
   canonicalization により、同値の payload は同じ canonical envelope bytes、`ingressId`、

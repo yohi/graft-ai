@@ -285,6 +285,7 @@ export class OtelLedger {
     const state = await this.readState(Date.now());
     const entry = state.ingress[ingressId];
     assertLease(entry, ownerId, fencingToken, "ingress");
+    if (entry.status === "enqueued" || entry.status === "complete") return;
     if (entry.status !== "ready" || !entry.pointer)
       throw new LedgerStaleError("invalid ingress transition");
     await this.writeState({

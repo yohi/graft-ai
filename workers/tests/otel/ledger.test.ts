@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { OtelLedger } from "../../src/otel/ledger";
-import type { ExportPointer, JobDescriptor, OtelEnv } from "../../src/otel/types";
+import type { ExportPointer, IngressPointer, JobDescriptor, OtelEnv } from "../../src/otel/types";
 
 const otelEnv = env as unknown as {
   readonly OTEL_LEDGER: DurableObjectNamespace;
@@ -97,6 +97,43 @@ describe("OtelLedger", () => {
       nowMs: nowMs + 26 * 60 * 60 * 1_000,
     });
     expect(claim.kind).toBe("claimed");
+  });
+
+  it("treats an already-enqueued ingress transition as idempotent", async () => {
+    const { state } = createLedgerState();
+    const ledger = new OtelLedger(state, env as unknown as OtelEnv);
+    const nowMs = Date.now();
+    const ingressId = "ingress-idempotent";
+    const ownerId = "owner-idempotent";
+    const fencingToken = "1";
+    const pointer: IngressPointer = {
+      schemaVersion: 1,
+      id: ingressId,
+      objectKey: "otel/ingress/1970-01-01/ingress-idempotent.json",
+      sha256: "a".repeat(64),
+      contentType: "application/json",
+      createdAtMs: nowMs,
+      kind: "ingress",
+      ingressId,
+    };
+
+    await ledger.reserveIngress({
+      ingressId,
+      payloadSha256: pointer.sha256,
+      ownerId,
+      fencingToken,
+      nowMs,
+    });
+    await ledger.markIngressReady(ingressId, pointer, ownerId, fencingToken);
+    await ledger.markIngressEnqueued(ingressId, ownerId, fencingToken);
+
+    await expect(
+      ledger.markIngressEnqueued(ingressId, ownerId, fencingToken),
+    ).resolves.toBeUndefined();
+    await ledger.completeIngress(ingressId);
+    await expect(
+      ledger.markIngressEnqueued(ingressId, ownerId, fencingToken),
+    ).resolves.toBeUndefined();
   });
 });
 

@@ -57,20 +57,20 @@ Loki.
 
 #### 2.3 Components
 
-| Component | Managed By | Responsibility |
-| --------- | ---------- | -------------- |
-| AI Gateway | Existing service | Proxies AI requests and generates access logs. |
-| Logpush Job | Terraform (`terraform_data.aig_logpush_job` + Cloudflare API helper) | Fetches gateway logs and POSTs NDJSON to the Worker. |
-| Transform Worker | Wrangler (`workers/src/index.ts`) | Validates ingress, decompresses, decrypts, transforms, and pushes to Loki. |
-| Credentials | Wrangler secrets + `TF_VAR_*` env vars | Holds Grafana token, origin secret, and RSA private key. |
-| Loki | Grafana Cloud managed | Stores transformed logs for 14 days. |
-| Proxy Worker | Wrangler (`workers/src/proxy.ts`) | Validates X-Proxy-Secret, forwards to AI Gateway, and returns the upstream response. |
-| Tail Worker | Paid-plan optional component | Not used in Free Tier proxy-only mode. |
-| Ollama Cloud Worker | Wrangler (`workers/src/ollama-cloud.ts`) | Derives reset metrics from a strict ISO 8601 anchor and pushes OTLP metrics. |
-| Ollama Cloud alerts | Grafana Alerting API (`grafana/alerts/`) | Fires session/weekly reset alerts from Prometheus metrics. |
-| Dashboard | `grafana/dashboards/graft-ai-overview.json` | 13-panel Grafana dashboard imported via gcx API. |
-| Ollama dashboard | `grafana/dashboards/graft-ai-ollama-cloud.json` | Ollama Cloud reset metrics dashboard imported via gcx API. |
-| Grafana Access Policy | Terraform (`terraform/grafana/`) or manual | Cloud Access Policy with `logs:write`, `metrics:write`, and `traces:write` scopes for OTel and Loki/Prometheus delivery. |
+| Component             | Managed By                                                           | Responsibility                                                                                                           |
+| --------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| AI Gateway            | Existing service                                                     | Proxies AI requests and generates access logs.                                                                           |
+| Logpush Job           | Terraform (`terraform_data.aig_logpush_job` + Cloudflare API helper) | Fetches gateway logs and POSTs NDJSON to the Worker.                                                                     |
+| Transform Worker      | Wrangler (`workers/src/index.ts`)                                    | Validates ingress, decompresses, decrypts, transforms, and pushes to Loki.                                               |
+| Credentials           | Wrangler secrets + `TF_VAR_*` env vars                               | Holds Grafana token, origin secret, and RSA private key.                                                                 |
+| Loki                  | Grafana Cloud managed                                                | Stores transformed logs for 14 days.                                                                                     |
+| Proxy Worker          | Wrangler (`workers/src/proxy.ts`)                                    | Validates X-Proxy-Secret, forwards to AI Gateway, and returns the upstream response.                                     |
+| Tail Worker           | Paid-plan optional component                                         | Not used in Free Tier proxy-only mode.                                                                                   |
+| Ollama Cloud Worker   | Wrangler (`workers/src/ollama-cloud.ts`)                             | Derives reset metrics from a strict ISO 8601 anchor and pushes OTLP metrics.                                             |
+| Ollama Cloud alerts   | Grafana Alerting API (`grafana/alerts/`)                             | Fires session/weekly reset alerts from Prometheus metrics.                                                               |
+| Dashboard             | `grafana/dashboards/graft-ai-overview.json`                          | 13-panel Grafana dashboard imported via gcx API.                                                                         |
+| Ollama dashboard      | `grafana/dashboards/graft-ai-ollama-cloud.json`                      | Ollama Cloud reset metrics dashboard imported via gcx API.                                                               |
+| Grafana Access Policy | Terraform (`terraform/grafana/`) or manual                           | Cloud Access Policy with `logs:write`, `metrics:write`, and `traces:write` scopes for OTel and Loki/Prometheus delivery. |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
@@ -177,6 +177,154 @@ unavailable. R2 selection is a manual response to confirmed quota exhaustion or
 a forecast before the next 00:00 UTC reset, never an automatic reaction to one
 transient delete error. R2 lifecycle rules apply only to R2 payloads and never
 clean up KV payloads.
+
+#### OTel signal contracts (design invariants)
+
+The following invariants apply to both the dedicated OTel Worker and the legacy
+Alloy/Tunnel reference stack. They were fixed by the OTel design review and must
+not drift between implementations.
+
+**Deterministic sampling:**
+
+- The default sampling rate is 100%. An operator-configured decimal rate is
+  validated to `0..1` and normalized to integer millionths without floating
+  point: `rate_ppm = floor(rate * 1_000_000)` with range `0..1,000,000`.
+- The decision uses SHA-256 of the UTF-8 concatenation
+  `trace_id + "graft-ai-otel-v1"` (lowercase 32-hex trace ID). The first 8
+  digest bytes are a big-endian unsigned integer `hash`; the trace is sampled
+  iff `hash * 1_000_000 < rate_ppm * 2^64` with strict `<` and exact integer
+  arithmetic. Never convert the 64-bit hash to a float. Sampling priority
+  overrides are rejected; the same `trace_id`/`rate_ppm`/seed always yields the
+  same decision.
+- Tempo traces and Loki payloads share one trace-level decision; a sampled-out
+  trace appears in neither backend. RED metrics are computed from selected
+  request spans before sampling and are never reduced by payload sampling.
+- Acceptance fixture (seed `graft-ai-otel-v1`): trace
+  `00000000000000000000000000000001` -> SHA-256 prefix `f75a2b34049e94d6`
+  (out at rate 0.5), trace `ffffffffffffffffffffffffffffffff` ->
+  `1d4e75600b429028` (in at rate 0.5), trace
+  `11111111111111111111111111111111` -> `db81a30e59fe0b64` (out at rate 0.5).
+  Rate `0` samples none; rate `1` samples all.
+
+**Fail-closed redaction:**
+
+- Redaction runs before any exporter, debug log, durable store, or Queue
+  handoff. It replaces Bearer/Basic/API-key credentials and explicit
+  `secret`/`token`/`password`-like values in `gen_ai.prompt_json`,
+  `gen_ai.completion_json`, `cf-aig-metadata`, and string attributes with
+  `[REDACTED]`.
+- A payload that fails JSON parsing or deterministic redaction is never stored
+  raw; its payload attributes are dropped with `payload_dropped=true` and
+  `payload_drop_reason="redaction_failure"`, while safe metadata is retained.
+
+**Spanlogs / Loki payload logs:**
+
+- Loki labels are strictly `model`, `status_code`, `env`, `gateway`;
+  `trace_id`, `request_id`, `provider`, and payload content stay log fields.
+- The serialized UTF-8 line cap is 262,144 bytes (256 KiB). Redaction runs
+  first and size is measured after JSON escaping. On overflow, the truncation
+  budget is split 50:50 between `prompt` and `completion` (100:0 when only one
+  exists), cut at UTF-8 code-point boundaries with the `[TRUNCATED]` suffix
+  inside the budget, preserving identity/numeric fields and setting
+  `payload_truncated=true`. If metadata alone exceeds the cap, payload fields
+  are dropped with reason `line_size`; if the record is still oversized it is
+  dropped and only `otel_spanlogs_dropped_total{reason="line_size_metadata"}`
+  is incremented. Drop logs never contain trace IDs, URLs, or payload data.
+- Token and cost fields (`input_tokens`, `output_tokens`, `total_tokens`,
+  `cost_usd`, `duration_ms`) are unquoted finite decimal JSON numbers; NaN,
+  Infinity, or unparseable values omit the field with reason
+  `numeric_field_invalid`. Aggregate panels query Loki with `| json | unwrap`.
+
+**Canonical RED metrics:**
+
+- Only `ai_gateway_requests_total`, `ai_gateway_errors_total`, and
+  `ai_gateway_request_duration_seconds` exist, with labels `model`, `provider`,
+  `status_code`, `env`, `gateway`. The duration histogram buckets are
+  `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, +Inf]` seconds.
+
+**Ingress limits and rate limiting:**
+
+- Receiver limits: 8 MiB body, 5 s header / 30 s read / 10 s write timeouts,
+  100 concurrent requests, and a 1,000-item drop-new ingress queue. A full
+  queue drops only the new item with fixed reason `capacity` while the client
+  still receives `200`; backend status is never returned to the sender.
+- Source rate limiting: token bucket capacity 20, refill 2/s (120 requests/min).
+  The bucket key is
+  `HMAC-SHA-256(OTEL_RATE_LIMIT_HMAC_KEY, "otel-ingress-source-v1" || NUL || canonical_ip)`;
+  raw IPs are never persisted or used as labels. Client-supplied forwarding
+  headers are always ignored; only the Cloudflare-edge `CF-Connecting-IP` on
+  the trusted path (Worker: always trusted; Alloy: only peers in
+  `OTEL_TRUSTED_PROXY_CIDRS`, others rejected `403` with `untrusted_source`)
+  identifies a source; unknown sources share the `unknown` bucket. `429`
+  responses carry `Retry-After` as ASCII decimal delta-seconds, rounded up and
+  at least 1.
+- Ingress operational metrics are fixed:
+  `otel_ingress_requests_total{status}`,
+  `otel_ingress_rejections_total{reason}` with reason enum `auth`,
+  `untrusted_source`, `path`, `parse`, `content_type`, `compression`,
+  `body_size`, `timeout`, plus `otel_ingress_rate_limited_total`,
+  `otel_ingress_queue_dropped_total{reason="capacity"}`,
+  `otel_ingress_active_requests`, `otel_ingress_request_bytes`, and
+  `otel_ingress_queue_items`/`otel_ingress_queue_capacity{queue="dispatcher"}`.
+  Source IPs, tokens, prompt/completion text are never labels. Rejection
+  statuses are fixed: `401` auth, `403` untrusted source, `404` path, `400`
+  parse, `415` content type or compression, `413` body size, `408` handler
+  timeout, `429` rate limited.
+
+**Alloy reference backend dispatch:**
+
+- Retryable failures are network errors, `408`, `429`, and `5xx`; other `4xx`
+  responses are terminal. Each backend gets 3 total attempts with 10 s
+  per-attempt timeout and
+  `delay = min(base * 2^retry_index * uniform(0.8, 1.2), 5s)` (Tempo bases 1s/2s;
+  Loki and Prometheus 500ms/1s).
+- Bounded in-memory queues: Tempo 64 MiB or 2,000 spans; Loki 64 MiB or 500
+  records; Prometheus 16 MiB or 100 batches (a batch closes at 200 data points
+  or 1 s). Eviction order: Tempo drops the oldest complete trace (else oldest
+  item); Loki drops the lowest-priority record (priority: metrics 3 > trace
+  metadata 2 > payload 1), then oldest; Prometheus drops the oldest batch.
+- Drop reasons are the fixed enum `queue_capacity`, `retry_exhausted`,
+  `line_size_metadata`, `numeric_field_invalid`, `shutdown_loss`, and
+  `trace_state_evicted`. Operational metrics:
+  `otel_backend_export_retries_total{backend}`,
+  `otel_backend_export_failures_total{backend,status_class}`,
+  `otel_backend_export_exhausted_total{backend}`,
+  `otel_backend_queue_dropped_total{backend,signal,reason}`, plus queue
+  utilization/age gauges. Backend failure logs may only contain `backend`,
+  `status_class`, `attempt`, `reason`, `queue_items`, `queue_capacity`.
+- Alerts: export-exhausted or queue-drops above zero for 5 minutes are
+  critical; queue utilization over 0.80 for 5 minutes and any rate-limited
+  request within 5 minutes are warnings.
+
+**Retention gate (Alloy reference):**
+
+- Self-hosted baseline retention is Tempo 14d, Loki 7d, Prometheus 14d via
+  explicit Compose settings. Grafana Cloud payload-log export is enabled only
+  when the effective Cloud Logs retention resolves to a supported positive
+  duration of at most 14 days; otherwise export is disabled with the fixed
+  sanitized reason `retention_unavailable`, `retention_lookup_failed`,
+  `retention_invalid`, or `retention_exceeds_14d`. Never assume a Cloud default
+  of 7 or 30 days; record the tenant's effective values at acceptance.
+
+**OTel Worker durability and identity:**
+
+- Queue semantics are at-least-once: every ingress and export record has a
+  stable ID, Durable Object idempotency, and a `DEDUPLICATION_TOMBSTONE_MS` of
+  25 hours. Exactly-once delivery is never claimed.
+- Durable Object aggregation parameters: the trace aggregate flushes trace
+  state after a one-second idle alarm; the metrics aggregate flushes DELTA
+  sample windows every 30 seconds or 200 samples, whichever comes first.
+- `ingressId = SHA-256("graft-ai-otel-ingress-v1" || NUL || canonical_redacted_envelope_bytes)`;
+  a matching ID with the same payload hash is an accepted duplicate, while an
+  existing ID with a different hash is a collision that fails without mutating
+  the original record. AI Gateway delivery IDs (`cf-aig-otel-trace-id`, span
+  IDs, request IDs) are never ingress IDs.
+- All OTLP payloads are JSON (`application/json`); each exported document is
+  capped at 4,000,000 UTF-8 bytes (below the documented 5 MB Cloud ingestion
+  limit). No protobuf runtime dependency exists on the Worker path.
+- Terraform owns Queues, DLQs, KV namespaces, and optional R2 resources;
+  Wrangler owns Queue consumers and Durable Object bindings. Do not add
+  `cloudflare_queue_consumer` Terraform resources.
 
 ### Ollama Cloud Worker (`graft-ai-ollama-cloud`)
 

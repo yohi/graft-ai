@@ -1,35 +1,51 @@
 # AGENTS.md
 
-This repository is `graft-ai`, a telemetry pipeline that aggregates Cloudflare AI Gateway logs, provider usage metrics, and Ollama Cloud reset metrics into Grafana Cloud.
+This is `graft-ai`, a telemetry pipeline that aggregates Cloudflare AI
+Gateway logs, provider usage metrics, and Ollama Cloud reset metrics into
+Grafana Cloud.
 
-## Project overview
+## Why we are here
 
-- **What:** TypeScript Cloudflare Workers, Terraform, and Grafana dashboards.
-- **Why:** Provide a unified, Free-Tier-friendly view of AI provider costs, tokens, access logs, and rate-limit reset windows.
-- **How:** Encrypted AI Gateway Logpush NDJSON is decrypted, transformed into Loki JSON streams, and pushed to Grafana Cloud Loki. Scheduled Workers fetch Codex, OpenAI API, and OpenCodeGo usage, plus Ollama Cloud reset metrics, and push them to Grafana Cloud Prometheus via OTLP/JSON.
+Provide a unified, Free-Tier-friendly view of AI provider costs, tokens,
+access logs, and rate-limit reset windows.
 
-## Quick references
+## What the repo contains
 
-Read these files before making changes:
+- **Cloudflare Workers** (`workers/`): TypeScript Workers for AI Gateway
+  Logpush ingestion, proxy mode, scheduled provider metrics, and Ollama Cloud
+  reset metrics.
+- **Terraform** (`terraform/`): Cloudflare infrastructure and optional Grafana
+  resources.
+- **Dashboards and alerts** (`grafana/`): Grafana JSON plus alert rules.
+- **Operational runbooks** (`docs/`): deployment, rollback, and subsystem
+  guides.
 
-- [`README.md`](./README.md) — architecture, directory layout, deployment steps, and operational notes.
-- [`SPEC.md`](./SPEC.md) — formal specification: providers, data transformation rules, reliability matrix, security constraints.
-- [`Makefile`](./Makefile) — standard commands.
+## How to work in this repo
 
-## Essentials
-
-- **Language:** TypeScript with strict settings (`workers/tsconfig.json`).
-- **Package manager:** npm (run commands from inside `workers/`).
-- **Secrets:** never commit or store in `*.tfvars`. Use `workers/.dev.vars` for local development and Wrangler secrets for deployed Workers.
-- **CI expectations:** `make test`, `make typecheck`, `make fmt`, and `make validate` must pass before merging.
-
-## When working on this repo
-
-1. Read `README.md` and `SPEC.md` if you are touching the AI Gateway log pipeline, Terraform, or Workers code.
-2. Follow existing patterns in `workers/src/`; modules are split by responsibility (e.g., `index`, `crypto`, `transform`, `loki`, `types`, `ollama-cloud`, `provider-metrics`). Add new modules following this pattern.
-3. Run `make test` and `make typecheck` after any TypeScript change; run `make validate` after any Terraform change.
-4. Keep Loki labels strictly to `model`, `status_code`, `env`, `gateway` and avoid adding high-cardinality labels.
+- **Tech stack:** TypeScript with strict settings (`workers/tsconfig.json`);
+  use npm inside `workers/`.
+- **Verification gates:** `make test`, `make typecheck`, `make fmt`, and
+  `make validate` must pass before any merge.
+- **Secrets hygiene:** never commit secrets, API keys, or credentials. Use
+  `workers/.dev.vars` for local development and Wrangler secrets for deployed
+  Workers. Do not put them in `*.tfvars`, dashboard JSON, Compose files, or
+  any tracked configuration.
+- **Universal data contract:** Loki labels are strictly limited to `model`,
+  `status_code`, `env`, `gateway` on every path that writes to Loki; never add
+  high-cardinality labels.
+- **Authoritative docs:** read `README.md` and `SPEC.md` before changing the AI
+  Gateway log pipeline, Terraform, or Workers code. Detailed OTel design
+  invariants (sampling, redaction, spanlogs, dispatch) are in `SPEC.md`
+  § _OTel signal contracts (design invariants)_.
+- **Code organization:** follow the existing module-by-responsibility pattern in
+  `workers/src/` (e.g., `index`, `crypto`, `transform`, `loki`, `types`,
+  `ollama-cloud`, `provider-metrics`). Add new modules following the same
+  pattern.
 
 ## Progressive disclosure
 
-For deeper conventions (TypeScript style, testing patterns, security practices, Git workflow), prefer reading existing code and tests over adding broad rules here. If a domain needs a persistent guide, add a focused markdown file under `.agents/guides/` or `docs/` and link it from this file instead of inlining it.
+This file is intentionally small. Domain-specific conventions (TypeScript
+style, testing patterns, security practices, Git workflow, per-Worker
+deployment procedures) should be discovered by reading existing code and tests.
+If a topic needs a persistent guide, create a focused markdown file under
+`docs/` and link it here instead of inlining it.

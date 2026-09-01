@@ -98,6 +98,50 @@ describe("OTel ingress", () => {
     expect(text).not.toContain("sk-live-test-secret");
   });
 
+  it("uses matching ingress IDs and payload hashes for reordered JSON payload keys", async () => {
+    const reservations: Array<{ ingressId: string; payloadSha256: string }> = [];
+    const ledgerTarget = otelEnv.OTEL_LEDGER.getByName(`canonical-${crypto.randomUUID()}`);
+    const ledgerStub = {
+      fetch: async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const body = (await request.clone().json()) as {
+          operation?: string;
+          ingressId?: string;
+          payloadSha256?: string;
+        };
+        if (
+          body.operation === "ingress.reserve" &&
+          typeof body.ingressId === "string" &&
+          typeof body.payloadSha256 === "string"
+        ) {
+          reservations.push({ ingressId: body.ingressId, payloadSha256: body.payloadSha256 });
+        }
+        return ledgerTarget.fetch(request);
+      },
+    } as unknown as DurableObjectStub;
+    const send = vi.fn(async (_pointer: IngressPointer) => undefined);
+    const testEnv = {
+      ...otelEnv,
+      OTEL_LEDGER: { getByName: () => ledgerStub } as unknown as DurableObjectNamespace,
+      OTEL_INGRESS_QUEUE: { send } as unknown as Queue<IngressPointer>,
+    } as OtelEnv;
+
+    const first = await handleIngress(
+      request(bodyWithPrompt('{"outer":{"z":1,"nested":{"d":4,"c":3}},"items":[{"b":2,"a":1}]}')),
+      testEnv,
+    );
+    const second = await handleIngress(
+      request(bodyWithPrompt('{"items":[{"a":1,"b":2}],"outer":{"nested":{"c":3,"d":4},"z":1}}')),
+      testEnv,
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(reservations).toHaveLength(2);
+    expect(reservations[1]).toEqual(reservations[0]);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a durable ready reservation after the first queue send fails", async () => {
     const queue = {
       send: vi
@@ -167,3 +211,13 @@ describe("OTel ingress", () => {
     }
   });
 });
+
+function bodyWithPrompt(prompt: string): typeof validOtlpJson {
+  const body = structuredClone(validOtlpJson) as typeof validOtlpJson;
+  const attributes = body.resourceSpans[0]?.scopeSpans[0]?.spans[0]?.attributes;
+  if (!attributes) throw new Error("fixture span attributes missing");
+  const promptAttribute = attributes.find((attribute) => attribute.key === "gen_ai.prompt_json");
+  if (!promptAttribute) throw new Error("fixture prompt attribute missing");
+  promptAttribute.value = { stringValue: prompt };
+  return body;
+}

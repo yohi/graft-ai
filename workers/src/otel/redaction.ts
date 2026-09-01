@@ -100,7 +100,9 @@ function asJsonValue(value: unknown): JsonValue {
   if (Array.isArray(value)) return value.map(asJsonValue);
   if (isJsonObject(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, asJsonValue(child)]),
+      Object.entries(value)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, child]) => [key, asJsonValue(child)]),
     );
   }
   throw new Error("invalid JSON value");

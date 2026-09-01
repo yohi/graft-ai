@@ -7,5 +7,6 @@ This directory contains documentation for sanitized OTel acceptance fixtures.
 - Go ingress tests generate deterministic protobuf and JSON payloads in memory.
 - Shared receiver, limit, source-identity, and retention contracts live in
   `deploy/otel/contracts/contracts.json`.
-- Real-account evidence is stored under `docs/superpowers/acceptance/` and
-  records only status codes, endpoint shapes, and safe trace identifiers.
+- Real-account acceptance evidence (sanitized status codes, endpoint shapes,
+  and trace identifiers only) was recorded during the 2026-08-17 feasibility
+  gate and removed with the design archive; see git history for details.

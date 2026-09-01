@@ -51,15 +51,20 @@ Loki に push します。
 
 #### 2.3 構成要素
 
-| Component        | Managed By                             | Responsibility                                               |
-| ---------------- | -------------------------------------- | ------------------------------------------------------------ |
-| AI Gateway       | 既存サービス                           | AI requests を proxy し、access logs を生成します。          |
-| Logpush Job      | Terraform (`terraform_data.aig_logpush_job` + Cloudflare API helper) | Gateway logs を取得し、Worker に NDJSON を POST します。 |
-| Transform Worker | Wrangler (`workers/src/index.ts`)      | 入口検証、解凍、復号、変換、Loki への push を実行します。    |
-| Credentials      | Wrangler secrets + `TF_VAR_*` env vars | Grafana token、origin secret、RSA private key を保持します。 |
-| Loki             | Grafana Cloud managed                  | 変換後 logs を14日間保存します。                             |
-| Proxy Worker     | Wrangler (`workers/src/proxy.ts`)      | X-Proxy-Secret を検証し、AI Gateway に転送して上流レスポンスを返します。 |
-| Tail Worker      | 有料プランのオプションコンポーネント   | Free Tier proxy-only mode では使用しません。                             |
+| Component        | Managed By                                                           | Responsibility                                                           |
+| ---------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| AI Gateway       | 既存サービス                                                         | AI requests を proxy し、access logs を生成します。                      |
+| Logpush Job      | Terraform (`terraform_data.aig_logpush_job` + Cloudflare API helper) | Gateway logs を取得し、Worker に NDJSON を POST します。                 |
+| Transform Worker | Wrangler (`workers/src/index.ts`)                                    | 入口検証、解凍、復号、変換、Loki への push を実行します。                |
+| Credentials      | Wrangler secrets + `TF_VAR_*` env vars                               | Grafana token、origin secret、RSA private key を保持します。             |
+| Loki             | Grafana Cloud managed                                                | 変換後 logs を14日間保存します。                                         |
+| Proxy Worker     | Wrangler (`workers/src/proxy.ts`)                                    | X-Proxy-Secret を検証し、AI Gateway に転送して上流レスポンスを返します。 |
+| Tail Worker      | 有料プランのオプションコンポーネント                                 | Free Tier proxy-only mode では使用しません。                             |
+| Ollama Cloud Worker   | Wrangler (`workers/src/ollama-cloud.ts`)                             | 厳密な ISO 8601 anchor から reset metrics を算出し、OTLP metrics を push します。 |
+| Ollama Cloud alerts   | Grafana Alerting API (`grafana/alerts/`)                              | Prometheus metrics から session/weekly reset alert を発火します。             |
+| Dashboard             | `grafana/dashboards/graft-ai-overview.json`                           | 13 パネルの Grafana dashboard を gcx API 経由で import します。                |
+| Ollama dashboard      | `grafana/dashboards/graft-ai-ollama-cloud.json`                       | Ollama Cloud reset metrics dashboard を gcx API 経由で import します。         |
+| Grafana Access Policy | Terraform (`terraform/grafana/`) または手動                           | OTel と Loki/Prometheus delivery 用の `logs:write`、`metrics:write`、`traces:write` scope を持つ Cloud Access Policy を管理します。 |
 
 ### Provider Metrics Worker (`graft-ai-provider-metrics`)
 
@@ -182,6 +187,151 @@ failure が確認できた場合だけ page します。削除 quota failure は
 前の枯渇予測に対する手動対応であり、一時的な削除エラーへの自動反応ではありません。
 R2 lifecycle rule は R2 payload だけに適用し、KV payload は削除しません。
 
+#### OTel signal 契約（設計 invariant）
+
+以下の invariant は専用 OTel Worker と legacy Alloy/Tunnel reference stack の
+両方に適用されます。設計レビューで固定された内容であり、実装間でずらしては
+いけません。
+
+**deterministic sampling:**
+
+- 既定の sampling rate は 100% です。運用で指定する decimal rate は `0..1` に
+  検証し、浮動小数点を使わず `rate_ppm = floor(rate * 1_000_000)`（範囲
+  `0..1,000,000`）の整数へ正規化します。
+- decision は UTF-8 連結 `trace_id + "graft-ai-otel-v1"`（小文字 32 桁 hex）の
+  SHA-256 を使い、先頭 8 バイトを big-endian unsigned integer `hash` として
+  `hash * 1_000_000 < rate_ppm * 2^64` の厳密な `<` と exact integer arithmetic で
+  決めます。64-bit hash を float へ変換してはいけません。sampling priority
+  override は受け付けず、同じ `trace_id`/`rate_ppm`/seed は常に同じ decision に
+  なります。
+- Tempo trace と Loki payload は同じ trace 単位 decision を共有し、sampled out の
+  trace はどちらの backend にも存在しません。RED metrics は sampling 前の選択済み
+  request spans から生成し、payload sampling で値を減らしません。
+- acceptance fixture（seed `graft-ai-otel-v1`）: trace
+  `00000000000000000000000000000001` は SHA-256 prefix `f75a2b34049e94d6`
+  （rate 0.5 で out）、trace `ffffffffffffffffffffffffffffffff` は
+  `1d4e75600b429028`（rate 0.5 で in）、trace
+  `11111111111111111111111111111111` は `db81a30e59fe0b64`（rate 0.5 で out）。
+  rate `0` は全件 out、rate `1` は全件 in を期待値とします。
+
+**fail-closed redaction:**
+
+- redaction はあらゆる exporter、debug log、durable store、Queue handoff より先に
+  実行します。`gen_ai.prompt_json`、`gen_ai.completion_json`、`cf-aig-metadata`、
+  文字列属性中の Bearer/Basic/API key 形式の credential と明示的な
+  `secret`/`token`/`password` 系の値を `[REDACTED]` に置換します。
+- JSON parse または deterministic redaction に失敗した payload は原文を保存せず、
+  payload 属性だけを `payload_dropped=true`、
+  `payload_drop_reason="redaction_failure"` で削除し、安全な metadata は維持します。
+
+**spanlogs / Loki payload log:**
+
+- Loki label は `model`、`status_code`、`env`、`gateway` の4つだけです。
+  `trace_id`、`request_id`、`provider`、payload 内容は log field に留めます。
+- serialized UTF-8 log line の上限は 262,144 bytes（256 KiB）です。redaction 後に
+  JSON escaping 後のサイズで判定し、超過時は `prompt` と `completion` に 50:50
+  （片方のみなら 100:0）で budget を割り当て、UTF-8 code point 境界で切り詰めて
+  `[TRUNCATED]` suffix を budget 内に収め、identity/numeric field と
+  `payload_truncated=true` を保持します。metadata だけでも超過する場合は payload を
+  reason `line_size` で削除し、それでも超過する場合は record を破棄して
+  `otel_spanlogs_dropped_total{reason="line_size_metadata"}` だけを増加させます。
+  drop log には trace ID、URL、payload を含めません。
+- token/cost field（`input_tokens`、`output_tokens`、`total_tokens`、`cost_usd`、
+  `duration_ms`）は引用符なしの有限 decimal JSON number とし、NaN、Infinity、
+  変換不能値は field を欠損扱いにして `numeric_field_invalid` を記録します。
+  集計 panel は Loki を `| json | unwrap` で query します。
+
+**canonical RED metrics:**
+
+- `ai_gateway_requests_total`、`ai_gateway_errors_total`、
+  `ai_gateway_request_duration_seconds` のみを公開し、label は `model`、`provider`、
+  `status_code`、`env`、`gateway` です。duration histogram の bucket は
+  `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, +Inf]` 秒に固定します。
+
+**ingress 上限と rate limiting:**
+
+- receiver 上限は body 8 MiB、header 5 秒 / read 30 秒 / write 10 秒 timeout、
+  同時 request 100、dispatcher ingress queue 1,000 item（drop-new）です。queue が
+  満杯の場合は新しい item だけを固定 reason `capacity` で破棄し、client には `200` を
+  返します。backend の status を送信元へ返しません。
+- source rate limit は token bucket capacity 20、refill 2/秒（120 request/分）です。
+  bucket key は
+  `HMAC-SHA-256(OTEL_RATE_LIMIT_HMAC_KEY, "otel-ingress-source-v1" || NUL || canonical_ip)`
+  で、raw IP は永続化・label 化しません。client 指定の forwarding header は常に無視し、
+  trusted path（Worker では常に trusted、Alloy では `OTEL_TRUSTED_PROXY_CIDRS` 内の
+  peer のみ。それ以外は `403` / `untrusted_source`）の Cloudflare edge 由来の
+  `CF-Connecting-IP` だけを source として使い、未取得時は共有 `unknown` bucket へ
+  送ります。`429` 応答の `Retry-After` は ASCII decimal の delta-seconds（切り上げ、
+  最小 1）です。
+- ingress 運用 metric は固定です:
+  `otel_ingress_requests_total{status}`、reason enum `auth`、
+  `untrusted_source`、`path`、`parse`、`content_type`、`compression`、
+  `body_size`、`timeout` を持つ `otel_ingress_rejections_total{reason}`、
+  さらに `otel_ingress_rate_limited_total`、
+  `otel_ingress_queue_dropped_total{reason="capacity"}`、
+  `otel_ingress_active_requests`、`otel_ingress_request_bytes`、
+  `otel_ingress_queue_items`/`otel_ingress_queue_capacity{queue="dispatcher"}`
+  です。source IP、token、prompt/completion は label にしません。reject の
+  status は `401` auth、`403` untrusted source、`404` path、`400` parse、
+  `415` content type または compression、`413` body size、`408` handler
+  timeout、`429` rate limited に固定します。
+
+**Alloy reference の backend dispatch:**
+
+- retryable は network failure、`408`、`429`、`5xx` で、その他の `4xx` は終端です。
+  各 backend は合計 3 attempt（per-attempt timeout 10 秒）で、
+  `delay = min(base * 2^retry_index * uniform(0.8, 1.2), 5s)`（Tempo は base 1s/2s、
+  Loki/Prometheus は 500ms/1s）の backoff を使います。
+- 境界付き in-memory queue: Tempo は 64 MiB または 2,000 span、Loki は 64 MiB または
+  500 record、Prometheus は 16 MiB または 100 batch（batch は 200 data point または
+  1 秒で flush）。eviction は Tempo が最古の complete trace（なければ最古 item）、
+  Loki が最低 priority の record（priority は metrics 3 > trace metadata 2 >
+  payload 1）の後に最古、Prometheus が最古 batch の順です。
+- drop reason は固定 enum の `queue_capacity`、`retry_exhausted`、
+  `line_size_metadata`、`numeric_field_invalid`、`shutdown_loss`、
+  `trace_state_evicted` とします。運用 metric は
+  `otel_backend_export_retries_total{backend}`、
+  `otel_backend_export_failures_total{backend,status_class}`、
+  `otel_backend_export_exhausted_total{backend}`、
+  `otel_backend_queue_dropped_total{backend,signal,reason}` と queue utilization/age で、
+  backend failure log には `backend`、`status_class`、`attempt`、`reason`、
+  `queue_items`、`queue_capacity` だけを記録します。
+- alert は export exhausted または queue drop が 5 分継続で critical、queue
+  utilization 0.80 超が 5 分継続、または 5 分以内の rate-limited request が 1 件
+  以上で warning です。
+
+**retention gate（Alloy reference）:**
+
+- self-hosted baseline retention は Tempo 14 日、Loki 7 日、Prometheus 14 日を
+  Compose の明示設定で固定します。Grafana Cloud の payload log export は、実効 Cloud
+  Logs retention が 14 日以下の正の期間として解決できる場合だけ有効化し、それ以外は
+  固定の sanitized reason `retention_unavailable`、`retention_lookup_failed`、
+  `retention_invalid`、`retention_exceeds_14d` で無効化します。Cloud の既定値を 7 日や
+  30 日と仮定せず、tenant の実効値を受入時に記録します。
+
+**OTel Worker の耐久性と identity:**
+
+- Queue semantics は at-least-once で、すべての ingress/export record は安定 ID、
+  Durable Object による idempotency、25 時間（`DEDUPLICATION_TOMBSTONE_MS`）の
+  deduplication tombstone を持ちます。exactly-once delivery は主張しません。
+- Durable Object aggregation のパラメータ: trace aggregate は 1 秒の idle alarm で
+  trace state を flush し、metrics aggregate は 30 秒または 200 sample の先着で
+  DELTA sample window を flush します。
+- envelope を serialize する前に、文字列として格納された payload JSON 内の
+  オブジェクトキーを再帰的に辞書順でソートします（配列の順序は保持します）。この
+  canonicalization により、同値の payload は同じ canonical envelope bytes、`ingressId`、
+  `payloadSha256` を生成します。
+- `ingressId = SHA-256("graft-ai-otel-ingress-v1" || NUL || canonical_redacted_envelope_bytes)`
+  です。同一 ID で payload hash が一致すれば accepted duplicate、hash が異なれば元の
+  状態を変更せず collision として失敗させます。AI Gateway の delivery ID
+  （`cf-aig-otel-trace-id`、span ID、request ID）は ingress ID に使いません。
+- OTLP payload はすべて JSON（`application/json`）で、各 export document は 4,000,000
+  UTF-8 バイト（Cloud 取り込み上限 5 MB 未満）に cap します。Worker 経路に protobuf
+  runtime 依存はありません。
+- Terraform は Queue、DLQ、KV namespace、任意の R2 resource を管理し、Wrangler は
+  Queue consumer と Durable Object binding を管理します。Terraform 側に
+  `cloudflare_queue_consumer` resource は追加しません。
+
 **アラート:** Grafana アラートルール
 （`grafana/alerts/graft-ai-ollama-cloud-rules.json`）は、
 `ollama_cloud_reset_seconds_remaining{period="session"} < 3600`（session リセット1時間前）
@@ -221,16 +371,16 @@ R2 lifecycle rule は R2 payload だけに適用し、KV payload は削除しま
 
 #### 2.5 信頼性とエラー処理
 
-| Failure Point                   | Behavior                                                                    |
-| ------------------------------- | --------------------------------------------------------------------------- |
-| Missing/wrong `X-Origin-Secret` | `401` を返します。Logpush retry は発生しません。                            |
-| Malformed gzip body             | `400` を返します。Logpush retry は発生しません。                            |
-| Invalid RSA private key         | `400` を返します。Logpush retry は発生しません。                            |
-| Unparseable NDJSON line         | 該当行を skip し、他の行の処理を継続します。                                |
-| Loki 429                        | Exponential backoff で最大3回 retry します。最終失敗時は `503` を返します。 |
-| Loki 5xx                        | Exponential backoff で最大3回 retry します。最終失敗時は `503` を返します。 |
+| Failure Point                    | Behavior                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------- |
+| Missing/wrong `X-Origin-Secret`  | `401` を返します。Logpush retry は発生しません。                                |
+| Malformed gzip body              | `400` を返します。Logpush retry は発生しません。                                |
+| Invalid RSA private key          | `400` を返します。Logpush retry は発生しません。                                |
+| Unparseable NDJSON line          | 該当行を skip し、他の行の処理を継続します。                                    |
+| Loki 429                         | Exponential backoff で最大3回 retry します。最終失敗時は `503` を返します。     |
+| Loki 5xx                         | Exponential backoff で最大3回 retry します。最終失敗時は `503` を返します。     |
 | Loki ネットワーク障害 (status 0) | Fetch 失敗。Loki handler は status 0 を返します。Worker は `503` に変換します。 |
-| Loki 4xx (non-429)              | `400` を返します。Logpush retry は発生しません。                            |
+| Loki 4xx (non-429)               | `400` を返します。Logpush retry は発生しません。                                |
 
 #### 2.6 セキュリティ
 

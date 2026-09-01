@@ -78,6 +78,14 @@ payload を保存し、`OTEL_OBJECTS` R2 binding は
 4 MB export payload cap はこの value limit 未満です。Free limit に達した場合は
 その操作が失敗し、paid overage へ自動移行しません。
 
+Metrics Durable Object の serialized cumulative state は、SQLite-backed Durable Object
+の 2 MiB value limit を下回る 1,500,000 UTF-8 bytes に制限します。series ごとの start
+time は sample に保持し、last flush には compact な metadata だけを保存します。
+cumulative state または export payload が cap に達した場合は current flush window へ
+rollover します。current window 単独でも大きすぎる場合は sample を黙って破棄せず、
+`/append` が `metrics_window_too_large` の HTTP 413 を返して enqueue しません。alarm は
+Durable Object の concurrency gate の外側で同じ失敗を報告します。
+
 KV の eventual consistency のため、KV pointer の最初の Queue delivery は
 60秒遅延します。新しい pointer は schema version 2 と `storageBackend` を持ち、
 schema-version-1 pointer は常に R2 を選択します。schema-version-2 の R2 pointer

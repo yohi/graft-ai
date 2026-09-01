@@ -29,6 +29,7 @@ test:
 	node --test tests/deploy-alert-rules.test.mjs
 	node --test tests/otel-cloud-config.test.mjs
 	node --test tests/deployment-contracts.test.mjs
+	node --test tests/sync-otel-github-secrets.test.mjs
 	$(MAKE) otel-validate
 	node --test tests/otel-smoke-retry.test.mjs
 	bash tests/setup-free-tier.test.sh

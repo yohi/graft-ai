@@ -312,8 +312,17 @@ not drift between implementations.
   stable ID, Durable Object idempotency, and a `DEDUPLICATION_TOMBSTONE_MS` of
   25 hours. Exactly-once delivery is never claimed.
 - Durable Object aggregation parameters: the trace aggregate flushes trace
-  state after a one-second idle alarm; the metrics aggregate flushes DELTA
-  sample windows every 30 seconds or 200 samples, whichever comes first.
+  state after a one-second idle alarm; the metrics aggregate flushes cumulative
+  sample windows every 30 seconds or 200 samples, whichever comes first, while
+  retaining each series' first start time. Serialized metrics state is capped at
+  1,500,000 UTF-8 bytes to stay below the SQLite-backed Durable Object 2 MiB
+  value limit. The aggregate stores each series' start time on its sample and
+  keeps only compact metadata for the last flush. If the cumulative payload or
+  state would exceed its cap, it rolls over to the current flush window and
+  resets that window's cumulative start time. If the current window alone is
+  too large, `/append` returns HTTP 413 with `metrics_window_too_large` and
+  enqueues nothing rather than dropping samples; an alarm reports the same
+  failure after leaving the concurrency gate.
 - Before envelope serialization, object keys inside JSON-encoded string
   payload attributes are recursively sorted in lexical order while array order
   is preserved. This canonicalization makes equivalent payloads produce the

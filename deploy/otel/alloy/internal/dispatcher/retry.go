@@ -54,15 +54,15 @@ func (p RetryPolicy) wait(ctx context.Context, retryIndex int) error {
 	if sleepFn == nil {
 		sleepFn = sleep
 	}
-delay := p.Backoff[retryIndex]
-if p.Jitter != nil {
-delay = p.Jitter(delay)
+	delay := p.Backoff[retryIndex]
+	if p.Jitter != nil {
+		delay = p.Jitter(delay)
 	}
 	const maxDelay = 5 * time.Second
 	if delay > maxDelay {
 		delay = maxDelay
 	}
-return sleepFn(ctx, delay)
+	return sleepFn(ctx, delay)
 }
 
 func jitter(duration time.Duration) time.Duration {

@@ -12,7 +12,7 @@ import { selectRequestSpan } from "../../src/otel/selection";
 import { validOtlpJson } from "./fixtures";
 
 describe("OTLP JSON encoders", () => {
-  it("keeps metrics for sampled-out traces and encodes DELTA data", () => {
+  it("keeps metrics for sampled-out traces and encodes cumulative data", () => {
     const parsed = parseOtlpJson(validOtlpJson);
     const firstSpan = parsed[0];
     if (!firstSpan) throw new Error("fixture did not produce a span");
@@ -29,9 +29,10 @@ describe("OTLP JSON encoders", () => {
 
     expect(samples).toHaveLength(3);
     expect(payload.resourceMetrics[0].scopeMetrics[0].metrics).toHaveLength(3);
-    expect(payload.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.aggregationTemporality).toBe(
-      1,
-    );
+    for (const metric of payload.resourceMetrics[0].scopeMetrics[0].metrics) {
+      const data = metric.sum ?? metric.histogram;
+      expect(data.aggregationTemporality).toBe("AGGREGATION_TEMPORALITY_CUMULATIVE");
+    }
     expect(payload.resourceMetrics[0].scopeMetrics[0].metrics[0].sum.isMonotonic).toBe(true);
   });
 
@@ -148,5 +149,15 @@ describe("OTLP JSON encoders", () => {
     expect(toTempoTrace(selected, false)).toEqual([]);
     expect(toLokiRecords(selected, false)).toEqual([]);
     expect(tempo).toHaveLength(1);
+  });
+
+  it("encodes Tempo status codes using OTLP enum names", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const selected = selectRequestSpan([redactSpan(firstSpan)]);
+    const encoded = JSON.parse(new TextDecoder().decode(encodeTempoJson(selected, true)));
+
+    expect(encoded.resourceSpans[0].scopeSpans[0].spans[0].status.code).toBe("STATUS_CODE_OK");
   });
 });

@@ -53,11 +53,11 @@ export function encodeMetricsJson(
         name: sample.name,
         unit: "s",
         histogram: {
-          aggregationTemporality: 1,
+          aggregationTemporality: "AGGREGATION_TEMPORALITY_CUMULATIVE",
           dataPoints: [
             {
               attributes: metricAttributes(sample.labels),
-              startTimeUnixNano: window.startTimeUnixNano,
+              startTimeUnixNano: sample.startTimeUnixNano ?? window.startTimeUnixNano,
               timeUnixNano: window.endTimeUnixNano,
               count: sample.count ?? "1",
               sum: sample.value,
@@ -72,12 +72,12 @@ export function encodeMetricsJson(
       name: sample.name,
       unit: "1",
       sum: {
-        aggregationTemporality: 1,
+        aggregationTemporality: "AGGREGATION_TEMPORALITY_CUMULATIVE",
         isMonotonic: true,
         dataPoints: [
           {
             attributes: metricAttributes(sample.labels),
-            startTimeUnixNano: window.startTimeUnixNano,
+            startTimeUnixNano: sample.startTimeUnixNano ?? window.startTimeUnixNano,
             timeUnixNano: window.endTimeUnixNano,
             asDouble: sample.value,
           },
@@ -143,7 +143,7 @@ function tempoSpan(span: RedactedSpan): Record<string, JsonValue> {
     endTimeUnixNano: span.endTimeUnixNano,
     attributes,
     status: {
-      code: span.statusCode,
+      code: tempoStatusCode(span.statusCode),
       message: span.statusMessage,
     },
   };
@@ -282,6 +282,12 @@ function spanKind(kind: string): string {
   if (normalized === "producer") return "SPAN_KIND_PRODUCER";
   if (normalized === "consumer") return "SPAN_KIND_CONSUMER";
   return "SPAN_KIND_INTERNAL";
+}
+
+function tempoStatusCode(statusCode: string): string {
+  const normalized = statusCode.toUpperCase().replace(/^STATUS_CODE_/, "");
+  if (normalized === "OK" || normalized === "ERROR") return `STATUS_CODE_${normalized}`;
+  return "STATUS_CODE_UNSET";
 }
 
 function encode(value: unknown): Uint8Array {

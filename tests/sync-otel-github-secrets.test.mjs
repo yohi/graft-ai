@@ -135,7 +135,7 @@ test("missing Grafana Terraform outputs stop with the apply instruction", () => 
   }
 });
 
-test("sync sends seven secrets through stdin without exposing values", () => {
+test("sync sends ten Grafana and OTel secrets through stdin without exposing values", () => {
   const fixture = createFixture();
   try {
     const result = runScript(fixture);
@@ -155,6 +155,9 @@ test("sync sends seven secrets through stdin without exposing values", () => {
         "GRAFANA_CLOUD_OTLP_AUTHORIZATION",
         `Basic ${Buffer.from("999999:telemetry-token").toString("base64")}`,
       ],
+      ["GRAFANA_CLOUD_PROMETHEUS_URL", "https://otlp.example/otlp"],
+      ["GRAFANA_CLOUD_PROMETHEUS_USERNAME", "999999"],
+      ["GRAFANA_CLOUD_ACCESS_POLICY_TOKEN", "telemetry-token"],
       ["GRAFANA_CLOUD_LOKI_URL", "https://logs.example/loki/api/v1/push"],
       [
         "GRAFANA_CLOUD_LOKI_AUTHORIZATION",

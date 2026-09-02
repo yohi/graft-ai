@@ -238,13 +238,13 @@ test("Grafana setup registers the OTLP endpoint credentials for scheduled metric
     assert.match(
       tfApplyGrafana,
       new RegExp(
-        `echo "\\$\\{OTLP_URL\\}/otlp"[\\s\\S]*secret put GRAFANA_CLOUD_PROMETHEUS_URL[\\s\\S]*--config ${escapedConfig}`,
+        `echo "\\$\\{OTLP_URL\\}/otlp"[\\s\\S]*secret put GRAFANA_CLOUD_PROMETHEUS_URL[^\\r\\n]*--config ${escapedConfig}`,
       ),
     );
     assert.match(
       tfApplyGrafana,
       new RegExp(
-        `echo "\\$OTLP_USER"[\\s\\S]*secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME[\\s\\S]*--config ${escapedConfig}`,
+        `echo "\\$OTLP_USER"[\\s\\S]*secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME[^\\r\\n]*--config ${escapedConfig}`,
       ),
     );
   }

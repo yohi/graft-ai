@@ -219,6 +219,37 @@ test("Terraform migration and setup scripts use the current resource addresses",
   assert.match(tfApplyGrafana, /grafana_telemetry_write_token/);
 });
 
+test("Grafana setup registers the OTLP endpoint credentials for scheduled metric Workers", () => {
+  assert.match(
+    tfApplyGrafana,
+    /OTLP_USER=\$\(terraform output -raw grafana_otlp_username/,
+  );
+  assert.match(
+    tfApplyGrafana,
+    /OTLP_URL=\$\(terraform output -raw grafana_otlp_url/,
+  );
+  assert.match(tfApplyGrafana, /OTLP_URL="\$\{OTLP_URL%\//);
+
+  for (const config of [
+    "wrangler.ollama.jsonc",
+    "wrangler.provider-metrics.jsonc",
+  ]) {
+    const escapedConfig = config.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.match(
+      tfApplyGrafana,
+      new RegExp(
+        `echo "\\$\\{OTLP_URL\\}/otlp"[\\s\\S]*secret put GRAFANA_CLOUD_PROMETHEUS_URL[^\\r\\n]*--config ${escapedConfig}`,
+      ),
+    );
+    assert.match(
+      tfApplyGrafana,
+      new RegExp(
+        `echo "\\$OTLP_USER"[\\s\\S]*secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME[^\\r\\n]*--config ${escapedConfig}`,
+      ),
+    );
+  }
+});
+
 test("Free Tier OTel guide uses the Tunnel and does not require Logpush", () => {
   for (const text of [
     "https://<otel-public-hostname>/v1/traces",

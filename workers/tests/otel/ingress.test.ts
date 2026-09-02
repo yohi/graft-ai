@@ -98,6 +98,25 @@ describe("OTel ingress", () => {
     expect(text).not.toContain("sk-live-test-secret");
   });
 
+  it("serializes the redacted envelope once before persistence", async () => {
+    const queue = { send: vi.fn(async () => undefined) } as unknown as Queue<IngressPointer>;
+    const testEnv = { ...otelEnv, OTEL_INGRESS_QUEUE: queue } as OtelEnv;
+    const stringify = vi.spyOn(JSON, "stringify");
+
+    try {
+      const response = await handleIngress(request(validOtlpJson), testEnv);
+
+      expect(response.status).toBe(200);
+      const envelopeSerializations = stringify.mock.calls.filter(([value]) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+        return "schemaVersion" in value && "spans" in value;
+      });
+      expect(envelopeSerializations).toHaveLength(1);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   it("uses matching ingress IDs and payload hashes for reordered JSON payload keys", async () => {
     const reservations: Array<{ ingressId: string; payloadSha256: string }> = [];
     const ledgerTarget = otelEnv.OTEL_LEDGER.getByName(`canonical-${crypto.randomUUID()}`);

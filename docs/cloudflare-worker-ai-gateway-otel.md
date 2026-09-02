@@ -18,6 +18,22 @@ The Worker is independent of the encrypted Logpush Worker in
 `workers/src/index.ts`. The legacy Tunnel/Alloy route remains available as the
 rollback path until the controlled observation window is complete.
 
+## Cloudflare plan prerequisite
+
+The dedicated Worker must run on a Cloudflare Workers Paid plan for production
+AI Gateway OTel traffic. AI Gateway OTel spans include prompt and completion
+attributes, so request bodies can be hundreds of kilobytes or larger. On the
+Workers Free plan, the 10 ms HTTP CPU limit was reached by observed
+388-815 KB requests and the Worker returned HTTP 503 with
+`exceededCpu`. `limits: null` in the Worker settings does not raise the
+account plan limit. Do not treat a successful small smoke request as proof
+that production-sized OTel payloads are supported.
+
+If a Paid plan is not available, keep the legacy Tunnel/Alloy route active and
+do not route production OTel traffic to the dedicated Worker. Any upstream
+payload-reduction option must be verified against the actual OTel export before
+using it as a substitute for the plan requirement.
+
 ## Required secrets
 
 Register these seven values as Wrangler secrets for the generated OTel Worker
@@ -89,6 +105,23 @@ namespace ID from Terraform output, runs
 synchronizes the seven secrets, and deploys that generated config. It does not
 change the existing AI Gateway exporter configuration.
 
+## Grafana Cloud dashboard datasource UIDs
+
+The dashboard JSON keeps `otel-prometheus`, `otel-loki`, and `otel-tempo` as
+self-hosted defaults. Before deploying to Grafana Cloud, set all three
+production variables to the UIDs returned by `GET /api/datasources`:
+
+```text
+GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID
+GRAFANA_OTEL_LOKI_DATASOURCE_UID
+GRAFANA_OTEL_TEMPO_DATASOURCE_UID
+```
+
+Set `GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` so a missing or partial Cloud
+UID configuration fails before dashboard provisioning. The deployment helper
+rewrites both panel and templating datasource references without changing the
+repository's self-hosted defaults.
+
 ## Payload storage, quotas, and migration
 
 `OTEL_PAYLOAD_STORE=kv` is the default. The current Worker binds the KV
@@ -125,6 +158,10 @@ OTEL_PAYLOAD_STORE=kv \
   make deploy-otel-worker
 make otel-worker-smoke
 ```
+
+The smoke helper creates current-time span timestamps and a new trace/span ID
+for every invocation. Fixed historical timestamps are rejected by Grafana
+Cloud's retention window and fixed IDs can be treated as duplicates.
 
 ### R2 opt-in
 

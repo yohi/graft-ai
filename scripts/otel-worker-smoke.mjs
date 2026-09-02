@@ -1,10 +1,16 @@
+import { randomBytes } from "node:crypto";
+
 const workerUrl = process.env.OTEL_WORKER_URL;
 const token = process.env.OTEL_INGEST_TOKEN;
 if (!workerUrl || !token) throw new Error("OTEL_WORKER_URL and OTEL_INGEST_TOKEN are required");
 const timeoutMs = 10_000;
+const nowMs = Date.now();
+const traceId = randomBytes(16).toString("hex");
+const spanId = randomBytes(8).toString("hex");
+const startTimeUnixNano = `${nowMs}000000`;
+const endTimeUnixNano = `${nowMs + 10}000000`;
 
 const endpoint = new URL("/v1/traces", workerUrl);
-const traceId = "00112233445566778899aabbccddeeff";
 const body = {
   resourceSpans: [
     {
@@ -14,11 +20,11 @@ const body = {
           spans: [
             {
               traceId,
-              spanId: "0112233445566778",
+              spanId,
               name: "graft-ai.smoke",
               kind: "SPAN_KIND_SERVER",
-              startTimeUnixNano: "1700000000000000000",
-              endTimeUnixNano: "1700000000100000000",
+              startTimeUnixNano,
+              endTimeUnixNano,
               status: { code: "STATUS_CODE_OK" },
               attributes: [
                 { key: "model", value: { stringValue: "smoke-model" } },

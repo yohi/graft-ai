@@ -5,8 +5,8 @@
 # key manually), this script:
 #   1. Runs `terraform init` to download the Grafana provider
 #   2. Runs `terraform apply -target` for grafana.tf resources only
-#   3. Reads the Loki write token from Terraform output
-#   4. Re-registers the token as a Wrangler secret (overwrite)
+#   3. Reads the Loki and OTLP credentials from Terraform output
+#   4. Re-registers them as Wrangler secrets (overwrite)
 #
 # Usage (from repo root):
 #   terraform login app.terraform.io
@@ -92,22 +92,23 @@ LOKI_URL=$(terraform output -raw grafana_loki_url       2>/dev/null || echo "")
 LOKI_USER=$(terraform output -raw grafana_loki_username  2>/dev/null || echo "")
 LOKI_TOKEN=$(terraform output -raw grafana_loki_write_token 2>/dev/null || echo "")
 TELEMETRY_TOKEN=$(terraform output -raw grafana_telemetry_write_token 2>/dev/null || echo "")
-PROM_URL=$(terraform output -raw grafana_prometheus_url 2>/dev/null || echo "")
-PROM_USER=$(terraform output -raw grafana_prometheus_username 2>/dev/null || echo "")
 OTLP_URL=$(terraform output -raw grafana_otlp_url 2>/dev/null || echo "")
+OTLP_USER=$(terraform output -raw grafana_otlp_username 2>/dev/null || echo "")
+OTLP_URL="${OTLP_URL%/}"
 
 printf '::add-mask::%s\n' "$LOKI_URL"
 printf '::add-mask::%s\n' "$LOKI_USER"
 printf '::add-mask::%s\n' "$LOKI_TOKEN"
 printf '::add-mask::%s\n' "$TELEMETRY_TOKEN"
-printf '::add-mask::%s\n' "$PROM_URL"
-printf '::add-mask::%s\n' "$PROM_USER"
 printf '::add-mask::%s\n' "$OTLP_URL"
+printf '::add-mask::%s\n' "$OTLP_USER"
 
 [[ -z "$LOKI_URL"   ]] && die "Could not read grafana_loki_url from Terraform output."
 [[ -z "$LOKI_USER"  ]] && die "Could not read grafana_loki_username from Terraform output."
 [[ -z "$LOKI_TOKEN" ]] && die "Could not read grafana_loki_write_token from Terraform output."
 [[ -z "$TELEMETRY_TOKEN" ]] && die "Could not read grafana_telemetry_write_token from Terraform output."
+[[ -z "$OTLP_URL" ]] && die "Could not read grafana_otlp_url from Terraform output."
+[[ -z "$OTLP_USER" ]] && die "Could not read grafana_otlp_username from Terraform output."
 
 success "Grafana output retrieved."
 
@@ -125,9 +126,13 @@ echo "$LOKI_USER"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA
 echo "$LOKI_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN  --config wrangler.jsonc
 
 if [[ -f wrangler.ollama.jsonc ]]; then
+  echo "${OTLP_URL}/otlp" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.ollama.jsonc
+  echo "$OTLP_USER"      | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.ollama.jsonc
   echo "$TELEMETRY_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
 fi
 if [[ -f wrangler.provider-metrics.jsonc ]]; then
+  echo "${OTLP_URL}/otlp" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
+  echo "$OTLP_USER"      | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
   echo "$TELEMETRY_TOKEN" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
 fi
 

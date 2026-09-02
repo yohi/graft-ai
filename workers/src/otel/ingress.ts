@@ -131,7 +131,7 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
     try {
       store = payloadStoreForWrite(env);
       const objectKey = ingressObjectKey(ingressId, new Date(nowMs).toISOString().slice(0, 10));
-      const object = await store.putJsonObject(objectKey, envelope, "ingress");
+      const object = await store.putBytesObject(objectKey, bytes, "ingress");
       pointer = { ...object, kind: "ingress", ingressId };
     } catch {
       await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);

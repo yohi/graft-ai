@@ -189,7 +189,7 @@ function metricLabels(span: RedactedSpan): Readonly<Record<string, string>> {
   for (const key of METRIC_LABEL_KEYS) {
     const raw = stringAttribute(span, key);
     if (key === "model") {
-      labels[key] = normalizeModelName(raw) || "unknown";
+      labels[key] = normalizeModelName(raw);
     } else {
       labels[key] = raw || "unknown";
     }

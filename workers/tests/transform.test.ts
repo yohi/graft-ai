@@ -21,8 +21,8 @@ describe("normalizeModelName", () => {
     expect(normalizeModelName("gpt-4o")).toBe("gpt-4o");
   });
 
-  it("returns empty string for empty input", () => {
-    expect(normalizeModelName("")).toBe("");
+  it("returns unknown for empty input", () => {
+    expect(normalizeModelName("")).toBe("unknown");
   });
 
   it("cleanses Cloudflare AI Gateway stream-concatenation bug", () => {
@@ -38,12 +38,12 @@ describe("normalizeModelName", () => {
 
   it("handles whitespace and casing", () => {
     expect(normalizeModelName("  GPT-4.1-2025-04-14  ")).toBe("gpt-4.1-2025-04-14");
-    expect(normalizeModelName("   ")).toBe("");
+    expect(normalizeModelName("   ")).toBe("unknown");
   });
 
   it("handles undefined and null", () => {
-    expect(normalizeModelName(undefined)).toBe("");
-    expect(normalizeModelName(null)).toBe("");
+    expect(normalizeModelName(undefined)).toBe("unknown");
+    expect(normalizeModelName(null)).toBe("unknown");
   });
 });
 

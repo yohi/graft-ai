@@ -5,9 +5,9 @@ import type { AIGatewayLog, LokiStream, LokiPushPayload, TelemetryEvent } from "
 const MAX_LOG_LINE_BYTES = 60_000;
 
 export function normalizeModelName(modelId: string | undefined | null): string {
-  if (!modelId || typeof modelId !== "string") return "";
+  if (!modelId || typeof modelId !== "string") return "unknown";
   let trimmed = modelId.trim();
-  if (!trimmed) return "";
+  if (!trimmed) return "unknown";
 
   if (!trimmed.includes("/")) {
     return trimmed.toLowerCase();

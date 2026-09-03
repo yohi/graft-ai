@@ -22,7 +22,7 @@ export function projectLokiRecord(span: RedactedSpan): LokiRecord | null {
     trace_id: span.traceId,
     span_id: span.spanId,
     status: span.statusCode,
-    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")) || "unknown",
+    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")),
     provider: firstString(span, "provider", "gen_ai.model.provider", "gen_ai.system"),
     status_code: firstString(span, "status_code", "http.response.status_code") || span.statusCode,
     gateway: firstString(span, "gateway"),
@@ -70,7 +70,7 @@ export function projectLokiRecord(span: RedactedSpan): LokiRecord | null {
 
 function canonicalLabels(span: RedactedSpan): Record<(typeof LOKI_LABEL_KEYS)[number], string> {
   return {
-    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")) || "unknown",
+    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")),
     status_code:
       firstString(span, "status_code", "http.response.status_code") || span.statusCode || "unknown",
     env: firstString(span, "env") || "unknown",

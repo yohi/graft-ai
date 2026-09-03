@@ -241,6 +241,14 @@ not drift between implementations.
   `ai_gateway_request_duration_seconds` exist, with labels `model`, `provider`,
   `status_code`, `env`, `gateway`. The duration histogram buckets are
   `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, +Inf]` seconds.
+- Exactly one request span is elected per trace to generate RED metrics. A span
+  is a request candidate if either:
+  1. It is a Cloudflare AI Gateway root span (`name == "cf.aig.request"` with no
+     parent span ID, regardless of `span.kind`), or
+  2. Its `span.kind` is `server` and it is either a root span (no parent span
+     ID) or carries a non-empty `request_id`.
+  Among candidates in a trace, the earliest `start_time_unix_nano` wins, with
+  lexicographically lowest `span_id` as the deterministic tie-breaker.
 
 **Ingress limits and rate limiting:**
 

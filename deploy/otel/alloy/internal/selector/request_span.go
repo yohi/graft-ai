@@ -187,10 +187,13 @@ func requestSpanIndex(spans []redaction.RedactedSpan) int {
 }
 
 func isRequestCandidate(span redaction.RedactedSpan) bool {
+	parent := attributeString(span, "parent_span_id")
+	if span.Name == "cf.aig.request" && parent == "" {
+		return true
+	}
 	if attributeString(span, "span.kind") != "server" {
 		return false
 	}
-	parent := attributeString(span, "parent_span_id")
 	requestID := attributeString(span, "request_id")
 	if parent == "" || requestID != "" {
 		return true

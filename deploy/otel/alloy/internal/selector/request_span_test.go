@@ -43,6 +43,28 @@ func TestRequestSelector_elects_one_request_span_with_start_and_span_id_tiebreak
 	}
 }
 
+func TestRequestSelector_elects_cf_aig_request_internal_root_span(t *testing.T) {
+	selector, err := NewRequestSelector(10_000, 64*1024*1024, time.Second)
+	if err != nil {
+		t.Fatalf("new selector: %v", err)
+	}
+	now := time.Unix(100, 0)
+	span := testSpan("trace-aig", "span-root", 10, map[string]json.RawMessage{
+		"span.kind": raw(`"internal"`),
+	})
+	span.Name = "cf.aig.request"
+	selector.AddAt(span, now)
+
+	flushed := selector.FlushIdle(now.Add(time.Second))
+	if len(flushed) != 1 {
+		t.Fatalf("flushed traces = %d, want 1", len(flushed))
+	}
+	trace := flushed[0]
+	if !trace.HasRequestSpan || trace.RequestSpan.SpanID != "span-root" {
+		t.Fatalf("request span = %#v, want span-root", trace.RequestSpan)
+	}
+}
+
 func TestRequestSelector_flushes_only_after_one_second_idle(t *testing.T) {
 	selector, err := NewRequestSelector(10_000, 64*1024*1024, time.Second)
 	if err != nil {

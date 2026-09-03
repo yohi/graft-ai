@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseOtlpJson } from "../../src/otel/otlp";
+import { redactSpan } from "../../src/otel/redaction";
+import { toMetricSamples } from "../../src/otel/otlp-json";
+import type { SelectedTrace } from "../../src/otel/types";
 import { validOtlpJson } from "./fixtures";
 
 describe("parseOtlpJson", () => {
@@ -112,5 +115,30 @@ describe("parseOtlpJson", () => {
     expect(spans[0]?.attributes.gateway).toBe("unknown");
     expect(spans[0]?.attributes.env).toBe("unknown");
     expect(spans[0]?.attributes.request_id).toBeUndefined();
+  });
+});
+
+describe("toMetricSamples", () => {
+  it("normalizes corrupted model name in metric labels", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const span = redactSpan(firstSpan);
+    const trace: SelectedTrace = {
+      traceId: span.traceId,
+      spans: [span],
+      requestSpan: {
+        ...span,
+        attributes: {
+          ...span.attributes,
+          model: "kimi-k2.7-codemoonshotai/Kimi-K2.7-Code",
+        },
+      },
+    };
+    const samples = toMetricSamples(trace);
+    expect(samples.length).toBeGreaterThan(0);
+    for (const sample of samples) {
+      expect(sample.labels.model).toBe("kimi-k2.7-code");
+    }
   });
 });

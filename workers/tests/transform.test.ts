@@ -24,6 +24,27 @@ describe("normalizeModelName", () => {
   it("returns empty string for empty input", () => {
     expect(normalizeModelName("")).toBe("");
   });
+
+  it("cleanses Cloudflare AI Gateway stream-concatenation bug", () => {
+    expect(normalizeModelName("kimi-k2.7-codemoonshotai/Kimi-K2.7-Code")).toBe("kimi-k2.7-code");
+    expect(normalizeModelName("kimi-k2.7-codemoonshotai/kimi-k2.7-code")).toBe("kimi-k2.7-code");
+    expect(normalizeModelName("glm-5.2zai-org/glm-5.2")).toBe("glm-5.2");
+  });
+
+  it("strips standard provider prefix and normalizes to lowercase", () => {
+    expect(normalizeModelName("moonshotai/Kimi-K2.7-Code")).toBe("kimi-k2.7-code");
+    expect(normalizeModelName("openai/GPT-4o")).toBe("gpt-4o");
+  });
+
+  it("handles whitespace and casing", () => {
+    expect(normalizeModelName("  GPT-4.1-2025-04-14  ")).toBe("gpt-4.1-2025-04-14");
+    expect(normalizeModelName("   ")).toBe("");
+  });
+
+  it("handles undefined and null", () => {
+    expect(normalizeModelName(undefined)).toBe("");
+    expect(normalizeModelName(null)).toBe("");
+  });
 });
 
 describe("requestTimeToNanos", () => {

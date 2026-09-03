@@ -4,16 +4,51 @@ import type { AIGatewayLog, LokiStream, LokiPushPayload, TelemetryEvent } from "
 // We leave a margin for JSON overhead and labels.
 const MAX_LOG_LINE_BYTES = 60_000;
 
-export function normalizeModelName(modelId: string): string {
-  if (modelId.startsWith("@cf/")) {
-    const withoutPrefix = modelId.slice(4);
-    const slashIndex = withoutPrefix.indexOf("/");
-    if (slashIndex >= 0) {
-      return withoutPrefix.slice(slashIndex + 1);
-    }
-    return withoutPrefix;
+export function normalizeModelName(modelId: string | undefined | null): string {
+  if (!modelId || typeof modelId !== "string") return "";
+  let trimmed = modelId.trim();
+  if (!trimmed) return "";
+
+  if (!trimmed.includes("/")) {
+    return trimmed.toLowerCase();
   }
-  return modelId;
+
+  // 1. Cloudflare Workers AI @cf/ prefix: @cf/<vendor>/<model> -> <model>
+  if (trimmed.startsWith("@cf/")) {
+    const withoutPrefix = trimmed.slice(4);
+    const slashIndex = withoutPrefix.indexOf("/");
+    trimmed = slashIndex >= 0 ? withoutPrefix.slice(slashIndex + 1) : withoutPrefix;
+    if (!trimmed.includes("/")) {
+      return trimmed.toLowerCase();
+    }
+  }
+
+  // 2. Cloudflare AI Gateway SSE stream concatenation bug:
+  // Format: <request_model><provider_slug>/<upstream_model>
+  // e.g. "kimi-k2.7-codemoonshotai/Kimi-K2.7-Code"
+  const lastSlashIndex = trimmed.lastIndexOf("/");
+  const left = trimmed.slice(0, lastSlashIndex);
+  const right = trimmed.slice(lastSlashIndex + 1);
+
+  const leftLower = left.toLowerCase();
+  const rightLower = right.toLowerCase();
+
+  if (
+    leftLower.startsWith(rightLower) ||
+    leftLower.endsWith(rightLower) ||
+    leftLower.includes(rightLower) ||
+    rightLower.includes(leftLower)
+  ) {
+    return rightLower;
+  }
+
+  // 3. Redundant single-provider prefix: <provider>/<model> -> <model>
+  // e.g. "moonshotai/kimi-k2.7-code" -> "kimi-k2.7-code"
+  if (trimmed.indexOf("/") === lastSlashIndex) {
+    return rightLower;
+  }
+
+  return trimmed.toLowerCase();
 }
 
 export function requestTimeToNanos(requestTime: number): string {

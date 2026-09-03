@@ -60,6 +60,59 @@ describe("selection and sampling", () => {
     ).toBe(false);
   });
 
+  it("selects a Cloudflare AI Gateway cf.aig.request root span even if span.kind is internal", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const base = redactSpan(firstSpan);
+    const aigSpan = {
+      ...base,
+      name: "cf.aig.request",
+      spanId: "0000000000000009",
+      parentSpanId: "",
+      startTimeUnixNano: "100",
+      attributes: {
+        ...base.attributes,
+        "span.kind": "internal",
+      },
+    };
+
+    const selected = selectRequestSpan([aigSpan]);
+    expect(selected.requestSpan?.spanId).toBe("0000000000000009");
+    expect(
+      selected.spans.find((span) => span.spanId === "0000000000000009")?.attributes[
+        "graft_ai.request_span"
+      ],
+    ).toBe(true);
+  });
+
+  it("rejects a cf.aig.request child span whose structural parentSpanId is non-empty even if parent_span_id attribute is empty", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const base = redactSpan(firstSpan);
+    const childAigSpan = {
+      ...base,
+      name: "cf.aig.request",
+      spanId: "0000000000000009",
+      parentSpanId: "actual-parent",
+      startTimeUnixNano: "100",
+      attributes: {
+        ...base.attributes,
+        "span.kind": "internal",
+        parent_span_id: "",
+      },
+    };
+
+    const selected = selectRequestSpan([childAigSpan]);
+    expect(selected.requestSpan).toBeNull();
+    expect(
+      selected.spans.find((span) => span.spanId === "0000000000000009")?.attributes[
+        "graft_ai.request_span"
+      ],
+    ).toBe(false);
+  });
+
   it("keeps RED metrics for a sampled-out trace", async () => {
     const parsed = parseOtlpJson(validOtlpJson);
     const firstSpan = parsed[0];

@@ -42,9 +42,15 @@ export async function shouldSampleTrace(traceId: string, decimalRate: string): P
 }
 
 function isRequestCandidate(span: RedactedSpan): boolean {
-  if (attributeString(span, "span.kind") !== "server") return false;
+  const kind = attributeString(span, "span.kind");
   const parentSpanId = span.parentSpanId;
   const requestId = attributeString(span, "request_id");
+
+  if (span.name === "cf.aig.request" && parentSpanId === "") {
+    return true;
+  }
+
+  if (kind !== "server") return false;
   return parentSpanId === "" || requestId !== "";
 }
 

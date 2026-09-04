@@ -44,6 +44,10 @@ resource "cloudflare_workers_kv_namespace" "otel_payloads" {
 resource "cloudflare_d1_database" "otel_payloads" {
   account_id = var.cloudflare_account_id
   name       = var.otel_d1_database_name
+
+  read_replication = {
+    mode = "disabled"
+  }
 }
 
 resource "cloudflare_r2_bucket" "otel" {

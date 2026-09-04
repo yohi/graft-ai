@@ -337,9 +337,17 @@ test("OTel infrastructure provisions a fixed KV namespace and exposes its ID", (
 });
 
 test("OTel infrastructure provisions a fixed D1 database and exposes its ID", () => {
+  const d1Resource =
+    otelTerraform.match(
+      /resource\s+"cloudflare_d1_database"\s+"otel_payloads"[\s\S]*?(?=\nresource |\s*$)/,
+    )?.[0] ?? "";
   assert.match(
     otelTerraform,
     /resource\s+"cloudflare_d1_database"\s+"otel_payloads"/,
+  );
+  assert.match(
+    d1Resource,
+    /read_replication\s*=\s*{\s*mode\s*=\s*"disabled"\s*}/,
   );
   assert.match(otelTerraform, /name\s*=\s*var\.otel_d1_database_name/);
   assert.match(

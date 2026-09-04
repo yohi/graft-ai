@@ -157,9 +157,23 @@ UIDs remain unchanged.
 
 The dedicated Worker defaults to `OTEL_PAYLOAD_STORE=d1` and stores redacted
 payloads in the `OTEL_PAYLOAD_D1` D1 database binding. Cloudflare D1 provides
-100,000 writes/day, 5,000,000 reads/day, 5 GB storage allowance, and zero credit
-card requirement on Workers Free. D1 is strongly consistent, so the first Queue
-delivery delay is 0 seconds (`queueDeliveryDelaySeconds` returns 0).
+100,000 writes/day, 5,000,000 reads/day, a 5 GB/account total storage allowance,
+and a 500 MB/database limit, with zero credit card requirement on Workers Free.
+D1 is strongly consistent. For D1 pointers, `queueDeliveryDelaySeconds` returns
+0 seconds (no intentional delay), but Queue delivery remains asynchronous;
+consumer scheduling, batch timeout, backlog, and retries mean actual immediate
+delivery is not guaranteed.
+
+The Worker limits each D1 payload to `MAX_D1_PAYLOAD_BYTES = 1,900,000` bytes,
+leaving room below D1's 2,000,000-byte maximum row size. This is separate from
+the `MAX_GRAFANA_OTLP_BYTES = 4,000,000` export payload cap. An oversized D1
+ingress payload returns HTTP 413 with `{"error":"payload_too_large"}` after its
+reservation is released, and no Queue message is registered; if reservation
+release fails, the Worker returns HTTP 503 instead. For a D1-backed export that
+is within the 4,000,000-byte export cap but exceeds 1,900,000 bytes, the D1
+payload-store size guard rejects it before the SQL write and before Queue
+enqueue. The ledger export reservation is released and no Queue message is
+registered. Payloads above 4,000,000 bytes fail earlier at export validation.
 
 Workers KV (the previous default, `OTEL_PAYLOAD_STORE=kv`, bound as
 `OTEL_PAYLOAD_KV`) and Cloudflare R2 (`OTEL_PAYLOAD_STORE=r2`, bound as

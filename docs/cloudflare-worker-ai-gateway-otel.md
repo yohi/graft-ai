@@ -128,10 +128,24 @@ repository's self-hosted defaults.
 ## Payload storage, quotas, and migration
 
 `OTEL_PAYLOAD_STORE=d1` is the default. Cloudflare D1 provides 100,000
-writes/day, 5,000,000 reads/day, 5 GB of storage, and zero credit card
-requirement on Workers Free. D1 is strongly consistent, meaning Queue delivery
-delay is 0 seconds (immediate delivery). A daily Cron Trigger (`0 4 * * *` UTC)
-runs a failsafe purge on expired records (`expires_at < unixepoch()`).
+writes/day, 5,000,000 reads/day, 5 GB/account total storage, and a
+500 MB/database limit, with zero credit card requirement on Workers Free. D1
+is strongly consistent. For D1 pointers, the configured Queue `delaySeconds` is
+0 seconds (no intentional delay), but Queue delivery remains asynchronous;
+consumer scheduling, batch timeout, backlog, and retries mean actual immediate
+delivery is not guaranteed. A daily Cron Trigger (`0 4 * * *` UTC) runs a
+failsafe purge on expired records (`expires_at < unixepoch()`).
+
+The Worker limits each D1 payload to `MAX_D1_PAYLOAD_BYTES = 1,900,000` bytes,
+below D1's 2,000,000-byte maximum row size. This limit is separate from the
+`MAX_GRAFANA_OTLP_BYTES = 4,000,000` export payload cap. An oversized D1
+ingress payload returns HTTP 413 with `{"error":"payload_too_large"}` after its
+reservation is released, and no Queue message is registered; a failed release
+returns HTTP 503 instead. For a D1-backed export within the 4,000,000-byte
+export cap but above 1,900,000 bytes, the D1 payload-store size guard rejects
+the payload before the SQL write and before Queue enqueue. The ledger export
+reservation is released and no Queue message is registered. Payloads above
+4,000,000 bytes fail earlier at export validation.
 
 Workers KV (`OTEL_PAYLOAD_STORE=kv`, the previous default) and Cloudflare R2
 (`OTEL_PAYLOAD_STORE=r2`) remain available via explicit configuration. The
@@ -165,7 +179,7 @@ terraform -chdir=terraform apply \
   -target=cloudflare_queue.otel_dlq \
   -target=cloudflare_workers_kv_namespace.otel_payloads \
   -target=cloudflare_d1_database.otel_payloads
-cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote
+(cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote)
 OTEL_PAYLOAD_STORE=d1 \
   OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)" \
   OTEL_PAYLOAD_D1_DATABASE_ID="$(terraform -chdir=terraform output -raw otel_payload_d1_database_id)" \

@@ -169,8 +169,21 @@ datasource UIDだけを置換します。`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=
 `OTEL_PAYLOAD_D1` D1 データベース binding に保存します。Cloudflare D1 は Workers Free
 においてクレジットカード登録不要（zero credit card requirement）で利用可能であり、
 100,000 writes/day（100,000書き込み/日）、5,000,000 reads/day（5,000,000読み取り/日）、
-5 GB の保存容量を提供します。D1 は強整合性（strong consistency）を持つため、
-最初の Queue delivery delay は 0秒（即時配信、`queueDeliveryDelaySeconds` が 0 を返却）です。
+アカウント全体の合計 5 GB/account 保存容量、および 1データベースあたり 500 MB/database
+の上限を提供します。D1 は強整合性（strong consistency）を持ちます。D1 pointer では
+`queueDeliveryDelaySeconds` が 0秒（意図的な遅延なし）を返しますが、Queue 配信は非同期です。
+consumer のスケジューリング、バッチタイムアウト、backlog、再試行により、実際の即時配信は
+保証されません。
+
+Worker は D1 に保存する各 payload を `MAX_D1_PAYLOAD_BYTES = 1,900,000` bytes に制限します。
+これは D1 の 2,000,000-byte maximum row size より余裕を持って小さい値です。この上限は
+`MAX_GRAFANA_OTLP_BYTES = 4,000,000` の export payload cap とは別です。D1 ingress payload が
+1,900,000 bytes を超える場合、reservation の解放に成功すれば Worker は
+`{"error":"payload_too_large"}` の HTTP 413 を返し、Queue message を登録しません。解放に
+失敗した場合は HTTP 503 を返します。D1-backed export が 4,000,000-byte export cap 以下で
+1,900,000 bytes を超える場合は、D1 payload-store のサイズガードが SQL write 前、かつ Queue
+enqueue 前に拒否します。ledger の export reservation は解放され、Queue message は登録されません。
+4,000,000 bytes を超える payload は export validation の段階で先に失敗します。
 
 以前のデフォルトであった Workers KV (`OTEL_PAYLOAD_STORE=kv`、`OTEL_PAYLOAD_KV` binding)
 および Cloudflare R2 (`OTEL_PAYLOAD_STORE=r2`、`OTEL_OBJECTS` binding) も、明示的な

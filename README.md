@@ -95,10 +95,12 @@ outside the Durable Object concurrency gate.
 #### OTel payload storage and migration
 
 `OTEL_PAYLOAD_STORE=d1` is the new default. Cloudflare D1 provides 100,000
-writes/day, 5,000,000 reads/day, 5 GB storage allowance, and zero credit card
-requirement on Workers Free. D1 is strongly consistent, so the Queue propagation
-delay is 0s (immediate delivery). Before deployment with D1, apply database
-migrations with `cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`
+writes/day, 5,000,000 reads/day, a 5 GB/account total storage allowance, and a
+500 MB/database limit, with zero credit card requirement on Workers Free. D1 is
+strongly consistent. For a D1 pointer, the configured Queue `delaySeconds` is
+0 seconds (no intentional delay), but Queue delivery is asynchronous; consumer
+scheduling, batch timeout, backlog, and retries mean actual immediate delivery
+is not guaranteed. Before deployment with D1, apply database migrations with `cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`
 (automatically executed by `make deploy-otel-worker`).
 
 Workers KV (`OTEL_PAYLOAD_STORE=kv`, the previous default) and Cloudflare R2

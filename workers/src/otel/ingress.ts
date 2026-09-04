@@ -135,8 +135,8 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       const object = await store.putBytesObject(objectKey, bytes, "ingress");
       pointer = { ...object, kind: "ingress", ingressId };
     } catch (error) {
-      await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
-      if (error instanceof PayloadStorePayloadTooLargeError) {
+      const released = await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
+      if (error instanceof PayloadStorePayloadTooLargeError && released) {
         return json({ error: "payload_too_large" }, 413);
       }
       return json({ error: "persistence_failed" }, 503);

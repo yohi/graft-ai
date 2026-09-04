@@ -72,8 +72,11 @@ environment variables に設定してください。
 `OTEL_PAYLOAD_STORE=d1` が新しいデフォルトです。Cloudflare D1 は Workers Free において
 クレジットカード登録不要（zero credit card requirement）で利用可能であり、
 100,000 writes/day（100,000書き込み/日）、5,000,000 reads/day（5,000,000読み取り/日）、
-5 GB の保存容量を提供します。D1 は強整合性（strong consistency）を持つため、
-Queue propagation delay（キュー伝播遅延）は 0s（即時配信）です。D1 を利用したデプロイ前には
+アカウント全体の合計 5 GB/account 保存容量、および 1データベースあたり
+500 MB/database の上限を提供します。D1 は強整合性（strong consistency）を持ちます。
+D1 pointer の Queue 設定上の `delaySeconds` は 0 秒（意図的な遅延なし）ですが、Queue 配信は
+非同期です。consumer のスケジューリング、バッチタイムアウト、backlog、再試行により、
+実際の即時配信時間は保証されません。D1 を利用したデプロイ前には
 データベースマイグレーションを適用します:
 `cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`
 （`make deploy-otel-worker` 実行時に自動適用されます）。

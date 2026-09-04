@@ -75,8 +75,10 @@ test("renders D1-default, KV, R2, and KV/R2-drain binding contracts", () => {
       binding: "OTEL_PAYLOAD_D1",
       database_name: "graft-ai-aig-otel-payloads-v1",
       database_id: options.d1DatabaseId,
+      migrations_dir: "../migrations",
     },
   ]);
+  assert.equal(defaultConfig.d1_databases[0].migrations_dir, "../migrations");
 
   const kv = renderOtelWorkerConfig(config, {
     ...options,
@@ -134,6 +136,7 @@ test("renders D1-default, KV, R2, and KV/R2-drain binding contracts", () => {
       binding: "OTEL_PAYLOAD_D1",
       database_name: "graft-ai-aig-otel-payloads-v1",
       database_id: options.d1DatabaseId,
+      migrations_dir: "../migrations",
     },
   ]);
   assert.equal(d1.r2_buckets, undefined);

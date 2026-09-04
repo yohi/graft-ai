@@ -54,6 +54,14 @@ const otelRunbook = readFileSync(
   resolve(root, "docs/cloudflare-worker-ai-gateway-otel.md"),
   "utf8",
 );
+const validateDeploymentJob =
+  deploy.match(
+    /  validate-deployment:\n[\s\S]*?(?=\n  apply-cloudflare-infrastructure:)/,
+  )?.[0] ?? "";
+const otelDeploymentJob =
+  deploy.match(
+    /  deploy-otel-worker:\n[\s\S]*?(?=\n  deploy-proxy-worker:)/,
+  )?.[0] ?? "";
 
 test("PR Terraform plan uses read-only Grafana retention credentials", () => {
   assert.match(ci, /CLOUDFLARE_READONLY_API_TOKEN/);
@@ -357,28 +365,76 @@ test("CI and deployment select D1 by default and render explicit KV/R2 modes", (
     deploy,
     /OTEL_PAYLOAD_R2_DRAIN: \$\{\{ vars\.OTEL_PAYLOAD_R2_DRAIN \|\| 'false' \}\}/,
   );
+  assert.match(
+    validateDeploymentJob,
+    /- name: Validate OTel payload store selection[\s\S]*?case "\$OTEL_PAYLOAD_STORE" in\s+d1\|kv\|r2\) ;;/,
+  );
   assert.match(deploy, /render-otel-worker-config\.mjs/);
   assert.match(deploy, /otel_payload_kv_namespace_id/);
   assert.match(deploy, /-target=cloudflare_d1_database\.otel_payloads/);
   assert.match(deploy, /otel_payload_d1_database_id/);
   assert.match(deploy, /OTEL_PAYLOAD_D1_DATABASE_ID/);
-  assert.match(deploy, /--d1-database-id/);
-  assert.match(
-    deploy,
-    /\.\/node_modules\/\.bin\/wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote/,
-  );
-  assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
   assert.match(makefile, /OTEL_PAYLOAD_STORE \?= d1/);
   assert.match(makefile, /OTEL_PAYLOAD_R2_DRAIN \?= false/);
   assert.match(makefile, /OTEL_PAYLOAD_KV_NAMESPACE_ID/);
   assert.match(makefile, /--include-r2-binding/);
 });
 
-test("OTel D1 migration step receives Cloudflare credentials", () => {
+test("OTel renderer scopes the D1 database ID to D1 deployments", () => {
+  const renderStep =
+    otelDeploymentJob.match(
+      /- name: Render deployable OTel Worker config[\s\S]*?(?=\n      - name: Apply OTel D1 migrations)/,
+    )?.[0] ?? "";
+  const renderArgsStart = renderStep.indexOf("render_args=(");
+  const d1BranchStart = renderStep.indexOf(
+    'if [[ "$OTEL_PAYLOAD_STORE" == d1 ]]; then',
+  );
+  const r2BranchStart = renderStep.indexOf(
+    'if [[ "$OTEL_PAYLOAD_STORE" == r2 || "$OTEL_PAYLOAD_R2_DRAIN" == true ]]; then',
+  );
+
+  assert.ok(renderArgsStart >= 0, "missing renderer argument block");
+  assert.ok(d1BranchStart >= 0, "missing D1 renderer branch");
+  assert.ok(r2BranchStart >= 0, "missing R2 renderer branch");
+  assert.match(
+    renderStep.slice(d1BranchStart, r2BranchStart),
+    /render_args\+=\(--d1-database-id "\$OTEL_PAYLOAD_D1_DATABASE_ID"\)/,
+  );
+  assert.doesNotMatch(
+    renderStep.slice(renderArgsStart, d1BranchStart),
+    /--d1-database-id/,
+  );
+  const r2Branch = renderStep.slice(r2BranchStart);
+  assert.match(r2Branch, /render_args\+=\(--include-r2-binding\)/);
+  assert.doesNotMatch(r2Branch, /--d1-database-id/);
+  assert.equal((renderStep.match(/--d1-database-id/g) ?? []).length, 1);
+});
+
+test("OTel D1 migration step receives credentials and uses the generated config before Worker deployment", () => {
   const migrationStep =
-    deploy.match(
+    otelDeploymentJob.match(
       /- name: Apply OTel D1 migrations[\s\S]*?(?=\n      - name: Sync dedicated OTel Worker secrets)/,
     )?.[0] ?? "";
+  const migrationPosition = otelDeploymentJob.indexOf(
+    "- name: Apply OTel D1 migrations",
+  );
+  const workerDeploymentPosition = otelDeploymentJob.indexOf(
+    "- name: Deploy with Wrangler",
+  );
+
+  assert.ok(migrationPosition >= 0, "missing OTel D1 migration step");
+  assert.ok(
+    workerDeploymentPosition >= 0,
+    "missing OTel Worker deployment step",
+  );
+  assert.ok(
+    migrationPosition < workerDeploymentPosition,
+    "D1 migration must precede OTel Worker deployment",
+  );
+  assert.match(
+    migrationStep,
+    /run:\s+\.\/node_modules\/\.bin\/wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote --config \.wrangler\/otel\.generated\.jsonc/,
+  );
   assert.match(
     migrationStep,
     /env:\s*\n\s+CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}\s*\n\s+CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/,
@@ -387,7 +443,7 @@ test("OTel D1 migration step receives Cloudflare credentials", () => {
 
 test("OTel D1 migrations run only for the D1 payload store", () => {
   const migrationStep =
-    deploy.match(
+    otelDeploymentJob.match(
       /- name: Apply OTel D1 migrations[\s\S]*?(?=\n      - name: Sync dedicated OTel Worker secrets)/,
     )?.[0] ?? "";
   assert.match(migrationStep, /if:\s+env\.OTEL_PAYLOAD_STORE == 'd1'/);

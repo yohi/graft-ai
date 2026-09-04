@@ -155,18 +155,72 @@ UIDs remain unchanged.
 
 #### OTel Worker payload store
 
-The dedicated Worker defaults to `OTEL_PAYLOAD_STORE=kv` and stores redacted
-payloads in the `OTEL_PAYLOAD_KV` binding. `OTEL_OBJECTS` is an optional R2
-binding, required only for `OTEL_PAYLOAD_STORE=r2` or an explicit
+The dedicated Worker defaults to `OTEL_PAYLOAD_STORE=d1` and stores redacted
+payloads in the `OTEL_PAYLOAD_D1` D1 database binding. Cloudflare D1 provides
+100,000 writes/day, 5,000,000 reads/day, 5 GB storage allowance, and zero credit
+card requirement on Workers Free. D1 is strongly consistent, so the first Queue
+delivery delay is 0 seconds (`queueDeliveryDelaySeconds` returns 0).
+
+Workers KV (the previous default, `OTEL_PAYLOAD_STORE=kv`, bound as
+`OTEL_PAYLOAD_KV`) and Cloudflare R2 (`OTEL_PAYLOAD_STORE=r2`, bound as
+`OTEL_OBJECTS`) remain available via explicit configuration. `OTEL_OBJECTS` is an
+optional R2 binding, required only for `OTEL_PAYLOAD_STORE=r2` or an explicit
 `OTEL_PAYLOAD_R2_DRAIN=true` deployment. Workers Free provides a 1 GB KV
 storage allowance, 1,000 writes/day, 100,000 reads/day, 1,000 deletes/day, and
 a 25 MiB value limit. The 4 MB export payload cap is below that value limit;
 free-limit exhaustion fails the operation rather than enabling paid overage.
+KV eventual consistency requires a 60-second first Queue delivery delay.
 
-KV eventual consistency requires a 60-second first Queue delivery delay. New
-Queue pointers use schema version 2 and persist `storageBackend`. Schema-version-1
-pointers always read and delete through R2, and schema-version-2 R2 pointers
-remain R2-backed during a KV/R2 drain regardless of the current write selector.
+New Queue pointers use schema version 2 and persist `storageBackend` (`"d1"`,
+`"kv"`, or `"r2"`). Schema-version-1 pointers always read and delete through
+R2, and schema-version-2 R2 pointers remain R2-backed during a KV/R2 drain
+regardless of the current write selector. In-flight KV and R2 pointers continue
+to be read and deleted cleanly via their respective store bindings when running
+with `OTEL_PAYLOAD_STORE=d1`.
+
+##### D1 schema and index
+
+The D1 payload table schema is managed in
+`workers/migrations/0001_create_otel_payloads.sql`:
+
+```sql
+CREATE TABLE IF NOT EXISTS otel_payloads (
+  object_key TEXT PRIMARY KEY,
+  sha256 TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  data BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_otel_payloads_expires_at ON otel_payloads(expires_at);
+```
+
+Fields:
+- `object_key`: Unique key identifier (e.g. `otel/ingress/<date>/<uuid>.json` or
+  `otel/export/<backend>/<date>/<job_id>.json`).
+- `sha256`: Hexadecimal SHA-256 digest of payload `data`.
+- `content_type`: Payload MIME type, strictly `"application/json"`.
+- `kind`: Stage classification (`"ingress"` or `"export"`).
+- `data`: Binary BLOB containing the serialized payload.
+- `created_at`: Insertion timestamp in Unix epoch seconds.
+- `expires_at`: Expiration timestamp in Unix epoch seconds (`created_at + 7 days`).
+- `idx_otel_payloads_expires_at`: B-tree index enabling efficient range deletion
+  of expired rows without table scans.
+
+##### Cleanup invariant and daily Cron Trigger
+
+Under normal operation, payloads are deleted upon export via `deleteObject(pointer)`
+(`DELETE FROM otel_payloads WHERE object_key = ?`). For orphaned records (e.g.
+failed deliveries or discarded traces), a daily Cron Trigger (`0 4 * * *` UTC) runs
+a failsafe cleanup invoking `D1PayloadStore.deleteExpired(nowSeconds)`
+(`DELETE FROM otel_payloads WHERE expires_at < ?`). This scheduled purge runs
+completely off the trace ingress hot path and adds zero latency to incoming OTel
+requests. Any failure during scheduled cleanup is rethrown so Cloudflare Workers
+observability registers the Cron Trigger execution failure.
+
+##### KV monitoring and fallback
 
 Cloudflare KV Analytics or the GraphQL API is the source of truth for four
 independent monitoring dimensions: read operations, write operations, delete

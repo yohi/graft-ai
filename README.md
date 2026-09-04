@@ -94,10 +94,18 @@ outside the Durable Object concurrency gate.
 
 #### OTel payload storage and migration
 
-`OTEL_PAYLOAD_STORE=kv` is the default. The Worker binds the payload namespace
-as `OTEL_PAYLOAD_KV`; the `OTEL_OBJECTS` R2 binding is optional and is present
-only for `OTEL_PAYLOAD_STORE=r2` or an explicit
-`OTEL_PAYLOAD_R2_DRAIN=true` deployment. KV has a 1 GB storage allowance,
+`OTEL_PAYLOAD_STORE=d1` is the new default. Cloudflare D1 provides 100,000
+writes/day, 5,000,000 reads/day, 5 GB storage allowance, and zero credit card
+requirement on Workers Free. D1 is strongly consistent, so the Queue propagation
+delay is 0s (immediate delivery). Before deployment with D1, apply database
+migrations with `cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`
+(automatically executed by `make deploy-otel-worker`).
+
+Workers KV (`OTEL_PAYLOAD_STORE=kv`, the previous default) and Cloudflare R2
+(`OTEL_PAYLOAD_STORE=r2`) remain available via explicit configuration. The
+Worker binds the KV payload namespace as `OTEL_PAYLOAD_KV`; the `OTEL_OBJECTS`
+R2 binding is optional and is present only for `OTEL_PAYLOAD_STORE=r2` or an
+explicit `OTEL_PAYLOAD_R2_DRAIN=true` deployment. KV has a 1 GB storage allowance,
 1,000 writes/day, 100,000 reads/day, 1,000 deletes/day, and a 25 MiB value
 limit on Workers Free. The current 4 MB export payload cap fits below the KV
 value limit. Reaching a free limit fails that operation rather than enabling
@@ -107,7 +115,8 @@ KV is eventually consistent, so the first Queue delivery for a KV pointer is
 delayed by 60 seconds. New pointers are schema version 2 and persist their
 `storageBackend`; schema-version-1 pointers always select R2 and are never
 reinterpreted by the current `OTEL_PAYLOAD_STORE` value. A schema-version-2 R2
-pointer also continues to read and delete through R2 during a drain.
+pointer also continues to read and delete through R2 during a drain, and existing
+KV pointers remain readable and deletable when running on D1 or R2.
 
 Monitor KV Analytics or the Cloudflare GraphQL API as four separate series:
 read operations, write operations, delete operations, and stored data. Alert at
@@ -118,7 +127,7 @@ after Cloudflare confirms quota exhaustion or a threshold forecasts exhaustion
 before the next UTC reset; one transient delete error must not automatically
 switch the selector. The R2 lifecycle rule applies only to R2-backed payloads
 and never cleans up KV payloads. Keep dual bindings until the R2 drain is
-complete, then return to KV-only.
+complete, then return to KV-only or D1.
 
 ### Scheduled Workers
 

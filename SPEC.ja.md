@@ -165,19 +165,70 @@ datasource UIDだけを置換します。`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=
 
 #### OTel Worker の payload store
 
-専用Workerでは KV がデフォルトで、`OTEL_PAYLOAD_STORE=kv` としてレダクション済み payload を
-`OTEL_PAYLOAD_KV` binding に保存します。`OTEL_OBJECTS` は任意の R2 binding であり、
+専用Workerは `OTEL_PAYLOAD_STORE=d1` をデフォルトとし、レダクション済み payload を
+`OTEL_PAYLOAD_D1` D1 データベース binding に保存します。Cloudflare D1 は Workers Free
+においてクレジットカード登録不要（zero credit card requirement）で利用可能であり、
+100,000 writes/day（100,000書き込み/日）、5,000,000 reads/day（5,000,000読み取り/日）、
+5 GB の保存容量を提供します。D1 は強整合性（strong consistency）を持つため、
+最初の Queue delivery delay は 0秒（即時配信、`queueDeliveryDelaySeconds` が 0 を返却）です。
+
+以前のデフォルトであった Workers KV (`OTEL_PAYLOAD_STORE=kv`、`OTEL_PAYLOAD_KV` binding)
+および Cloudflare R2 (`OTEL_PAYLOAD_STORE=r2`、`OTEL_OBJECTS` binding) も、明示的な
+設定により引き続き利用可能です。`OTEL_OBJECTS` は任意の R2 binding であり、
 `OTEL_PAYLOAD_STORE=r2` または明示的な `OTEL_PAYLOAD_R2_DRAIN=true` の場合だけ
 必要です。Workers Free の KV には 1 GB 保存容量、1,000 writes/day
 （1,000書き込み/日）、100,000 reads/day（100,000読み取り/日）、1,000 deletes/day
 （1,000削除/日）、25 MiB value limit があります。4 MB export payload
 cap はこの value limit 未満で、Free limit 到達時は操作が失敗し paid overage へ
-自動移行しません。
+自動移行しません。KV の eventual consistency のため最初の Queue delivery は 60秒遅延します。
 
-KV の eventual consistency のため最初の Queue delivery は 60秒遅延します。新規
-Queue pointer は schema version 2 と `storageBackend` を永続化します。
-schema-version-1 pointer は常に R2 から読み取り・削除し、schema-version-2 の
+新規 Queue pointer は schema version 2 と `storageBackend`（`"d1"`, `"kv"`, `"r2"`）を
+永続化します。schema-version-1 pointer は常に R2 から読み取り・削除し、schema-version-2 の
 R2 pointer も KV/R2 drain 中は現在の write selector に関係なく R2 を使います。
+`OTEL_PAYLOAD_STORE=d1` 稼働時でも、キュー内の既存 KV および R2 pointer は各ストアから
+正常に読み取り・削除されます。
+
+##### D1 スキーマ定義とインデックス
+
+D1 のテーブルスキーマは `workers/migrations/0001_create_otel_payloads.sql` で管理されます:
+
+```sql
+CREATE TABLE IF NOT EXISTS otel_payloads (
+  object_key TEXT PRIMARY KEY,
+  sha256 TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  data BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_otel_payloads_expires_at ON otel_payloads(expires_at);
+```
+
+フィールド一覧:
+- `object_key`: 一意なキー識別子（例: `otel/ingress/<date>/<uuid>.json`、
+  `otel/export/<backend>/<date>/<job_id>.json`）。
+- `sha256`: ペイロード `data` の 16進表記 SHA-256 ダイジェスト。
+- `content_type`: ペイロードの MIME タイプ（厳格に `"application/json"`）。
+- `kind`: ステージ分類（`"ingress"` または `"export"`）。
+- `data`: シリアライズされたペイロードを格納するバイナリ BLOB。
+- `created_at`: Unix エポック秒の登録日時。
+- `expires_at`: Unix エポック秒の有効期限日時（`created_at + 7日`）。
+- `idx_otel_payloads_expires_at`: テーブルフルスキャンを回避し、期限切れレコードを
+  高速に範囲削除するための B-tree インデックス。
+
+##### クリーンアップ invariant と日次 Cron Trigger
+
+通常運用時、ペイロードはエクスポート完了時に `deleteObject(pointer)` で削除されます
+（`DELETE FROM otel_payloads WHERE object_key = ?`）。孤立レコード（失敗した配信や
+破棄されたトレースなど）に対するフェイルセーフとして、日次 Cron Trigger（`0 4 * * *` UTC）が
+`D1PayloadStore.deleteExpired(nowSeconds)`（`DELETE FROM otel_payloads WHERE expires_at < ?`）
+を実行して期限切れレコードをパージします。この定期クリーンアップはトレース受信の
+ホットパス外で完全に独立して動作し、受信レイテンシに影響を与えません。クリーンアップ実行時の
+エラーは再送出され、Cloudflare Workers の可観測性上で失敗として確実に記録されます。
+
+##### KV 監視と R2 移行
 
 Cloudflare KV Analytics または GraphQL API を、読み取り、書き込み、削除、保存データ
 という4つの独立した監視軸のsource of truthとします。80,000 reads/day、800

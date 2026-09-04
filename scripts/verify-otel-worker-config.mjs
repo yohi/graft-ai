@@ -26,7 +26,7 @@ export function validateOtelWorkerConfig(
   config,
   rawConfig,
   {
-    payloadStore = config.vars?.OTEL_PAYLOAD_STORE ?? "kv",
+    payloadStore = config.vars?.OTEL_PAYLOAD_STORE ?? "d1",
     includeR2Binding,
   } = {},
 ) {
@@ -58,6 +58,14 @@ function validateBasicConfig(config, rawConfig) {
   }
   if (config.route !== undefined || (config.routes?.length ?? 0) > 0) {
     throw new Error("initial OTel Worker routes must remain on workers.dev");
+  }
+  if (
+    !Array.isArray(config.triggers?.crons) ||
+    !config.triggers.crons.includes("0 4 * * *")
+  ) {
+    throw new Error(
+      "OTel Worker must configure a daily cron trigger for expired payload purge",
+    );
   }
 }
 
@@ -93,8 +101,8 @@ function validateQueues(config) {
 }
 
 function validateStorage(config, { payloadStore, includeR2Binding }) {
-  if (payloadStore !== "kv" && payloadStore !== "r2") {
-    throw new Error("OTEL_PAYLOAD_STORE must be kv or r2");
+  if (payloadStore !== "d1" && payloadStore !== "kv" && payloadStore !== "r2") {
+    throw new Error("OTEL_PAYLOAD_STORE must be d1, kv, or r2");
   }
   if (config.vars?.OTEL_PAYLOAD_STORE !== payloadStore) {
     throw new Error(
@@ -112,6 +120,16 @@ function validateStorage(config, { payloadStore, includeR2Binding }) {
     )
   ) {
     throw new Error("OTEL_PAYLOAD_KV namespace binding is missing or invalid");
+  }
+
+  if (payloadStore === "d1" || (config.d1_databases?.length ?? 0) > 0) {
+    const d1Bindings = config.d1_databases ?? [];
+    const d1Binding = d1Bindings.find(
+      (entry) => entry.binding === "OTEL_PAYLOAD_D1",
+    );
+    if (!d1Binding || !d1Binding.database_id) {
+      throw new Error("OTEL_PAYLOAD_D1 database binding is missing or invalid");
+    }
   }
 
   const hasR2Binding = (config.r2_buckets ?? []).some(

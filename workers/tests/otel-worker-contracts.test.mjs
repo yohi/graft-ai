@@ -15,7 +15,15 @@ test("dedicated OTel Worker owns its isolated runtime contract", () => {
   assert.equal(config.workers_dev, true);
   assert.equal(config.queues.producers.length, 8);
   assert.equal(config.queues.consumers.length, 4);
-  assert.equal(config.vars.OTEL_PAYLOAD_STORE, "kv");
+  assert.equal(config.vars.OTEL_PAYLOAD_STORE, "d1");
+  assert.deepEqual(config.d1_databases, [
+    {
+      binding: "OTEL_PAYLOAD_D1",
+      database_name: "graft-ai-aig-otel-payloads-v1",
+      database_id: "__OTEL_PAYLOAD_D1_DATABASE_ID__",
+    },
+  ]);
+  assert.deepEqual(config.triggers.crons, ["0 4 * * *"]);
   assert.deepEqual(config.kv_namespaces, [
     { binding: "OTEL_PAYLOAD_KV", id: "__OTEL_PAYLOAD_KV_NAMESPACE_ID__" },
   ]);
@@ -55,10 +63,21 @@ test("rejects extra Queue producer entries", () => {
   );
 });
 
-test("renders KV-default, R2, and KV/R2-drain binding contracts", () => {
+test("renders D1-default, KV, R2, and KV/R2-drain binding contracts", () => {
   const options = {
     kvNamespaceId: "00000000000000000000000000000000",
+    d1DatabaseId: "00000000-0000-0000-0000-000000000000",
   };
+  const defaultConfig = renderOtelWorkerConfig(config, options);
+  assert.equal(defaultConfig.vars.OTEL_PAYLOAD_STORE, "d1");
+  assert.deepEqual(defaultConfig.d1_databases, [
+    {
+      binding: "OTEL_PAYLOAD_D1",
+      database_name: "graft-ai-aig-otel-payloads-v1",
+      database_id: options.d1DatabaseId,
+    },
+  ]);
+
   const kv = renderOtelWorkerConfig(config, {
     ...options,
     payloadStore: "kv",
@@ -103,17 +122,48 @@ test("renders KV-default, R2, and KV/R2-drain binding contracts", () => {
       includeR2Binding: true,
     }),
   );
+
+  const d1 = renderOtelWorkerConfig(config, {
+    ...options,
+    payloadStore: "d1",
+    includeR2Binding: false,
+  });
+  assert.equal(d1.vars.OTEL_PAYLOAD_STORE, "d1");
+  assert.deepEqual(d1.d1_databases, [
+    {
+      binding: "OTEL_PAYLOAD_D1",
+      database_name: "graft-ai-aig-otel-payloads-v1",
+      database_id: options.d1DatabaseId,
+    },
+  ]);
+  assert.equal(d1.r2_buckets, undefined);
+  assert.doesNotThrow(() =>
+    validateOtelWorkerConfig(d1, JSON.stringify(d1), {
+      payloadStore: "d1",
+      includeR2Binding: false,
+    }),
+  );
 });
 
 test("rejects invalid selector, namespace ID, and unsafe binding combinations", () => {
   const valid = {
     kvNamespaceId: "00000000000000000000000000000000",
+    d1DatabaseId: "00000000-0000-0000-0000-000000000000",
     payloadStore: "kv",
     includeR2Binding: false,
   };
   assert.throws(
-    () => renderOtelWorkerConfig(config, { ...valid, payloadStore: "d1" }),
+    () => renderOtelWorkerConfig(config, { ...valid, payloadStore: "unknown" }),
     /payloadStore/,
+  );
+  assert.throws(
+    () => renderOtelWorkerConfig(config, { ...valid, payloadStore: "d1", d1DatabaseId: undefined }),
+    /D1 database ID/,
+  );
+  assert.throws(
+    () =>
+      renderOtelWorkerConfig(config, { ...valid, payloadStore: "d1", d1DatabaseId: "invalid-id" }),
+    /D1 database ID/,
   );
   assert.throws(
     () => renderOtelWorkerConfig(config, { ...valid, kvNamespaceId: "short" }),
@@ -133,7 +183,7 @@ test("rejects invalid selector, namespace ID, and unsafe binding combinations", 
         { ...config, r2_buckets: [{ binding: "OTEL_OBJECTS" }] },
         JSON.stringify(config),
         {
-          payloadStore: "kv",
+          payloadStore: "d1",
           includeR2Binding: false,
         },
       ),
@@ -147,6 +197,22 @@ test("rejects invalid selector, namespace ID, and unsafe binding combinations", 
         { payloadStore: "kv", includeR2Binding: false },
       ),
     /selector/,
+  );
+  assert.throws(
+    () =>
+      validateOtelWorkerConfig({ ...config, d1_databases: [] }, JSON.stringify(config), {
+        payloadStore: "d1",
+        includeR2Binding: false,
+      }),
+    /OTEL_PAYLOAD_D1/,
+  );
+  assert.throws(
+    () =>
+      validateOtelWorkerConfig({ ...config, triggers: { crons: [] } }, JSON.stringify(config), {
+        payloadStore: "d1",
+        includeR2Binding: false,
+      }),
+    /cron/,
   );
 });
 

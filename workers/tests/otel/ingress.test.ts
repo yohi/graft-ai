@@ -26,7 +26,7 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
 }
 
 describe("OTel ingress", () => {
-  it("uses KV and delays the first ingress delivery when the selector is unset", async () => {
+  it("uses KV and delays the first ingress delivery when the selector is kv", async () => {
     const sent: Array<Readonly<{ pointer: IngressPointer; options?: QueueSendOptions }>> = [];
     const queue = {
       send: vi.fn(async (pointer: IngressPointer, options?: QueueSendOptions) => {
@@ -35,7 +35,7 @@ describe("OTel ingress", () => {
     } as unknown as Queue<IngressPointer>;
     const testEnv = {
       ...otelEnv,
-      OTEL_PAYLOAD_STORE: undefined,
+      OTEL_PAYLOAD_STORE: "kv",
       OTEL_INGRESS_QUEUE: queue,
     } as OtelEnv;
     const body = structuredClone(validOtlpJson) as typeof validOtlpJson;
@@ -116,6 +116,57 @@ describe("OTel ingress", () => {
       stringify.mockRestore();
     }
   });
+
+  it.skipIf(!otelEnv.OTEL_PAYLOAD_D1)(
+    "returns 413 when the redacted envelope exceeds the D1 row limit",
+    async () => {
+      const queue = { send: vi.fn(async () => undefined) } as unknown as Queue<IngressPointer>;
+      const testEnv = {
+        ...otelEnv,
+        OTEL_PAYLOAD_STORE: "d1",
+        OTEL_INGRESS_QUEUE: queue,
+      } as OtelEnv;
+      const response = await handleIngress(
+        request(bodyWithPrompt(JSON.stringify("x".repeat(1_900_000))), {}),
+        testEnv,
+      );
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: "payload_too_large" });
+      expect(queue.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(!otelEnv.OTEL_PAYLOAD_D1)(
+    "returns 503 when releasing an oversized D1 ingress reservation fails",
+    async () => {
+      const ledgerTarget = otelEnv.OTEL_LEDGER.getByName(`release-${crypto.randomUUID()}`);
+      const ledgerStub = {
+        fetch: async (input: string | URL | Request, init?: RequestInit) => {
+          const ledgerRequest = new Request(input, init);
+          const body = (await ledgerRequest.clone().json()) as { operation?: string };
+          if (body.operation === "ingress.release") return Response.json(false);
+          return ledgerTarget.fetch(ledgerRequest);
+        },
+      } as unknown as DurableObjectStub;
+      const queue = { send: vi.fn(async () => undefined) } as unknown as Queue<IngressPointer>;
+      const testEnv = {
+        ...otelEnv,
+        OTEL_PAYLOAD_STORE: "d1",
+        OTEL_LEDGER: { getByName: () => ledgerStub } as unknown as DurableObjectNamespace,
+        OTEL_INGRESS_QUEUE: queue,
+      } as OtelEnv;
+
+      const response = await handleIngress(
+        request(bodyWithPrompt(JSON.stringify("x".repeat(1_900_000))), {}),
+        testEnv,
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "persistence_failed" });
+      expect(queue.send).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses matching ingress IDs and payload hashes for reordered JSON payload keys", async () => {
     const reservations: Array<{ ingressId: string; payloadSha256: string }> = [];

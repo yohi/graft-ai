@@ -1,5 +1,7 @@
 export const MAX_INGRESS_BYTES = 8 * 1024 * 1024;
 export const MAX_GRAFANA_OTLP_BYTES = 4_000_000;
+// Leave room for D1 row metadata below its 2,000,000-byte row limit.
+export const MAX_D1_PAYLOAD_BYTES = 1_900_000;
 export const MAX_LOKI_LINE_BYTES = 262_144;
 export const MAX_CONCURRENT_REQUESTS = 100;
 export const ACTIVE_REQUEST_LEASE_MS = 35_000;
@@ -19,7 +21,7 @@ export const DEDUPLICATION_TOMBSTONE_MS = 25 * 60 * 60 * 1_000;
 export const PAYLOAD_RETENTION_FAILSAFE_MS = 7 * 24 * 60 * 60 * 1_000;
 export const PAYLOAD_RETENTION_TTL_SECONDS = PAYLOAD_RETENTION_FAILSAFE_MS / 1_000;
 export const OTEL_QUEUE_MAX_RETRIES = 7;
-export const PAYLOAD_STORE_BACKENDS = ["kv", "r2"] as const;
+export const PAYLOAD_STORE_BACKENDS = ["kv", "r2", "d1"] as const;
 export type PayloadStoreBackend = (typeof PAYLOAD_STORE_BACKENDS)[number];
 export const MAX_JSON_DEPTH = 64;
 

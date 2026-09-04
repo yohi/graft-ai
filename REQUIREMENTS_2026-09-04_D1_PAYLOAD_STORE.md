@@ -90,7 +90,7 @@ D1 を採用することで、クレジットカード不要のまま書き込�
   - 選択可能バックエンド: `["kv", "r2", "d1"]`
 - `OTEL_PAYLOAD_STORE` 環境変数で `d1` を指定可能とし、新規デプロイの推奨既定値とする。
 - `CurrentObjectPointer` の `storageBackend` に `"d1"` を対応させる。
-- D1 は強整合性（Strong Consistency）を持つため、KV で必須だった **60秒の Queue 送信遅延 (`KV_PROPAGATION_DELAY_SECONDS`) は D1 ポインタでは 0 秒（即時配信）** とする。
+- D1 は強整合性（Strong Consistency）を持つため、KV で必須だった **60秒の Queue 送信遅延 (`KV_PROPAGATION_DELAY_SECONDS`) は D1 ポインタでは `delaySeconds: 0`（意図的な遅延なし）** とする。ただし Queue 配信は非同期であり、consumer のスケジューリング、バッチタイムアウト、backlog、再試行により実際の即時配信は保証されない。
 
 ### 4.3 既存データおよび他バックエンドとの後方互換性
 - キューに残存している既存の KV ポインタ (`storageBackend: "kv"`) や R2 ポインタ (`storageBackend: "r2"`, schemaVersion: 1) は、それぞれ適切な Store 実装で読み取り・削除できる後方互換性を保持する。

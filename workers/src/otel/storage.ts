@@ -1,5 +1,6 @@
 import {
   KV_PROPAGATION_DELAY_SECONDS,
+  MAX_D1_PAYLOAD_BYTES,
   PAYLOAD_RETENTION_TTL_SECONDS,
   PAYLOAD_STORE_BACKENDS,
   type Backend,
@@ -11,6 +12,7 @@ import {
   PayloadStoreError,
   PayloadStoreIntegrityError,
   PayloadStoreNotFoundError,
+  PayloadStorePayloadTooLargeError,
   PayloadStoreQuotaError,
   PayloadStoreTemporaryError,
 } from "./types";
@@ -57,13 +59,103 @@ abstract class PayloadStoreBase implements PayloadStore {
   abstract deleteObject(pointer: ObjectPointer): Promise<void>;
 }
 
+export class D1PayloadStore extends PayloadStoreBase {
+  readonly backend = "d1" as const;
+
+  constructor(private readonly db: D1Database) {
+    super();
+  }
+
+  async putBytesObject(
+    objectKey: string,
+    bytes: Uint8Array,
+    kind: "ingress" | "export",
+  ): Promise<CurrentObjectPointer> {
+    if (bytes.byteLength > MAX_D1_PAYLOAD_BYTES) {
+      throw new PayloadStorePayloadTooLargeError();
+    }
+    const sha256 = await sha256Hex(bytes);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const expiresAt = nowSeconds + PAYLOAD_RETENTION_TTL_SECONDS;
+
+    try {
+      await this.db
+        .prepare(
+          `INSERT OR REPLACE INTO otel_payloads
+           (object_key, sha256, content_type, kind, data, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(objectKey, sha256, CONTENT_TYPE, kind, bytes, nowSeconds, expiresAt)
+        .run();
+    } catch (error) {
+      throw classifyStoreFailure(error, "D1 payload write");
+    }
+
+    return currentPointer(objectKey, sha256, this.backend);
+  }
+
+  async readBytesObject(pointer: ObjectPointer): Promise<Uint8Array> {
+    let row: { data: ArrayBuffer | Uint8Array; sha256: string; content_type: string } | null;
+    try {
+      row = await this.db
+        .prepare(`SELECT data, sha256, content_type FROM otel_payloads WHERE object_key = ?`)
+        .bind(pointer.objectKey)
+        .first<{ data: ArrayBuffer | Uint8Array; sha256: string; content_type: string }>();
+    } catch (error) {
+      throw classifyStoreFailure(error, "D1 payload read");
+    }
+
+    if (!row) throw new PayloadStoreNotFoundError();
+    if (row.content_type !== pointer.contentType) {
+      throw new PayloadStoreIntegrityError("payload object content type mismatch");
+    }
+    if (row.sha256 !== pointer.sha256) {
+      throw new PayloadStoreIntegrityError("payload object metadata checksum mismatch");
+    }
+
+    const bytes = new Uint8Array(row.data);
+    const actualSha256 = await sha256Hex(bytes);
+    if (actualSha256 !== pointer.sha256) {
+      throw new PayloadStoreIntegrityError("payload object checksum mismatch");
+    }
+    return bytes;
+  }
+
+  async deleteObject(pointer: ObjectPointer): Promise<void> {
+    try {
+      await this.db
+        .prepare(`DELETE FROM otel_payloads WHERE object_key = ?`)
+        .bind(pointer.objectKey)
+        .run();
+    } catch (error) {
+      throw classifyStoreFailure(error, "D1 payload delete");
+    }
+  }
+
+  async deleteExpired(nowSeconds: number): Promise<number> {
+    try {
+      const result = await this.db
+        .prepare(`DELETE FROM otel_payloads WHERE expires_at < ?`)
+        .bind(nowSeconds)
+        .run();
+      return (result.meta as { changes?: number })?.changes ?? 0;
+    } catch (error) {
+      throw classifyStoreFailure(error, "D1 payload purge");
+    }
+  }
+}
+
 export function resolvePayloadStoreBackend(value: string | undefined): PayloadStoreBackend {
   const selected = value?.trim() ?? "";
-  if (selected === "") return "kv";
-  if (selected === PAYLOAD_STORE_BACKENDS[0] || selected === PAYLOAD_STORE_BACKENDS[1]) {
+  if (selected === "") return "d1";
+  if (
+    selected === PAYLOAD_STORE_BACKENDS[0] ||
+    selected === PAYLOAD_STORE_BACKENDS[1] ||
+    selected === PAYLOAD_STORE_BACKENDS[2]
+  ) {
     return selected;
   }
-  throw new PayloadStoreConfigurationError("OTEL_PAYLOAD_STORE must be exactly kv or r2");
+  throw new PayloadStoreConfigurationError("OTEL_PAYLOAD_STORE must be exactly d1, kv, or r2");
 }
 
 export function payloadStoreForWrite(env: OtelEnv): PayloadStore {
@@ -190,6 +282,12 @@ class R2PayloadStore extends PayloadStoreBase {
 }
 
 function payloadStoreForBackend(env: OtelEnv, backend: PayloadStoreBackend): PayloadStore {
+  if (backend === "d1") {
+    if (!env.OTEL_PAYLOAD_D1) {
+      throw new PayloadStoreConfigurationError("OTEL_PAYLOAD_D1 binding is missing");
+    }
+    return new D1PayloadStore(env.OTEL_PAYLOAD_D1);
+  }
   if (backend === "kv") {
     if (!env.OTEL_PAYLOAD_KV) {
       throw new PayloadStoreConfigurationError("OTEL_PAYLOAD_KV binding is missing");

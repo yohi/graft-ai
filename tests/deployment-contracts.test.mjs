@@ -19,6 +19,10 @@ const terraformOutputs = readFileSync(
   "utf8",
 );
 const makefile = readFileSync(resolve(root, "Makefile"), "utf8");
+const otelStorage = readFileSync(
+  resolve(root, "workers/src/otel/storage.ts"),
+  "utf8",
+);
 const setup = readFileSync(resolve(root, "scripts/setup.sh"), "utf8");
 const grafanaMain = readFileSync(
   resolve(root, "terraform/grafana/main.tf"),
@@ -148,7 +152,7 @@ test("OTel config rendering validates payload controls before namespace resoluti
     )?.[1] ?? "";
   const namespaceResolution = renderTarget.indexOf("namespace_id=");
   const validationSteps = [
-    'case "$(OTEL_PAYLOAD_STORE)" in kv|r2)',
+    'case "$(OTEL_PAYLOAD_STORE)" in d1|kv|r2)',
     'case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false)',
     'if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]',
   ];
@@ -166,6 +170,37 @@ test("OTel config rendering validates payload controls before namespace resoluti
       `validation must precede namespace resolution: ${validationStep}`,
     );
   }
+});
+
+test("OTel config rendering falls back to both Terraform payload IDs", () => {
+  const renderTarget =
+    makefile.match(
+      /render-otel-worker-config:\n([\s\S]*?)(?=\n\ndeploy-otel-worker:)/,
+    )?.[1] ?? "";
+  const namespaceAssignment = renderTarget.indexOf(
+    'namespace_id="$(OTEL_PAYLOAD_KV_NAMESPACE_ID)";',
+  );
+  const namespaceFallback = renderTarget.indexOf(
+    "terraform -chdir=terraform output -raw otel_payload_kv_namespace_id 2>/dev/null || true",
+  );
+  const d1Assignment = renderTarget.indexOf(
+    'd1_id="$(OTEL_PAYLOAD_D1_DATABASE_ID)";',
+  );
+  const d1Fallback = renderTarget.indexOf(
+    "terraform -chdir=terraform output -raw otel_payload_d1_database_id 2>/dev/null || true",
+  );
+
+  assert.ok(namespaceAssignment >= 0);
+  assert.ok(namespaceFallback > namespaceAssignment);
+  assert.ok(d1Assignment >= 0);
+  assert.ok(d1Fallback > d1Assignment);
+});
+
+test("classifyStoreFailure does not duplicate the temporary fallback", () => {
+  assert.doesNotMatch(
+    otelStorage,
+    /if \(\/database is locked\|busy\|timeout\|network\/i\.test\(message\)\) \{\s*return new PayloadStoreTemporaryError\(`\$\{operation\} temporarily unavailable`\);\s*\}\s*return new PayloadStoreTemporaryError/,
+  );
 });
 
 test("Terraform separates the Loki-only token from the telemetry token", () => {
@@ -293,6 +328,24 @@ test("OTel infrastructure provisions a fixed KV namespace and exposes its ID", (
   );
 });
 
+test("OTel infrastructure provisions a fixed D1 database and exposes its ID", () => {
+  assert.match(
+    otelTerraform,
+    /resource\s+"cloudflare_d1_database"\s+"otel_payloads"/,
+  );
+  assert.match(otelTerraform, /name\s*=\s*var\.otel_d1_database_name/);
+  assert.match(
+    terraformVariables,
+    /variable\s+"otel_d1_database_name"[\s\S]*default\s*=\s*"graft-ai-aig-otel-payloads-v1"/,
+  );
+  assert.match(terraformVariables, /otel_d1_database_name is fixed/);
+  assert.match(
+    terraformOutputs,
+    /output\s+"otel_payload_d1_database_id"[\s\S]*cloudflare_d1_database\.otel_payloads\.id/,
+  );
+  assert.match(makefile, /-target=cloudflare_d1_database\.otel_payloads/);
+});
+
 test("CI and deployment select KV by default and render explicit R2 modes", () => {
   assert.match(ci, /npm run test:otel:r2/);
   assert.match(ci, /npm run test:otel:kv-r2-drain/);
@@ -307,7 +360,7 @@ test("CI and deployment select KV by default and render explicit R2 modes", () =
   assert.match(deploy, /render-otel-worker-config\.mjs/);
   assert.match(deploy, /otel_payload_kv_namespace_id/);
   assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
-  assert.match(makefile, /OTEL_PAYLOAD_STORE \?= kv/);
+  assert.match(makefile, /OTEL_PAYLOAD_STORE \?= d1/);
   assert.match(makefile, /OTEL_PAYLOAD_R2_DRAIN \?= false/);
   assert.match(makefile, /OTEL_PAYLOAD_KV_NAMESPACE_ID/);
   assert.match(makefile, /--include-r2-binding/);

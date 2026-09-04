@@ -4,6 +4,7 @@ import { ledgerCall, type ReservationResult } from "./ledger";
 import { parseOtlpJson } from "./otlp";
 import { redactSpan } from "./redaction";
 import type { RateLimitResult } from "./rate-limit";
+import { PayloadStorePayloadTooLargeError } from "./types";
 import {
   ingressObjectKey,
   payloadStoreForWrite,
@@ -133,8 +134,11 @@ export async function handleIngress(request: Request, env: OtelEnv): Promise<Res
       const objectKey = ingressObjectKey(ingressId, new Date(nowMs).toISOString().slice(0, 10));
       const object = await store.putBytesObject(objectKey, bytes, "ingress");
       pointer = { ...object, kind: "ingress", ingressId };
-    } catch {
-      await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
+    } catch (error) {
+      const released = await releaseReservation(ledger, ingressId, ownerId, lease.fencingToken);
+      if (error instanceof PayloadStorePayloadTooLargeError && released) {
+        return json({ error: "payload_too_large" }, 413);
+      }
       return json({ error: "persistence_failed" }, 503);
     }
 

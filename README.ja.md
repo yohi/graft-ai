@@ -69,8 +69,21 @@ environment variables に設定してください。
 
 ### AI Gateway OTel の payload storage と移行
 
-KV がデフォルトで、`OTEL_PAYLOAD_STORE=kv` を使います。Worker は `OTEL_PAYLOAD_KV` に
-payload を保存し、`OTEL_OBJECTS` R2 binding は
+`OTEL_PAYLOAD_STORE=d1` が新しいデフォルトです。Cloudflare D1 は Workers Free において
+クレジットカード登録不要（zero credit card requirement）で利用可能であり、
+100,000 writes/day（100,000書き込み/日）、5,000,000 reads/day（5,000,000読み取り/日）、
+アカウント全体の合計 5 GB/account 保存容量、および 1データベースあたり
+500 MB/database の上限を提供します。D1 は強整合性（strong consistency）を持ちます。
+D1 pointer の Queue 設定上の `delaySeconds` は 0 秒（意図的な遅延なし）ですが、Queue 配信は
+非同期です。consumer のスケジューリング、バッチタイムアウト、backlog、再試行により、
+実際の即時配信時間は保証されません。D1 を利用したデプロイ前には
+データベースマイグレーションを適用します:
+`cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`
+（`make deploy-otel-worker` 実行時に自動適用されます）。
+
+以前のデフォルトであった Workers KV (`OTEL_PAYLOAD_STORE=kv`) および Cloudflare R2
+(`OTEL_PAYLOAD_STORE=r2`) も、明示的な設定により引き続き利用可能です。Worker は
+`OTEL_PAYLOAD_KV` に payload を保存し、`OTEL_OBJECTS` R2 binding は
 `OTEL_PAYLOAD_STORE=r2` または明示的な `OTEL_PAYLOAD_R2_DRAIN=true` の場合だけ
 有効にします。Workers Free の KV には 1 GB の保存容量、1,000 writes/day
 （1,000書き込み/日）、100,000 reads/day（100,000読み取り/日）、1,000 deletes/day
@@ -90,6 +103,7 @@ KV の eventual consistency のため、KV pointer の最初の Queue delivery �
 60秒遅延します。新しい pointer は schema version 2 と `storageBackend` を持ち、
 schema-version-1 pointer は常に R2 を選択します。schema-version-2 の R2 pointer
 も drain 中は R2 から読み取り・削除でき、現在の selector で解釈し直しません。
+また D1 や R2 稼働時でも既存の KV pointer は正常に読み取り・削除されます。
 
 KV Analytics または Cloudflare GraphQL API では、読み取り、書き込み、削除、
 保存データを別々に監視します。80,000 reads/day、800 writes/day、800 deletes/day、
@@ -98,7 +112,7 @@ page します。削除 quota の失敗だけで読み取り・書き込み停�
 R2 への切替は Cloudflare が quota exhaustion を確認した場合、または次の UTC
 reset 前に閾値到達が予測される場合の手動判断です。一時的な削除エラーだけで
 自動切替しません。R2 lifecycle rule は R2 payload だけを削除し、KV payload は
-削除しません。drain 完了後に dual binding を外して KV-only に戻します。
+削除しません。drain 完了後に dual binding を外して KV-only または D1 に戻します。
 
 ### スケジュール実行 Worker
 

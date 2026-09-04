@@ -7,7 +7,7 @@ AI Gateway
   -> https://<worker>.workers.dev/v1/traces
   -> authenticated Worker
   -> redaction
-  -> KV redacted envelope (R2 is an explicit opt-in)
+  -> D1 redacted envelope (KV and R2 are available via configuration)
   -> ingress Queue
   -> Trace/Metrics Durable Objects
   -> backend Queues and DLQs
@@ -56,8 +56,9 @@ tfvars, source files, Queue messages, or documentation.
 
 Render the configuration after provisioning the Terraform-owned resources and
 before registering secrets. The target reads
-`otel_payload_kv_namespace_id` and replaces the KV namespace sentinel with the
-real ID. The complete sequence is shown below.
+`otel_payload_kv_namespace_id` and `otel_payload_d1_database_id` from Terraform
+outputs and replaces the KV namespace and D1 database ID sentinels with their
+real IDs. The complete sequence is shown below.
 
 For an interactive local registration, run each command from `workers/` and
 enter the value only at the hidden prompt:
@@ -83,10 +84,10 @@ make otel-worker-validate
 
 `otel-worker-validate` checks the isolated Wrangler contract, Queue/DLQ
 topology, JSON-only configuration, forbidden inline credentials, and the
-Wrangler dry run. Terraform owns the four source Queues, four DLQs, and the
-Workers KV namespace. The R2 bucket and its seven-day `otel/` lifecycle rule are
-retained for explicit R2 and drain deployments. Wrangler owns Queue consumers
-and Durable Object exports.
+Wrangler dry run. Terraform owns the four source Queues, four DLQs, the D1 database
+(`graft-ai-aig-otel-payloads-v1`), and the Workers KV namespace. The R2 bucket
+and its seven-day `otel/` lifecycle rule are retained for explicit R2 and drain
+deployments. Wrangler owns Queue consumers and Durable Object exports.
 
 Provision account resources before deploying the Worker:
 
@@ -95,13 +96,15 @@ terraform -chdir=terraform init
 terraform -chdir=terraform apply \
   -target=cloudflare_queue.otel \
   -target=cloudflare_queue.otel_dlq \
-  -target=cloudflare_workers_kv_namespace.otel_payloads
+  -target=cloudflare_workers_kv_namespace.otel_payloads \
+  -target=cloudflare_d1_database.otel_payloads
 make deploy-otel-worker
 ```
 
 The production workflow performs the same order, reads the non-secret KV
-namespace ID from Terraform output, runs
-`make render-otel-worker-config` to render `.wrangler/otel.generated.jsonc`,
+namespace ID and D1 database ID from Terraform output, applies D1 migrations
+(`cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`),
+runs `make render-otel-worker-config` to render `.wrangler/otel.generated.jsonc`,
 synchronizes the seven secrets, and deploys that generated config. It does not
 change the existing AI Gateway exporter configuration.
 
@@ -124,35 +127,74 @@ repository's self-hosted defaults.
 
 ## Payload storage, quotas, and migration
 
-`OTEL_PAYLOAD_STORE=kv` is the default. The current Worker binds the KV
-namespace as `OTEL_PAYLOAD_KV`; `OTEL_OBJECTS` is optional. Workers Free provides
-1 GB of KV storage, 1,000 writes/day, 100,000 reads/day, 1,000 deletes/day, and
-a 25 MiB value limit. The export cap is 4 MB. A free-limit error fails the
-operation and does not silently enable paid overage. Monitor read, write, delete,
-and stored-data series separately in KV Analytics or the Cloudflare GraphQL API;
-alert at 80,000 reads/day, 800 writes/day, 800 deletes/day, or 0.8 GiB stored
-data, and page on confirmed quota-related Worker failures. A delete quota failure
-does not prove that reads or writes are unavailable.
+`OTEL_PAYLOAD_STORE=d1` is the default. Cloudflare D1 provides 100,000
+writes/day, 5,000,000 reads/day, 5 GB/account total storage, and a
+500 MB/database limit, with zero credit card requirement on Workers Free. D1
+is strongly consistent. For D1 pointers, the configured Queue `delaySeconds` is
+0 seconds (no intentional delay), but Queue delivery remains asynchronous;
+consumer scheduling, batch timeout, backlog, and retries mean actual immediate
+delivery is not guaranteed. A daily Cron Trigger (`0 4 * * *` UTC) runs a
+failsafe purge on expired records (`expires_at < unixepoch()`).
+
+The Worker limits each D1 payload to `MAX_D1_PAYLOAD_BYTES = 1,900,000` bytes,
+below D1's 2,000,000-byte maximum row size. This limit is separate from the
+`MAX_GRAFANA_OTLP_BYTES = 4,000,000` export payload cap. An oversized D1
+ingress payload returns HTTP 413 with `{"error":"payload_too_large"}` after its
+reservation is released, and no Queue message is registered; a failed release
+returns HTTP 503 instead. For a D1-backed export within the 4,000,000-byte
+export cap but above 1,900,000 bytes, the D1 payload-store size guard rejects
+the payload before the SQL write and before Queue enqueue. The ledger export
+reservation is released and no Queue message is registered. Payloads above
+4,000,000 bytes fail earlier at export validation.
+
+Workers KV (`OTEL_PAYLOAD_STORE=kv`, the previous default) and Cloudflare R2
+(`OTEL_PAYLOAD_STORE=r2`) remain available via explicit configuration. The
+current Worker binds the KV namespace as `OTEL_PAYLOAD_KV`; `OTEL_OBJECTS` is
+optional. Workers Free provides 1 GB of KV storage, 1,000 writes/day, 100,000
+reads/day, 1,000 deletes/day, and a 25 MiB value limit. The export cap is 4 MB.
+A free-limit error fails the operation and does not silently enable paid overage.
+Monitor read, write, delete, and stored-data series separately in KV Analytics or
+the Cloudflare GraphQL API; alert at 80,000 reads/day, 800 writes/day, 800
+deletes/day, or 0.8 GiB stored data, and page on confirmed quota-related Worker
+failures. A delete quota failure does not prove that reads or writes are
+unavailable.
 
 KV is eventually consistent. The first Queue delivery for a pointer to a KV
 payload is delayed by 60 seconds, and bounded stale-read retries use
 `KV_PAYLOAD_READ_RETRY_DELAYS_SECONDS`. Queue messages contain no raw payload;
 they carry payload-store pointers:
 schema-version-1 pointers always select R2, while schema-version-2 pointers
-persist their backend identity. The `DEDUPLICATION_TOMBSTONE_MS` and
-`PAYLOAD_RETENTION_FAILSAFE_MS` windows must both be considered before removing
-the final dual binding.
+persist their backend identity (`"d1"`, `"kv"`, or `"r2"`). The
+`DEDUPLICATION_TOMBSTONE_MS` and `PAYLOAD_RETENTION_FAILSAFE_MS` windows must
+both be considered before removing the final dual binding.
 
-### Initial KV deployment
+### Initial D1 deployment (default)
 
-Apply the source Queues, DLQs, and KV namespace, obtain the Terraform output, and
-deploy the generated KV-only config:
+Apply the source Queues, DLQs, KV namespace, and D1 database, apply D1
+migrations, and deploy the generated D1 config:
 
 ```bash
 terraform -chdir=terraform apply \
   -target=cloudflare_queue.otel \
   -target=cloudflare_queue.otel_dlq \
-  -target=cloudflare_workers_kv_namespace.otel_payloads
+  -target=cloudflare_workers_kv_namespace.otel_payloads \
+  -target=cloudflare_d1_database.otel_payloads
+(cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote)
+OTEL_PAYLOAD_STORE=d1 \
+  OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)" \
+  OTEL_PAYLOAD_D1_DATABASE_ID="$(terraform -chdir=terraform output -raw otel_payload_d1_database_id)" \
+  make deploy-otel-worker
+make otel-worker-smoke
+```
+
+Note that `make deploy-otel-worker` automatically provisions required
+infrastructure and applies remote D1 migrations prior to deployment.
+
+### Explicit KV deployment
+
+To deploy using Workers KV:
+
+```bash
 OTEL_PAYLOAD_STORE=kv \
   OTEL_PAYLOAD_KV_NAMESPACE_ID="$(terraform -chdir=terraform output -raw otel_payload_kv_namespace_id)" \
   make deploy-otel-worker

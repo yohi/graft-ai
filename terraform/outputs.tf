@@ -13,6 +13,11 @@ output "otel_payload_kv_namespace_id" {
   value       = cloudflare_workers_kv_namespace.otel_payloads.id
 }
 
+output "otel_payload_d1_database_id" {
+  description = "Cloudflare D1 database ID used by the dedicated OTel Worker payload store"
+  value       = cloudflare_d1_database.otel_payloads.id
+}
+
 output "logpush_job_name" {
   description = "Name of the created Logpush job"
   value       = var.logpush_job_name

@@ -11,8 +11,18 @@
     "ENV_LABEL": "prod",
     "OTEL_SAMPLING_RATE": "1",
     "OTEL_GRAFANA_CLOUD_LOGS_RETENTION": "14d",
-    "OTEL_PAYLOAD_STORE": "kv"
+    "OTEL_PAYLOAD_STORE": "d1"
   },
+  "triggers": {
+    "crons": ["0 4 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "OTEL_PAYLOAD_D1",
+      "database_name": "graft-ai-aig-otel-payloads-v1",
+      "database_id": "__OTEL_PAYLOAD_D1_DATABASE_ID__"
+    }
+  ],
   "queues": {
     "producers": [
       {

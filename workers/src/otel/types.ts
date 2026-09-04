@@ -115,7 +115,7 @@ export type ExportResult =
   | Readonly<{ kind: "terminal"; status: number }>;
 
 export type PayloadStoreErrorClass =
-  "not_found" | "temporary" | "quota" | "integrity" | "configuration";
+  "not_found" | "temporary" | "quota" | "integrity" | "configuration" | "too_large";
 
 export interface PayloadStore {
   readonly backend: PayloadStoreBackend;
@@ -179,6 +179,13 @@ export class PayloadStoreConfigurationError extends PayloadStoreError {
   }
 }
 
+export class PayloadStorePayloadTooLargeError extends PayloadStoreError {
+  constructor(message = "D1 payload exceeds safe row size") {
+    super("too_large", message);
+    this.name = "PayloadStorePayloadTooLargeError";
+  }
+}
+
 export interface OtelEnv {
   readonly OTEL_INGRESS_QUEUE: Queue<IngressPointer>;
   readonly OTEL_TEMPO_QUEUE: Queue<ExportPointer>;
@@ -186,6 +193,7 @@ export interface OtelEnv {
   readonly OTEL_PROMETHEUS_QUEUE: Queue<ExportPointer>;
   readonly OTEL_PAYLOAD_STORE?: string;
   readonly OTEL_PAYLOAD_KV?: KVNamespace;
+  readonly OTEL_PAYLOAD_D1?: D1Database;
   readonly OTEL_OBJECTS?: R2Bucket;
   readonly OTEL_INGRESS_DLQ?: Queue<IngressPointer>;
   readonly OTEL_TEMPO_DLQ?: Queue<ExportPointer>;

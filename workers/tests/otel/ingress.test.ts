@@ -26,7 +26,7 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
 }
 
 describe("OTel ingress", () => {
-  it("uses KV and delays the first ingress delivery when the selector is unset", async () => {
+  it("uses KV and delays the first ingress delivery when the selector is kv", async () => {
     const sent: Array<Readonly<{ pointer: IngressPointer; options?: QueueSendOptions }>> = [];
     const queue = {
       send: vi.fn(async (pointer: IngressPointer, options?: QueueSendOptions) => {
@@ -35,7 +35,7 @@ describe("OTel ingress", () => {
     } as unknown as Queue<IngressPointer>;
     const testEnv = {
       ...otelEnv,
-      OTEL_PAYLOAD_STORE: undefined,
+      OTEL_PAYLOAD_STORE: "kv",
       OTEL_INGRESS_QUEUE: queue,
     } as OtelEnv;
     const body = structuredClone(validOtlpJson) as typeof validOtlpJson;

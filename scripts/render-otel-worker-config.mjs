@@ -3,26 +3,35 @@ import { dirname, resolve } from "node:path";
 import { parseJsonc } from "./parse-jsonc.mjs";
 
 export const OTEL_KV_NAMESPACE_SENTINEL = "__OTEL_PAYLOAD_KV_NAMESPACE_ID__";
+export const OTEL_D1_DATABASE_SENTINEL = "__OTEL_PAYLOAD_D1_DATABASE_ID__";
 export const OTEL_R2_BINDING = {
   binding: "OTEL_OBJECTS",
   bucket_name: "graft-ai-aig-otel-v1",
 };
 
 const namespaceIdPattern = /^[0-9a-f]{32}$/i;
-const payloadStores = new Set(["kv", "r2"]);
+const d1DatabaseIdPattern =
+  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const payloadStores = new Set(["kv", "r2", "d1"]);
 const valueArguments = new Set([
   "--payload-store",
   "--kv-namespace-id",
+  "--d1-database-id",
   "--output",
 ]);
 
 export function renderOtelWorkerConfig(
   template,
-  { kvNamespaceId, payloadStore = "kv", includeR2Binding = false } = {},
+  {
+    kvNamespaceId,
+    d1DatabaseId,
+    payloadStore = "kv",
+    includeR2Binding = false,
+  } = {},
 ) {
   if (!payloadStores.has(payloadStore)) {
     throw new Error(
-      `payloadStore must be one of: kv, r2 (received ${payloadStore})`,
+      `payloadStore must be one of: kv, r2, d1 (received ${payloadStore})`,
     );
   }
   if (!namespaceIdPattern.test(kvNamespaceId ?? "")) {
@@ -32,6 +41,13 @@ export function renderOtelWorkerConfig(
   }
   if (payloadStore === "r2" && !includeR2Binding) {
     throw new Error("R2 payloadStore requires the R2 binding");
+  }
+  if (payloadStore === "d1") {
+    if (!d1DatabaseIdPattern.test(d1DatabaseId ?? "")) {
+      throw new Error(
+        "D1 database ID must be a valid 32-character hexadecimal or UUID string",
+      );
+    }
   }
 
   const templateBinding = template.kv_namespaces?.find(
@@ -43,6 +59,15 @@ export function renderOtelWorkerConfig(
     );
   }
 
+  const templateD1Binding = template.d1_databases?.find(
+    (entry) => entry.binding === "OTEL_PAYLOAD_D1",
+  );
+  if (templateD1Binding?.database_id !== OTEL_D1_DATABASE_SENTINEL) {
+    throw new Error(
+      "template must contain the OTEL_PAYLOAD_D1 database ID sentinel",
+    );
+  }
+
   const rendered = structuredClone(template);
   rendered.main = "../src/otel.ts";
   if (rendered.vars) {
@@ -51,6 +76,23 @@ export function renderOtelWorkerConfig(
     rendered.vars = { OTEL_PAYLOAD_STORE: payloadStore };
   }
   rendered.kv_namespaces = [{ binding: "OTEL_PAYLOAD_KV", id: kvNamespaceId }];
+
+  if (d1DatabaseId) {
+    if (!d1DatabaseIdPattern.test(d1DatabaseId)) {
+      throw new Error(
+        "D1 database ID must be a valid 32-character hexadecimal or UUID string",
+      );
+    }
+    rendered.d1_databases = [
+      {
+        binding: "OTEL_PAYLOAD_D1",
+        database_name: templateD1Binding.database_name,
+        database_id: d1DatabaseId,
+      },
+    ];
+  } else {
+    delete rendered.d1_databases;
+  }
 
   if (includeR2Binding) {
     rendered.r2_buckets = [structuredClone(OTEL_R2_BINDING)];
@@ -98,6 +140,9 @@ function setValueOption(options, argument, value) {
       return;
     case "--kv-namespace-id":
       options.kvNamespaceId = value;
+      return;
+    case "--d1-database-id":
+      options.d1DatabaseId = value;
       return;
     case "--output":
       options.output = value;

@@ -9,41 +9,36 @@ import {
 import type { AIGatewayLog, EncryptedField } from "../src/types";
 
 describe("normalizeModelName", () => {
-  it("strips @cf/meta/ prefix", () => {
-    expect(normalizeModelName("@cf/meta/llama-3.1-8b-instruct")).toBe("llama-3.1-8b-instruct");
-  });
+  const cases: Array<[string | undefined | null, string, string]> = [
+    ["@cf/meta/llama-3.1-8b-instruct", "llama-3.1-8b-instruct", "strips @cf/meta/ prefix"],
+    ["@cf/openai/gpt-4o-mini", "gpt-4o-mini", "strips @cf/ prefix with multi-segment scope"],
+    ["gpt-4o", "gpt-4o", "returns name as-is when no @cf/ prefix"],
+    ["", "unknown", "returns unknown for empty input"],
+    ["   ", "unknown", "returns unknown for whitespace-only input"],
+    [undefined, "unknown", "handles undefined"],
+    [null, "unknown", "handles null"],
+    [
+      "kimi-k2.7-codemoonshotai/Kimi-K2.7-Code",
+      "kimi-k2.7-code",
+      "cleanses stream-concatenation bug with mixed case",
+    ],
+    [
+      "kimi-k2.7-codemoonshotai/kimi-k2.7-code",
+      "kimi-k2.7-code",
+      "cleanses stream-concatenation bug lowercase",
+    ],
+    ["glm-5.2zai-org/glm-5.2", "glm-5.2", "cleanses provider concatenation"],
+    [
+      "moonshotai/Kimi-K2.7-Code",
+      "kimi-k2.7-code",
+      "strips provider prefix and normalizes to lowercase",
+    ],
+    ["openai/GPT-4o", "gpt-4o", "strips openai prefix and lowercases"],
+    ["  GPT-4.1-2025-04-14  ", "gpt-4.1-2025-04-14", "trims whitespace and lowercases"],
+  ];
 
-  it("strips @cf/ prefix with multi-segment scope", () => {
-    expect(normalizeModelName("@cf/openai/gpt-4o-mini")).toBe("gpt-4o-mini");
-  });
-
-  it("returns name as-is when no @cf/ prefix", () => {
-    expect(normalizeModelName("gpt-4o")).toBe("gpt-4o");
-  });
-
-  it("returns unknown for empty input", () => {
-    expect(normalizeModelName("")).toBe("unknown");
-  });
-
-  it("cleanses Cloudflare AI Gateway stream-concatenation bug", () => {
-    expect(normalizeModelName("kimi-k2.7-codemoonshotai/Kimi-K2.7-Code")).toBe("kimi-k2.7-code");
-    expect(normalizeModelName("kimi-k2.7-codemoonshotai/kimi-k2.7-code")).toBe("kimi-k2.7-code");
-    expect(normalizeModelName("glm-5.2zai-org/glm-5.2")).toBe("glm-5.2");
-  });
-
-  it("strips standard provider prefix and normalizes to lowercase", () => {
-    expect(normalizeModelName("moonshotai/Kimi-K2.7-Code")).toBe("kimi-k2.7-code");
-    expect(normalizeModelName("openai/GPT-4o")).toBe("gpt-4o");
-  });
-
-  it("handles whitespace and casing", () => {
-    expect(normalizeModelName("  GPT-4.1-2025-04-14  ")).toBe("gpt-4.1-2025-04-14");
-    expect(normalizeModelName("   ")).toBe("unknown");
-  });
-
-  it("handles undefined and null", () => {
-    expect(normalizeModelName(undefined)).toBe("unknown");
-    expect(normalizeModelName(null)).toBe("unknown");
+  it.each(cases)("%s -> %s (%s)", (input, expected) => {
+    expect(normalizeModelName(input)).toBe(expected);
   });
 });
 

@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_GRAFANA_OTLP_BYTES } from "../../src/otel/contracts";
 import { enqueueBackendJob, exportPointer } from "../../src/otel/exporter";
 import { payloadStoreForPointer, sha256Hex } from "../../src/otel/storage";
 import type { JobDescriptor, OtelEnv } from "../../src/otel/types";
@@ -46,6 +47,25 @@ describe("OTel backend exporter", () => {
       authorization: "Basic tempo-token",
     });
   });
+
+  it.skipIf(!otelEnv.OTEL_PAYLOAD_D1)(
+    "rejects an export payload that cannot fit in a D1 row",
+    async () => {
+      const bytes = new Uint8Array(1_900_001);
+      const descriptor: JobDescriptor = {
+        jobId: `oversized-${crypto.randomUUID()}`,
+        backend: "tempo",
+        contentType: "application/json",
+        identity: { kind: "trace", traceId: "00112233445566778899aabbccddeeff" },
+        payloadSha256: await sha256Hex(bytes),
+      };
+
+      expect(bytes.byteLength).toBeLessThanOrEqual(MAX_GRAFANA_OTLP_BYTES);
+      await expect(
+        enqueueBackendJob({ ...otelEnv, OTEL_PAYLOAD_STORE: "d1" }, descriptor, bytes),
+      ).rejects.toThrow(/D1 payload exceeds safe row size/);
+    },
+  );
 
   it("deletes an export payload once when the ready transition is rejected", async () => {
     const bytes = new TextEncoder().encode('{"resourceSpans":[]}');

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   D1PayloadStore,
   exportObjectKey,
@@ -211,6 +211,18 @@ describe("D1 payload store", () => {
 
     await store.deleteObject(pointer);
     await expect(store.readJsonObject(pointer)).rejects.toThrow(/payload object missing/);
+  });
+
+  it("rejects oversized payloads before executing a D1 write", async () => {
+    const prepare = vi.fn();
+    const oversizedDb = { prepare } as unknown as D1Database;
+    const oversizedStore = new D1PayloadStore(oversizedDb);
+    const oversizedPayload = new Uint8Array(1_900_001);
+
+    await expect(
+      oversizedStore.putBytesObject("otel/oversized.json", oversizedPayload, "ingress"),
+    ).rejects.toThrow(/D1 payload exceeds safe row size/);
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it("detects checksum mismatch and throws PayloadStoreIntegrityError", async () => {

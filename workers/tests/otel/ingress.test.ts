@@ -117,6 +117,26 @@ describe("OTel ingress", () => {
     }
   });
 
+  it.skipIf(!otelEnv.OTEL_PAYLOAD_D1)(
+    "returns 413 when the redacted envelope exceeds the D1 row limit",
+    async () => {
+      const queue = { send: vi.fn(async () => undefined) } as unknown as Queue<IngressPointer>;
+      const testEnv = {
+        ...otelEnv,
+        OTEL_PAYLOAD_STORE: "d1",
+        OTEL_INGRESS_QUEUE: queue,
+      } as OtelEnv;
+      const response = await handleIngress(
+        request(bodyWithPrompt(JSON.stringify("x".repeat(1_900_000))), {}),
+        testEnv,
+      );
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ error: "payload_too_large" });
+      expect(queue.send).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses matching ingress IDs and payload hashes for reordered JSON payload keys", async () => {
     const reservations: Array<{ ingressId: string; payloadSha256: string }> = [];
     const ledgerTarget = otelEnv.OTEL_LEDGER.getByName(`canonical-${crypto.randomUUID()}`);

@@ -1,5 +1,6 @@
 import {
   KV_PROPAGATION_DELAY_SECONDS,
+  MAX_D1_PAYLOAD_BYTES,
   PAYLOAD_RETENTION_TTL_SECONDS,
   PAYLOAD_STORE_BACKENDS,
   type Backend,
@@ -11,6 +12,7 @@ import {
   PayloadStoreError,
   PayloadStoreIntegrityError,
   PayloadStoreNotFoundError,
+  PayloadStorePayloadTooLargeError,
   PayloadStoreQuotaError,
   PayloadStoreTemporaryError,
 } from "./types";
@@ -69,6 +71,9 @@ export class D1PayloadStore extends PayloadStoreBase {
     bytes: Uint8Array,
     kind: "ingress" | "export",
   ): Promise<CurrentObjectPointer> {
+    if (bytes.byteLength > MAX_D1_PAYLOAD_BYTES) {
+      throw new PayloadStorePayloadTooLargeError();
+    }
     const sha256 = await sha256Hex(bytes);
     const nowSeconds = Math.floor(Date.now() / 1000);
     const expiresAt = nowSeconds + PAYLOAD_RETENTION_TTL_SECONDS;

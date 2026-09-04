@@ -115,7 +115,7 @@ export type ExportResult =
   | Readonly<{ kind: "terminal"; status: number }>;
 
 export type PayloadStoreErrorClass =
-  "not_found" | "temporary" | "quota" | "integrity" | "configuration";
+  "not_found" | "temporary" | "quota" | "integrity" | "configuration" | "too_large";
 
 export interface PayloadStore {
   readonly backend: PayloadStoreBackend;
@@ -176,6 +176,13 @@ export class PayloadStoreConfigurationError extends PayloadStoreError {
   constructor(message = "payload store binding is not configured") {
     super("configuration", message);
     this.name = "PayloadStoreConfigurationError";
+  }
+}
+
+export class PayloadStorePayloadTooLargeError extends PayloadStoreError {
+  constructor(message = "D1 payload exceeds safe row size") {
+    super("too_large", message);
+    this.name = "PayloadStorePayloadTooLargeError";
   }
 }
 

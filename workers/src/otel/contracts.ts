@@ -1,5 +1,7 @@
 export const MAX_INGRESS_BYTES = 8 * 1024 * 1024;
 export const MAX_GRAFANA_OTLP_BYTES = 4_000_000;
+// Leave room for D1 row metadata below its 2,000,000-byte row limit.
+export const MAX_D1_PAYLOAD_BYTES = 1_900_000;
 export const MAX_LOKI_LINE_BYTES = 262_144;
 export const MAX_CONCURRENT_REQUESTS = 100;
 export const ACTIVE_REQUEST_LEASE_MS = 35_000;

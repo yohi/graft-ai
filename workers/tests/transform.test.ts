@@ -35,6 +35,11 @@ describe("normalizeModelName", () => {
     ],
     ["openai/GPT-4o", "gpt-4o", "strips openai prefix and lowercases"],
     ["  GPT-4.1-2025-04-14  ", "gpt-4.1-2025-04-14", "trims whitespace and lowercases"],
+    ["@cf/", "unknown", "returns unknown when @cf/ prefix has no model"],
+    ["@cf/meta/", "unknown", "returns unknown when @cf/<vendor>/ has no model"],
+    ["openai/", "unknown", "returns unknown when provider prefix has no model"],
+    ["/", "unknown", "returns unknown for single slash"],
+    ["///", "unknown", "returns unknown for multiple slashes"],
   ];
 
   it.each(cases)("%s -> %s (%s)", (input, expected) => {

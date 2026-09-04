@@ -7,7 +7,7 @@ const MAX_LOG_LINE_BYTES = 60_000;
 export function normalizeModelName(modelId: string | undefined | null): string {
   if (!modelId || typeof modelId !== "string") return "unknown";
   let trimmed = modelId.trim();
-  if (!trimmed) return "unknown";
+  if (!trimmed || !trimmed.replaceAll("/", "").trim()) return "unknown";
 
   if (!trimmed.includes("/")) {
     return trimmed.toLowerCase();
@@ -19,7 +19,7 @@ export function normalizeModelName(modelId: string | undefined | null): string {
     const slashIndex = withoutPrefix.indexOf("/");
     trimmed = slashIndex >= 0 ? withoutPrefix.slice(slashIndex + 1) : withoutPrefix;
     if (!trimmed.includes("/")) {
-      return trimmed.toLowerCase();
+      return trimmed.toLowerCase() || "unknown";
     }
   }
 
@@ -34,10 +34,11 @@ export function normalizeModelName(modelId: string | undefined | null): string {
   const rightLower = right.toLowerCase();
 
   if (
-    leftLower.startsWith(rightLower) ||
-    leftLower.endsWith(rightLower) ||
-    leftLower.includes(rightLower) ||
-    rightLower.includes(leftLower)
+    rightLower &&
+    (leftLower.startsWith(rightLower) ||
+      leftLower.endsWith(rightLower) ||
+      leftLower.includes(rightLower) ||
+      rightLower.includes(leftLower))
   ) {
     return rightLower;
   }
@@ -45,10 +46,10 @@ export function normalizeModelName(modelId: string | undefined | null): string {
   // 3. Redundant single-provider prefix: <provider>/<model> -> <model>
   // e.g. "moonshotai/kimi-k2.7-code" -> "kimi-k2.7-code"
   if (trimmed.indexOf("/") === lastSlashIndex) {
-    return rightLower;
+    return rightLower || "unknown";
   }
 
-  return trimmed.toLowerCase();
+  return trimmed.toLowerCase() || "unknown";
 }
 
 export function requestTimeToNanos(requestTime: number): string {

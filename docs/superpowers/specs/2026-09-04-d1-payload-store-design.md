@@ -24,6 +24,24 @@ Cloudflare D1 (Serverless SQLite) provides:
 - **5 GB storage allowance**.
 - **Strong consistency** (eliminating KV's 60-second queue propagation delay).
 
+### 1.4 Effective Row Operation Budget & Capacity
+Cloudflare D1 Free counts both `INSERT` and `DELETE` as row write operations.
+- **Per-payload operations**:
+  - Ingress write: 1 `INSERT` (1 write)
+  - Queue consumption: 1 `SELECT` (1 read)
+  - Normal post-processing cleanup: 1 `DELETE` (1 write)
+  - Standard lifecycle per payload: **2 writes / 1 read**.
+- **Per-request operations in full pipeline**:
+  - Ingress payload: 2 writes
+  - Export payloads (when traces are exported to Tempo and Loki): 2 writes (Tempo) + 2 writes (Loki) = 4 writes
+  - Total writes per trace request: **up to ~6 writes / request**.
+  - *Note*: Scheduled cron purge (`deleteExpired`) operates only on orphaned records and does not double-count normally deleted payloads.
+- **Effective Daily Capacity**:
+  - Ingress-only payloads: $100,000 \div 2 = \mathbf{50,000 \text{ payloads/day}}$ (~0.58 req/sec continuous).
+  - Full export pipeline: $100,000 \div 6 \approx \mathbf{16,666 \text{ requests/day}}$ (~0.19 req/sec continuous).
+
+Switching to D1 expands write capacity by **16× to 50× over KV (1,000 writes/day)**, substantially mitigating quota exhaustion risks during agentic AI development without requiring credit card registration.
+
 ---
 
 ## 2. Requirements & Goals
@@ -31,7 +49,7 @@ Cloudflare D1 (Serverless SQLite) provides:
 1. **Credit-Card-Free & Zero-Cost Operation**:
    - Deliver uninterrupted trace ingestion on Cloudflare's Free tier without registering payment methods.
 2. **High Daily Write Capacity**:
-   - Handle up to 100,000 payloads/day (~1.15 req/sec 24/7 continuous average load).
+   - Support up to 50,000 ingress payloads/day (~0.58 req/sec) and ~16,600 full-pipeline export requests/day, vastly mitigating KV's 1,000 writes/day ceiling.
 3. **Strong Consistency & Zero Propagation Delay**:
    - Queue pointers backed by D1 can be delivered immediately (`delaySeconds: 0`), unlike KV which requires 60 seconds (`KV_PROPAGATION_DELAY_SECONDS = 60`).
 4. **Seamless Backward Compatibility**:
@@ -215,7 +233,7 @@ export class D1PayloadStore extends PayloadStoreBase {
 [ Cron Trigger (0 4 * * *) ] ──► scheduled() handler ──► D1PayloadStore.deleteExpired(now)
 ```
 
-### 4.1 Scheduled Handler
+### 4.1 Scheduled Handler & Failure Contract
 In [`workers/src/otel.ts`](../../../workers/src/otel.ts):
 ```ts
 export default {
@@ -227,13 +245,28 @@ export default {
   },
   async scheduled(event: ScheduledEvent, env: OtelEnv, ctx: ExecutionContext): Promise<void> {
     if (env.OTEL_PAYLOAD_D1) {
-      const store = new D1PayloadStore(env.OTEL_PAYLOAD_D1);
-      const changes = await store.deleteExpired(Math.floor(Date.now() / 1000));
-      console.log(`[D1 Purge] Removed ${changes} expired payload records`);
+      try {
+        const store = new D1PayloadStore(env.OTEL_PAYLOAD_D1);
+        const changes = await store.deleteExpired(Math.floor(Date.now() / 1000));
+        console.log(`[D1 Purge] Removed ${changes} expired payload records`);
+      } catch (error) {
+        console.error("[D1 Purge] Scheduled purge error:", error);
+        // Re-throw so Cloudflare Workers observability registers the Cron Trigger execution as failed
+        throw error;
+      }
     }
   }
 };
 ```
+
+#### Scheduled Purge Failure & Recovery Contract
+- **Failure Notification & Observability**:
+  - When `deleteExpired` fails (e.g. SQLite database lock, network failure, or execution timeout), the error is logged to stderr/console and re-thrown.
+  - Re-throwing ensures that Cloudflare Workers registers the invocation as a failure in Cron Trigger analytics and Tail logs, allowing Cloudflare alerting rules to fire.
+- **Catch-up & Accumulation Recovery**:
+  - Purge queries use an inequality filter: `DELETE FROM otel_payloads WHERE expires_at < now`.
+  - If a purge execution fails on day $N$, orphaned records remain in D1. On day $N+1$, the next scheduled cron execution naturally encompasses all accumulated records where `expires_at < now`.
+  - Because deletions are idempotent, no manual intervention or duplicate purging logic is required for recovery from transient failures.
 
 ### 4.2 Error Classification
 In `classifyStoreFailure(error: unknown, operation: string)`:

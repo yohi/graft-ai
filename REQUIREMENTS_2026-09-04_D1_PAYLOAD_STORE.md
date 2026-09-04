@@ -46,7 +46,23 @@
 | **ストレージ容量** | 1 GB | 10 GB | **5 GB** |
 | **整合性** | Eventual Consistency (反映遅延あり) | Strong Consistency | **Strong Consistency** |
 
-D1 を採用することで、クレジットカード不要のまま書き込み許容量を **1日 1,000 回 → 1日 100,000 回**（約 1.15 リクエスト/秒の終日連続負荷に相当）へと大幅に拡大し、枯渇トラブルを恒久的に防ぐ。
+### 実効スループットと操作数試算
+
+Cloudflare D1 Free の「書き込み 100,000 行/日」は、`INSERT` だけでなく `DELETE` でもそれぞれ 1 row write がカウントされる。
+- **1 ペイロードあたりの操作数:**
+  - 登録時: `INSERT INTO otel_payloads`（1 write）
+  - 読取時: `SELECT data, sha256...`（1 read）
+  - 正常完了後: `DELETE FROM otel_payloads`（1 write）
+  - 通常ライフサイクル合計: **2 writes / 1 read**
+- **1 リクエストあたりの総書き込み数:**
+  - Ingress ペイロードのみ: 2 writes / req
+  - Export ペイロード（Tempo / Loki への転送時）: Ingress (2 writes) + Tempo (2 writes) + Loki (2 writes) = **最大約 6 writes / req**
+  - ※ 孤立レコードの Cron パージ（`deleteExpired`）は正常完了レコードと重複せず、未削除の異常レコードのみ 1 write / 件を消費する。
+- **実効処理許容量:**
+  - Ingress ペイロード換算: 最大 **50,000 payloads / 日**（約 0.58 req/sec）
+  - フルパイプライン転送（全バックエンドExport）換算: 約 **16,666 requests / 日**（約 0.19 req/sec）
+
+D1 を採用することで、クレジットカード不要のまま書き込み許容量を KV の 1,000 writes/day から **実効 16〜50 倍へと大幅に拡大** し、日常的な高頻度呼び出し（コーディングエージェント等）における書き込み枠枯渇リスクを大幅に低減する。
 
 ---
 
@@ -123,16 +139,26 @@ D1 を採用することで、クレジットカード不要のまま書き込�
 
 | パス | 変更内容 |
 | :--- | :--- |
+| `workers/migrations/0001_create_otel_payloads.sql` | D1 テーブル (`otel_payloads`) および TTL インデックス作成マイグレーション |
 | `workers/src/otel/contracts.ts` | `PAYLOAD_STORE_BACKENDS` に `"d1"` を追加 |
 | `workers/src/otel/types.ts` | `OtelEnv` 型定義に `OTEL_PAYLOAD_D1?: D1Database` を追加 |
-| `workers/src/otel/storage.ts` | `D1PayloadStore` クラスの実装、ストア解決ロジックに D1 を追加 |
-| `workers/wrangler.otel.jsonc` | D1 バインディング定義の追加 |
+| `workers/src/otel/storage.ts` | `D1PayloadStore` クラスの実装、ストア解決ロジックに D1 を追加（既定化） |
+| `workers/src/otel.ts` | Worker エントリポイントに `scheduled` ハンドラー（TTL 期限切れ定期削除）を追加 |
+| `workers/wrangler.otel.jsonc` | D1 バインディングおよび Cron トポロジ (`triggers.crons`) の追加、ストア既定を `d1` へ更新 |
+| `workers/package.json` | D1 テスト用レンダリングスクリプト (`render:otel:d1-test` 等) の追加 |
 | `terraform/otel.tf` | `cloudflare_d1_database` リソースの追加 |
+| `terraform/variables.tf` | `otel_d1_database_name` 変数の追加 |
 | `terraform/outputs.tf` | D1 database ID の output 追加 |
-| `scripts/render-otel-worker-config.mjs` | D1 バインディングのレンダリング対応 |
-| `scripts/verify-otel-worker-config.mjs` | D1 設定の整合性検証 |
-| `workers/tests/otel/storage.test.ts` | D1PayloadStore の単体テスト追加 |
-| `README.md` / `SPEC.md` | D1 バックエンドおよび制限値・運用の追記 |
+| `Makefile` | `OTEL_PAYLOAD_STORE ?= d1` 既定化、D1 インフラ作成ターゲット、マイグレーション適用、レンダリング引数統合 |
+| `scripts/render-otel-worker-config.mjs` | D1 バインディングのレンダリング対応、本番での `--d1-database-id` 厳格バリデーション |
+| `scripts/verify-otel-worker-config.mjs` | D1 設定および Cron トリガー設定の整合性検証 |
+| `workers/tests/otel/storage.test.ts` | `D1PayloadStore` の単体テスト（Put/Read/Delete/CheckSum検証/TTL削除）追加 |
+| `workers/tests/otel/scheduled.test.ts` | `scheduled` 定期削除ハンドラーのエラー伝播・単体テスト追加 |
+| `workers/tests/otel-worker-contracts.test.mjs` | OTel Worker 設定・バインディング契約テスト更新 |
+| `tests/deployment-contracts.test.mjs` | Makefile およびデプロイパイプライン契約テスト更新 |
+| `README.md` / `README.ja.md` | D1 バックエンドおよび制限値・運用の追記 |
+| `SPEC.md` / `SPEC.ja.md` | D1 バックエンド、スキーマ、定期削除契約の仕様追記 |
+| `docs/cloudflare-worker-ai-gateway-otel.md` | D1 前提のセットアップ・デプロイ手順更新 |
 
 ---
 

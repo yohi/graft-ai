@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate `graft-ai-aig-otel` payload storage from Workers KV (1,000 writes/day quota limit) to Cloudflare D1 (100,000 writes/day, zero credit card requirement), with strong consistency (0s propagation delay), daily Cron Trigger purge for orphaned payloads, and backward compatibility for in-flight KV/R2 pointers.
+**Goal:** Migrate `graft-ai-aig-otel` payload storage from Workers KV (1,000 writes/day quota limit) to Cloudflare D1 (100,000 row writes/day free limit, effective 16,600–50,000 requests/day, zero credit card requirement), with strong consistency (0s propagation delay), daily Cron Trigger purge for orphaned payloads, and backward compatibility for in-flight KV/R2 pointers.
 
 **Architecture:** Implement `D1PayloadStore` extending `PayloadStoreBase` in `workers/src/otel/storage.ts` using SQLite prepared statements over Cloudflare D1 binding `OTEL_PAYLOAD_D1`. Add a Worker `scheduled` Cron Trigger (`0 4 * * *` UTC) in `workers/src/otel.ts` to purge expired records. Update config rendering, verification scripts, Terraform infrastructure (`cloudflare_d1_database`), Makefile targets, and documentation.
 
@@ -453,6 +453,25 @@ describe("OTel Worker scheduled handler", () => {
     consoleSpy.mockRestore();
   });
 
+  it("logs and re-throws errors so Cloudflare marks the cron as failed", async () => {
+    const purgeError = new Error("D1 temporary lock");
+    const deleteExpiredSpy = vi.spyOn(D1PayloadStore.prototype, "deleteExpired").mockRejectedValue(purgeError);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mockEnv = {
+      OTEL_PAYLOAD_D1: {} as D1Database,
+    } as unknown as OtelEnv;
+
+    const event = { cron: "0 4 * * *", scheduledTime: Date.now(), type: "scheduled" } as ScheduledEvent;
+    const ctx = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext;
+
+    await expect(worker.scheduled(event, mockEnv, ctx)).rejects.toThrow("D1 temporary lock");
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("[D1 Purge] Scheduled purge error:"), purgeError);
+
+    deleteExpiredSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
+
   it("safely completes when OTEL_PAYLOAD_D1 is undefined", async () => {
     const mockEnv = {} as unknown as OtelEnv;
     const event = { cron: "0 4 * * *", scheduledTime: Date.now(), type: "scheduled" } as ScheduledEvent;
@@ -471,7 +490,7 @@ Expected: FAIL with `worker.scheduled is not a function`.
 - [ ] **Step 3: Implement `scheduled` handler in `workers/src/otel.ts`**
 
 In `workers/src/otel.ts`:
-Add `scheduled` method to the default export object:
+Add `scheduled` method to the default export object (re-throwing errors so Cloudflare observes the failure, with recovery handled automatically on next cron execution via `WHERE expires_at < now`):
 ```ts
   async scheduled(
     _event: ScheduledEvent,
@@ -485,6 +504,7 @@ Add `scheduled` method to the default export object:
         console.log(`[D1 Purge] Removed ${changes} expired payload records`);
       } catch (error) {
         console.error("[D1 Purge] Scheduled purge error:", error);
+        throw error;
       }
     }
   },
@@ -557,30 +577,50 @@ Expected: FAIL due to missing `--d1-database-id` handling or contract mismatch.
 - [ ] **Step 3: Update `scripts/render-otel-worker-config.mjs`**
 
 In `scripts/render-otel-worker-config.mjs`:
-1. Add sentinel:
+1. Add sentinel and pattern:
 ```javascript
 export const OTEL_D1_DATABASE_SENTINEL = "__OTEL_PAYLOAD_D1_DATABASE_ID__";
+const d1DatabaseIdPattern =
+  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 ```
 2. Update allowed stores:
 ```javascript
 const payloadStores = new Set(["kv", "r2", "d1"]);
 ```
 3. Support `--d1-database-id` argument.
-4. Replace `d1_databases` in rendered config:
+4. Validate D1 database ID when `payloadStore === "d1"` and reject unconfigured/invalid IDs (no implicit fallback to all-zero UUID):
 ```javascript
+  if (payloadStore === "d1") {
+    if (!d1DatabaseIdPattern.test(d1DatabaseId ?? "")) {
+      throw new Error(
+        "D1 database ID must be a valid 32-character hexadecimal or UUID string",
+      );
+    }
+  }
+
   const templateD1Binding = template.d1_databases?.find(
     (entry) => entry.binding === "OTEL_PAYLOAD_D1",
   );
   if (templateD1Binding?.database_id !== OTEL_D1_DATABASE_SENTINEL) {
     throw new Error("template must contain the OTEL_PAYLOAD_D1 database ID sentinel");
   }
-  rendered.d1_databases = [
-    {
-      binding: "OTEL_PAYLOAD_D1",
-      database_name: templateD1Binding.database_name,
-      database_id: d1DatabaseId ?? "00000000-0000-0000-0000-000000000000",
-    },
-  ];
+
+  if (d1DatabaseId) {
+    if (!d1DatabaseIdPattern.test(d1DatabaseId)) {
+      throw new Error(
+        "D1 database ID must be a valid 32-character hexadecimal or UUID string",
+      );
+    }
+    rendered.d1_databases = [
+      {
+        binding: "OTEL_PAYLOAD_D1",
+        database_name: templateD1Binding.database_name,
+        database_id: d1DatabaseId,
+      },
+    ];
+  } else {
+    delete rendered.d1_databases;
+  }
 ```
 
 - [ ] **Step 4: Update `scripts/verify-otel-worker-config.mjs`**
@@ -692,14 +732,21 @@ case "$(OTEL_PAYLOAD_STORE)" in d1|kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STOR
 ```makefile
 -target=cloudflare_d1_database.otel_payloads
 ```
-4. Update `render-otel-worker-config` to pass `--d1-database-id`:
+4. Update `render-otel-worker-config` to strictly require and pass `--d1-database-id` when `OTEL_PAYLOAD_STORE=d1` (rejecting unconfigured values, no implicit all-zero fallback):
 ```makefile
-d1_id="$${OTEL_PAYLOAD_D1_DATABASE_ID:-00000000-0000-0000-0000-000000000000}"; \
-node scripts/render-otel-worker-config.mjs \
-  --payload-store "$(OTEL_PAYLOAD_STORE)" \
-  --kv-namespace-id "$$namespace_id" \
-  --d1-database-id "$$d1_id" \
-  --output workers/.wrangler/otel.generated.jsonc $$r2_flag
+	d1_flag=""; \
+	if [ "$(OTEL_PAYLOAD_STORE)" = d1 ]; then \
+	  d1_id="$${OTEL_PAYLOAD_D1_DATABASE_ID:-}"; \
+	  case "$$d1_id" in \
+	    "") printf '%s\n' 'Set OTEL_PAYLOAD_D1_DATABASE_ID before rendering the OTel Worker config in d1 mode.' >&2; exit 1 ;; \
+	  esac; \
+	  d1_flag="--d1-database-id $$d1_id"; \
+	fi; \
+	node scripts/render-otel-worker-config.mjs \
+	  --payload-store "$(OTEL_PAYLOAD_STORE)" \
+	  --kv-namespace-id "$$namespace_id" \
+	  $$d1_flag \
+	  --output workers/.wrangler/otel.generated.jsonc $$r2_flag
 ```
 5. Update `deploy-otel-worker` to apply migrations before deployment:
 ```makefile

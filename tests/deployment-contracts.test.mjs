@@ -346,12 +346,12 @@ test("OTel infrastructure provisions a fixed D1 database and exposes its ID", ()
   assert.match(makefile, /-target=cloudflare_d1_database\.otel_payloads/);
 });
 
-test("CI and deployment select KV by default and render explicit R2 modes", () => {
+test("CI and deployment select D1 by default and render explicit KV/R2 modes", () => {
   assert.match(ci, /npm run test:otel:r2/);
   assert.match(ci, /npm run test:otel:kv-r2-drain/);
   assert.match(
     deploy,
-    /OTEL_PAYLOAD_STORE: \$\{\{ vars\.OTEL_PAYLOAD_STORE \|\| 'kv' \}\}/,
+    /OTEL_PAYLOAD_STORE: \$\{\{ vars\.OTEL_PAYLOAD_STORE \|\| 'd1' \}\}/,
   );
   assert.match(
     deploy,
@@ -359,6 +359,14 @@ test("CI and deployment select KV by default and render explicit R2 modes", () =
   );
   assert.match(deploy, /render-otel-worker-config\.mjs/);
   assert.match(deploy, /otel_payload_kv_namespace_id/);
+  assert.match(deploy, /-target=cloudflare_d1_database\.otel_payloads/);
+  assert.match(deploy, /otel_payload_d1_database_id/);
+  assert.match(deploy, /OTEL_PAYLOAD_D1_DATABASE_ID/);
+  assert.match(deploy, /--d1-database-id/);
+  assert.match(
+    deploy,
+    /npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote/,
+  );
   assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
   assert.match(makefile, /OTEL_PAYLOAD_STORE \?= d1/);
   assert.match(makefile, /OTEL_PAYLOAD_R2_DRAIN \?= false/);

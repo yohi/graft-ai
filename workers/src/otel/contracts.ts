@@ -19,7 +19,7 @@ export const DEDUPLICATION_TOMBSTONE_MS = 25 * 60 * 60 * 1_000;
 export const PAYLOAD_RETENTION_FAILSAFE_MS = 7 * 24 * 60 * 60 * 1_000;
 export const PAYLOAD_RETENTION_TTL_SECONDS = PAYLOAD_RETENTION_FAILSAFE_MS / 1_000;
 export const OTEL_QUEUE_MAX_RETRIES = 7;
-export const PAYLOAD_STORE_BACKENDS = ["kv", "r2"] as const;
+export const PAYLOAD_STORE_BACKENDS = ["kv", "r2", "d1"] as const;
 export type PayloadStoreBackend = (typeof PAYLOAD_STORE_BACKENDS)[number];
 export const MAX_JSON_DEPTH = 64;
 

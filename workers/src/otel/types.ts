@@ -186,6 +186,7 @@ export interface OtelEnv {
   readonly OTEL_PROMETHEUS_QUEUE: Queue<ExportPointer>;
   readonly OTEL_PAYLOAD_STORE?: string;
   readonly OTEL_PAYLOAD_KV?: KVNamespace;
+  readonly OTEL_PAYLOAD_D1?: D1Database;
   readonly OTEL_OBJECTS?: R2Bucket;
   readonly OTEL_INGRESS_DLQ?: Queue<IngressPointer>;
   readonly OTEL_TEMPO_DLQ?: Queue<ExportPointer>;

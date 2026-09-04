@@ -110,6 +110,17 @@ variable "otel_payload_kv_namespace_title" {
   }
 }
 
+variable "otel_d1_database_name" {
+  description = "Fixed name of the dedicated AI Gateway OTel D1 database"
+  type        = string
+  default     = "graft-ai-aig-otel-payloads-v1"
+
+  validation {
+    condition     = var.otel_d1_database_name == "graft-ai-aig-otel-payloads-v1"
+    error_message = "otel_d1_database_name is fixed at graft-ai-aig-otel-payloads-v1 to match wrangler.otel.jsonc."
+  }
+}
+
 variable "max_upload_bytes" {
   description = "Maximum upload size in bytes for each Logpush batch"
   type        = number

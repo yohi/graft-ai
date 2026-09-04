@@ -1,6 +1,6 @@
 .PHONY: install fmt validate test typecheck plan apply dev deploy deploy-ollama deploy-provider-metrics deploy-dashboards deploy-alert-rules otel-worker-infrastructure render-otel-worker-config deploy-otel-worker otel-worker-test otel-worker-validate otel-worker-smoke clean setup-free-tier setup-grafana otel-node-preflight otel-contracts otel-alloy-test otel-validate otel-smoke
 
-OTEL_PAYLOAD_STORE ?= kv
+OTEL_PAYLOAD_STORE ?= d1
 OTEL_PAYLOAD_R2_DRAIN ?= false
 
 install:
@@ -69,7 +69,7 @@ otel-worker-smoke:
 
 otel-worker-infrastructure:
 	@set -eu; \
-	case "$(OTEL_PAYLOAD_STORE)" in kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STORE must be kv or r2.' >&2; exit 1 ;; esac; \
+	case "$(OTEL_PAYLOAD_STORE)" in d1|kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STORE must be d1, kv, or r2.' >&2; exit 1 ;; esac; \
 	case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false) ;; *) printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false.' >&2; exit 1 ;; esac; \
 	if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2; exit 1; fi; \
 	terraform -chdir=terraform init; \
@@ -78,18 +78,20 @@ otel-worker-infrastructure:
 			-target=cloudflare_queue.otel \
 			-target=cloudflare_queue.otel_dlq \
 			-target=cloudflare_workers_kv_namespace.otel_payloads \
+			-target=cloudflare_d1_database.otel_payloads \
 			-target=cloudflare_r2_bucket.otel \
 			-target=cloudflare_r2_bucket_lifecycle.otel; \
 	else \
 		terraform -chdir=terraform apply -input=false -auto-approve \
 			-target=cloudflare_queue.otel \
 			-target=cloudflare_queue.otel_dlq \
-			-target=cloudflare_workers_kv_namespace.otel_payloads; \
+			-target=cloudflare_workers_kv_namespace.otel_payloads \
+			-target=cloudflare_d1_database.otel_payloads; \
 	fi
 
 render-otel-worker-config:
 	@set -eu; \
-	case "$(OTEL_PAYLOAD_STORE)" in kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STORE must be kv or r2.' >&2; exit 1 ;; esac; \
+	case "$(OTEL_PAYLOAD_STORE)" in d1|kv|r2) ;; *) printf '%s\n' 'OTEL_PAYLOAD_STORE must be d1, kv, or r2.' >&2; exit 1 ;; esac; \
 	case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false) ;; *) printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN must be exactly true or false.' >&2; exit 1 ;; esac; \
 	if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then printf '%s\n' 'OTEL_PAYLOAD_R2_DRAIN=true is redundant when OTEL_PAYLOAD_STORE=r2.' >&2; exit 1; fi; \
 	namespace_id="$(OTEL_PAYLOAD_KV_NAMESPACE_ID)"; \
@@ -100,13 +102,22 @@ render-otel-worker-config:
 	if [ "$${#namespace_id}" -ne 32 ]; then printf '%s\n' 'OTEL_PAYLOAD_KV_NAMESPACE_ID must be a 32-character hex string.' >&2; exit 1; fi; \
 	r2_flag=""; \
 	if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] || [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]; then r2_flag="--include-r2-binding"; fi; \
+	d1_flag=""; \
+	if [ "$(OTEL_PAYLOAD_STORE)" = d1 ]; then \
+	  d1_id="$${OTEL_PAYLOAD_D1_DATABASE_ID:-}"; \
+	  case "$$d1_id" in \
+	    "") printf '%s\n' 'Set OTEL_PAYLOAD_D1_DATABASE_ID before rendering the OTel Worker config in d1 mode.' >&2; exit 1 ;; \
+	  esac; \
+	  d1_flag="--d1-database-id $$d1_id"; \
+	fi; \
 	node scripts/render-otel-worker-config.mjs \
-		--payload-store "$(OTEL_PAYLOAD_STORE)" \
-		--kv-namespace-id "$$namespace_id" \
-		--output workers/.wrangler/otel.generated.jsonc $$r2_flag
-
+	  --payload-store "$(OTEL_PAYLOAD_STORE)" \
+	  --kv-namespace-id "$$namespace_id" \
+	  $$d1_flag \
+	  --output workers/.wrangler/otel.generated.jsonc $$r2_flag
 
 deploy-otel-worker: otel-worker-infrastructure
+	cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote
 	$(MAKE) render-otel-worker-config
 	cd workers && npx wrangler deploy --config .wrangler/otel.generated.jsonc
 typecheck:

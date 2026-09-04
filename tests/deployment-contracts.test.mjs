@@ -148,7 +148,7 @@ test("OTel config rendering validates payload controls before namespace resoluti
     )?.[1] ?? "";
   const namespaceResolution = renderTarget.indexOf("namespace_id=");
   const validationSteps = [
-    'case "$(OTEL_PAYLOAD_STORE)" in kv|r2)',
+    'case "$(OTEL_PAYLOAD_STORE)" in d1|kv|r2)',
     'case "$(OTEL_PAYLOAD_R2_DRAIN)" in true|false)',
     'if [ "$(OTEL_PAYLOAD_STORE)" = r2 ] && [ "$(OTEL_PAYLOAD_R2_DRAIN)" = true ]',
   ];
@@ -293,6 +293,24 @@ test("OTel infrastructure provisions a fixed KV namespace and exposes its ID", (
   );
 });
 
+test("OTel infrastructure provisions a fixed D1 database and exposes its ID", () => {
+  assert.match(
+    otelTerraform,
+    /resource\s+"cloudflare_d1_database"\s+"otel_payloads"/,
+  );
+  assert.match(otelTerraform, /name\s*=\s*var\.otel_d1_database_name/);
+  assert.match(
+    terraformVariables,
+    /variable\s+"otel_d1_database_name"[\s\S]*default\s*=\s*"graft-ai-aig-otel-payloads-v1"/,
+  );
+  assert.match(terraformVariables, /otel_d1_database_name is fixed/);
+  assert.match(
+    terraformOutputs,
+    /output\s+"otel_payload_d1_database_id"[\s\S]*cloudflare_d1_database\.otel_payloads\.id/,
+  );
+  assert.match(makefile, /-target=cloudflare_d1_database\.otel_payloads/);
+});
+
 test("CI and deployment select KV by default and render explicit R2 modes", () => {
   assert.match(ci, /npm run test:otel:r2/);
   assert.match(ci, /npm run test:otel:kv-r2-drain/);
@@ -307,7 +325,7 @@ test("CI and deployment select KV by default and render explicit R2 modes", () =
   assert.match(deploy, /render-otel-worker-config\.mjs/);
   assert.match(deploy, /otel_payload_kv_namespace_id/);
   assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
-  assert.match(makefile, /OTEL_PAYLOAD_STORE \?= kv/);
+  assert.match(makefile, /OTEL_PAYLOAD_STORE \?= d1/);
   assert.match(makefile, /OTEL_PAYLOAD_R2_DRAIN \?= false/);
   assert.match(makefile, /OTEL_PAYLOAD_KV_NAMESPACE_ID/);
   assert.match(makefile, /--include-r2-binding/);

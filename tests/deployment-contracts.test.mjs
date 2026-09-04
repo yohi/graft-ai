@@ -365,7 +365,7 @@ test("CI and deployment select D1 by default and render explicit KV/R2 modes", (
   assert.match(deploy, /--d1-database-id/);
   assert.match(
     deploy,
-    /npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote/,
+    /\.\/node_modules\/\.bin\/wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote/,
   );
   assert.match(deploy, /\.wrangler\/otel\.generated\.jsonc/);
   assert.match(makefile, /OTEL_PAYLOAD_STORE \?= d1/);

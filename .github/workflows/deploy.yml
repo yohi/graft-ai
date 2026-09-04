@@ -204,7 +204,7 @@ jobs:
 
       - name: Apply OTel D1 migrations
         working-directory: workers
-        run: npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote --config .wrangler/otel.generated.jsonc
+        run: ./node_modules/.bin/wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote --config .wrangler/otel.generated.jsonc
 
       - name: Sync dedicated OTel Worker secrets
         working-directory: workers

@@ -114,4 +114,23 @@ describe("projectLokiRecord", () => {
 
     expect(line.duration_ms).toBeCloseTo(125, 9);
   });
+
+  it("normalizes corrupted model name in Loki labels and payload line", () => {
+    const parsed = parseOtlpJson(validOtlpJson);
+    const firstSpan = parsed[0];
+    if (!firstSpan) throw new Error("fixture did not produce a span");
+    const span = redactSpan(firstSpan);
+    const record = projectLokiRecord({
+      ...span,
+      attributes: {
+        ...span.attributes,
+        model: "kimi-k2.7-codemoonshotai/Kimi-K2.7-Code",
+      },
+    });
+
+    expect(record).not.toBeNull();
+    expect(record?.labels.model).toBe("kimi-k2.7-code");
+    const line = JSON.parse(record?.line ?? "{}");
+    expect(line.model).toBe("kimi-k2.7-code");
+  });
 });

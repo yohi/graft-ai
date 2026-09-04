@@ -1,5 +1,6 @@
 import { DURATION_BUCKETS, CANONICAL_METRIC_NAMES, METRIC_LABEL_KEYS } from "./contracts";
 import { projectLokiRecord } from "./spanlog";
+import { normalizeModelName } from "../transform";
 import type {
   JsonValue,
   LokiRecord,
@@ -186,7 +187,12 @@ function tempoAttributes(attributes: Readonly<Record<string, JsonValue>>): reado
 function metricLabels(span: RedactedSpan): Readonly<Record<string, string>> {
   const labels: Record<string, string> = {};
   for (const key of METRIC_LABEL_KEYS) {
-    labels[key] = stringAttribute(span, key) || "unknown";
+    const raw = stringAttribute(span, key);
+    if (key === "model") {
+      labels[key] = normalizeModelName(raw);
+    } else {
+      labels[key] = raw || "unknown";
+    }
   }
   return labels;
 }

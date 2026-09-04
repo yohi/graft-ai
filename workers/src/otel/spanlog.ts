@@ -6,6 +6,7 @@ import {
   TRUNCATED_SUFFIX,
 } from "./contracts";
 import type { JsonValue, LokiRecord, RedactedSpan } from "./types";
+import { normalizeModelName } from "../transform";
 
 const numericAliases = {
   input_tokens: ["input_tokens", "gen_ai.usage.input_tokens"],
@@ -21,7 +22,7 @@ export function projectLokiRecord(span: RedactedSpan): LokiRecord | null {
     trace_id: span.traceId,
     span_id: span.spanId,
     status: span.statusCode,
-    model: firstString(span, "model", "gen_ai.request.model"),
+    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")),
     provider: firstString(span, "provider", "gen_ai.model.provider", "gen_ai.system"),
     status_code: firstString(span, "status_code", "http.response.status_code") || span.statusCode,
     gateway: firstString(span, "gateway"),
@@ -69,7 +70,7 @@ export function projectLokiRecord(span: RedactedSpan): LokiRecord | null {
 
 function canonicalLabels(span: RedactedSpan): Record<(typeof LOKI_LABEL_KEYS)[number], string> {
   return {
-    model: firstString(span, "model", "gen_ai.request.model") || "unknown",
+    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")),
     status_code:
       firstString(span, "status_code", "http.response.status_code") || span.statusCode || "unknown",
     env: firstString(span, "env") || "unknown",

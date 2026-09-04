@@ -339,9 +339,6 @@ function classifyStoreFailure(error: unknown, operation: string): PayloadStoreEr
   if (/quota|daily limit|rate limit|limit exceeded/i.test(message)) {
     return new PayloadStoreQuotaError(`${operation} quota exceeded`);
   }
-  if (/database is locked|busy|timeout|network/i.test(message)) {
-    return new PayloadStoreTemporaryError(`${operation} temporarily unavailable`);
-  }
   return new PayloadStoreTemporaryError(`${operation} temporarily unavailable`);
 }
 

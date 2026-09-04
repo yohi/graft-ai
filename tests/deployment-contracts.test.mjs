@@ -19,6 +19,10 @@ const terraformOutputs = readFileSync(
   "utf8",
 );
 const makefile = readFileSync(resolve(root, "Makefile"), "utf8");
+const otelStorage = readFileSync(
+  resolve(root, "workers/src/otel/storage.ts"),
+  "utf8",
+);
 const setup = readFileSync(resolve(root, "scripts/setup.sh"), "utf8");
 const grafanaMain = readFileSync(
   resolve(root, "terraform/grafana/main.tf"),
@@ -166,6 +170,37 @@ test("OTel config rendering validates payload controls before namespace resoluti
       `validation must precede namespace resolution: ${validationStep}`,
     );
   }
+});
+
+test("OTel config rendering falls back to both Terraform payload IDs", () => {
+  const renderTarget =
+    makefile.match(
+      /render-otel-worker-config:\n([\s\S]*?)(?=\n\ndeploy-otel-worker:)/,
+    )?.[1] ?? "";
+  const namespaceAssignment = renderTarget.indexOf(
+    'namespace_id="$(OTEL_PAYLOAD_KV_NAMESPACE_ID)";',
+  );
+  const namespaceFallback = renderTarget.indexOf(
+    "terraform -chdir=terraform output -raw otel_payload_kv_namespace_id 2>/dev/null || true",
+  );
+  const d1Assignment = renderTarget.indexOf(
+    'd1_id="$(OTEL_PAYLOAD_D1_DATABASE_ID)";',
+  );
+  const d1Fallback = renderTarget.indexOf(
+    "terraform -chdir=terraform output -raw otel_payload_d1_database_id 2>/dev/null || true",
+  );
+
+  assert.ok(namespaceAssignment >= 0);
+  assert.ok(namespaceFallback > namespaceAssignment);
+  assert.ok(d1Assignment >= 0);
+  assert.ok(d1Fallback > d1Assignment);
+});
+
+test("classifyStoreFailure does not duplicate the temporary fallback", () => {
+  assert.doesNotMatch(
+    otelStorage,
+    /if \(\/database is locked\|busy\|timeout\|network\/i\.test\(message\)\) \{\s*return new PayloadStoreTemporaryError\(`\$\{operation\} temporarily unavailable`\);\s*\}\s*return new PayloadStoreTemporaryError/,
+  );
 });
 
 test("Terraform separates the Loki-only token from the telemetry token", () => {

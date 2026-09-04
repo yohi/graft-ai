@@ -203,7 +203,11 @@ jobs:
           node ../scripts/render-otel-worker-config.mjs "${render_args[@]}"
 
       - name: Apply OTel D1 migrations
+        if: env.OTEL_PAYLOAD_STORE == 'd1'
         working-directory: workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: ./node_modules/.bin/wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote --config .wrangler/otel.generated.jsonc
 
       - name: Sync dedicated OTel Worker secrets

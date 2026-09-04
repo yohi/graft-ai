@@ -374,6 +374,25 @@ test("CI and deployment select D1 by default and render explicit KV/R2 modes", (
   assert.match(makefile, /--include-r2-binding/);
 });
 
+test("OTel D1 migration step receives Cloudflare credentials", () => {
+  const migrationStep =
+    deploy.match(
+      /- name: Apply OTel D1 migrations[\s\S]*?(?=\n      - name: Sync dedicated OTel Worker secrets)/,
+    )?.[0] ?? "";
+  assert.match(
+    migrationStep,
+    /env:\s*\n\s+CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}\s*\n\s+CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/,
+  );
+});
+
+test("OTel D1 migrations run only for the D1 payload store", () => {
+  const migrationStep =
+    deploy.match(
+      /- name: Apply OTel D1 migrations[\s\S]*?(?=\n      - name: Sync dedicated OTel Worker secrets)/,
+    )?.[0] ?? "";
+  assert.match(migrationStep, /if:\s+env\.OTEL_PAYLOAD_STORE == 'd1'/);
+});
+
 test("OTel documentation defines KV as the default and documents quota-safe migration", () => {
   for (const text of [readme, spec]) {
     assert.match(text, /OTEL_PAYLOAD_STORE/);

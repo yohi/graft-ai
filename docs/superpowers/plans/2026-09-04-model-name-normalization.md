@@ -29,7 +29,7 @@
   - Cleanses concatenated strings like `<model><provider>/<model>` to canonical `<model>`.
   - Normalizes single-provider prefix `provider/model` to `model`.
   - Canonicalizes to lowercase.
-  - Returns `""` if trimmed input is empty.
+  - Returns `"unknown"` if input is null, undefined, empty, or whitespace-only.
 
 - [ ] **Step 1: Write the failing unit tests**
 
@@ -49,7 +49,7 @@ Update `workers/tests/transform.test.ts` to add tests for stream concatenation b
 
   it("handles whitespace and casing", () => {
     expect(normalizeModelName("  GPT-4.1-2025-04-14  ")).toBe("gpt-4.1-2025-04-14");
-    expect(normalizeModelName("   ")).toBe("");
+    expect(normalizeModelName("   ")).toBe("unknown");
   });
 ```
 
@@ -64,9 +64,9 @@ Update `workers/src/transform.ts`:
 
 ```ts
 export function normalizeModelName(modelId: string | undefined | null): string {
-  if (!modelId || typeof modelId !== "string") return "";
+  if (!modelId || typeof modelId !== "string") return "unknown";
   let trimmed = modelId.trim();
-  if (!trimmed) return "";
+  if (!trimmed || !trimmed.replaceAll("/", "").trim()) return "unknown";
 
   if (!trimmed.includes("/")) {
     return trimmed.toLowerCase();
@@ -78,7 +78,7 @@ export function normalizeModelName(modelId: string | undefined | null): string {
     const slashIndex = withoutPrefix.indexOf("/");
     trimmed = slashIndex >= 0 ? withoutPrefix.slice(slashIndex + 1) : withoutPrefix;
     if (!trimmed.includes("/")) {
-      return trimmed.toLowerCase();
+      return trimmed.toLowerCase() || "unknown";
     }
   }
 
@@ -93,10 +93,11 @@ export function normalizeModelName(modelId: string | undefined | null): string {
   const rightLower = right.toLowerCase();
 
   if (
-    leftLower.startsWith(rightLower) ||
-    leftLower.endsWith(rightLower) ||
-    leftLower.includes(rightLower) ||
-    rightLower.includes(leftLower)
+    rightLower &&
+    (leftLower.startsWith(rightLower) ||
+      leftLower.endsWith(rightLower) ||
+      leftLower.includes(rightLower) ||
+      rightLower.includes(leftLower))
   ) {
     return rightLower;
   }
@@ -104,10 +105,10 @@ export function normalizeModelName(modelId: string | undefined | null): string {
   // 3. Redundant single-provider prefix: <provider>/<model> -> <model>
   // e.g. "moonshotai/kimi-k2.7-code" -> "kimi-k2.7-code"
   if (trimmed.indexOf("/") === lastSlashIndex) {
-    return rightLower;
+    return rightLower || "unknown";
   }
 
-  return trimmed.toLowerCase();
+  return trimmed.toLowerCase() || "unknown";
 }
 ```
 
@@ -175,14 +176,14 @@ import { normalizeModelName } from "../transform";
 
 In `projectLokiRecord`:
 ```ts
-    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")) || "unknown",
+    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")),
 ```
 
 In `canonicalLabels`:
 ```ts
 function canonicalLabels(span: RedactedSpan): Record<(typeof LOKI_LABEL_KEYS)[number], string> {
   return {
-    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")) || "unknown",
+    model: normalizeModelName(firstString(span, "model", "gen_ai.request.model")),
     status_code:
       firstString(span, "status_code", "http.response.status_code") || span.statusCode || "unknown",
     env: firstString(span, "env") || "unknown",
@@ -265,7 +266,7 @@ function metricLabels(span: RedactedSpan): Readonly<Record<string, string>> {
   for (const key of METRIC_LABEL_KEYS) {
     const raw = stringAttribute(span, key);
     if (key === "model") {
-      labels[key] = normalizeModelName(raw) || "unknown";
+      labels[key] = normalizeModelName(raw);
     } else {
       labels[key] = raw || "unknown";
     }

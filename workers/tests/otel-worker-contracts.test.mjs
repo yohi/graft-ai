@@ -63,11 +63,21 @@ test("rejects extra Queue producer entries", () => {
   );
 });
 
-test("renders KV-default, R2, D1, and KV/R2-drain binding contracts", () => {
+test("renders D1-default, KV, R2, and KV/R2-drain binding contracts", () => {
   const options = {
     kvNamespaceId: "00000000000000000000000000000000",
     d1DatabaseId: "00000000-0000-0000-0000-000000000000",
   };
+  const defaultConfig = renderOtelWorkerConfig(config, options);
+  assert.equal(defaultConfig.vars.OTEL_PAYLOAD_STORE, "d1");
+  assert.deepEqual(defaultConfig.d1_databases, [
+    {
+      binding: "OTEL_PAYLOAD_D1",
+      database_name: "graft-ai-aig-otel-payloads-v1",
+      database_id: options.d1DatabaseId,
+    },
+  ]);
+
   const kv = renderOtelWorkerConfig(config, {
     ...options,
     payloadStore: "kv",
@@ -151,7 +161,8 @@ test("rejects invalid selector, namespace ID, and unsafe binding combinations", 
     /D1 database ID/,
   );
   assert.throws(
-    () => renderOtelWorkerConfig(config, { ...valid, payloadStore: "d1", d1DatabaseId: "invalid-id" }),
+    () =>
+      renderOtelWorkerConfig(config, { ...valid, payloadStore: "d1", d1DatabaseId: "invalid-id" }),
     /D1 database ID/,
   );
   assert.throws(
@@ -189,20 +200,18 @@ test("rejects invalid selector, namespace ID, and unsafe binding combinations", 
   );
   assert.throws(
     () =>
-      validateOtelWorkerConfig(
-        { ...config, d1_databases: [] },
-        JSON.stringify(config),
-        { payloadStore: "d1", includeR2Binding: false },
-      ),
+      validateOtelWorkerConfig({ ...config, d1_databases: [] }, JSON.stringify(config), {
+        payloadStore: "d1",
+        includeR2Binding: false,
+      }),
     /OTEL_PAYLOAD_D1/,
   );
   assert.throws(
     () =>
-      validateOtelWorkerConfig(
-        { ...config, triggers: { crons: [] } },
-        JSON.stringify(config),
-        { payloadStore: "d1", includeR2Binding: false },
-      ),
+      validateOtelWorkerConfig({ ...config, triggers: { crons: [] } }, JSON.stringify(config), {
+        payloadStore: "d1",
+        includeR2Binding: false,
+      }),
     /cron/,
   );
 });

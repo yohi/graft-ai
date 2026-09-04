@@ -25,7 +25,7 @@ export function renderOtelWorkerConfig(
   {
     kvNamespaceId,
     d1DatabaseId,
-    payloadStore = "kv",
+    payloadStore = "d1",
     includeR2Binding = false,
   } = {},
 ) {
@@ -105,7 +105,7 @@ export function renderOtelWorkerConfig(
 
 function parseCliArgs(args) {
   const options = {
-    payloadStore: "kv",
+    payloadStore: "d1",
     includeR2Binding: false,
   };
 

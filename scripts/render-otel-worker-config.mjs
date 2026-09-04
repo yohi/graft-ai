@@ -88,6 +88,7 @@ export function renderOtelWorkerConfig(
         binding: "OTEL_PAYLOAD_D1",
         database_name: templateD1Binding.database_name,
         database_id: d1DatabaseId,
+        migrations_dir: "../migrations",
       },
     ];
   } else {

@@ -2,8 +2,6 @@
 
 # graft-ai Specification
 
-日本語版: [SPEC.ja.md](./SPEC.ja.md)
-
 ## 1. Purpose
 
 Transform encrypted Cloudflare AI Gateway access logs into Loki JSON streams and

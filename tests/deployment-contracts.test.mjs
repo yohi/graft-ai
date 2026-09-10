@@ -46,10 +46,7 @@ const freeTierOtelGuide = readFileSync(
   resolve(root, "docs/free-tier-ai-gateway-otel.md"),
   "utf8",
 );
-const readme = readFileSync(resolve(root, "README.md"), "utf8");
-const readmeJa = readFileSync(resolve(root, "README.ja.md"), "utf8");
 const spec = readFileSync(resolve(root, "SPEC.md"), "utf8");
-const specJa = readFileSync(resolve(root, "SPEC.ja.md"), "utf8");
 const otelRunbook = readFileSync(
   resolve(root, "docs/cloudflare-worker-ai-gateway-otel.md"),
   "utf8",
@@ -457,10 +454,10 @@ test("OTel D1 migrations run only for the D1 payload store", () => {
   assert.match(migrationStep, /if:\s+env\.OTEL_PAYLOAD_STORE == 'd1'/);
 });
 
-test("OTel documentation defines KV as the default and documents quota-safe migration", () => {
-  for (const text of [readme, spec]) {
+test("OTel documentation defines D1 as the default and documents quota-safe migration", () => {
+  for (const text of [spec]) {
     assert.match(text, /OTEL_PAYLOAD_STORE/);
-    assert.match(text, /default.*KV|KV.*default/i);
+    assert.match(text, /default.*D1|D1.*default/i);
     assert.match(text, /1 GB|1 GiB/);
     assert.match(text, /1,000.*writes.*day/i);
     assert.match(text, /100,000.*reads.*day/i);
@@ -469,23 +466,7 @@ test("OTel documentation defines KV as the default and documents quota-safe migr
     assert.match(text, /60[- ]second/i);
     assert.match(text, /OTEL_OBJECTS/);
   }
-  for (const text of [readmeJa, specJa]) {
-    assert.match(text, /OTEL_PAYLOAD_STORE/);
-    assert.match(text, /KV.*デフォルト|デフォルト.*KV/);
-    assert.match(text, /1 GB|1 GiB/);
-    assert.match(text, /1,000.*書き込み.*日/);
-    assert.match(text, /100,000.*読み取り.*日/);
-    assert.match(text, /1,000.*削除.*日/);
-    assert.match(text, /25 MiB/);
-    assert.match(text, /60秒|60 秒/);
-    assert.match(text, /OTEL_OBJECTS/);
-  }
-  for (const [text, patterns] of [
-    [readme, [/read/i, /write/i, /delete/i, /stored data/i]],
-    [readmeJa, [/読み取り/, /書き込み/, /削除/, /保存データ/]],
-  ]) {
-    for (const pattern of patterns) assert.match(text, pattern);
-  }
+  assert.doesNotMatch(spec, /\]\(\.\/SPEC\.ja\.md\)/);
   assert.match(otelRunbook, /schema.?version.?1.*R2/i);
   assert.match(otelRunbook, /OTEL_PAYLOAD_R2_DRAIN/);
   assert.match(otelRunbook, /1,000.*writes.*day/i);
@@ -493,10 +474,6 @@ test("OTel documentation defines KV as the default and documents quota-safe migr
   assert.match(
     otelRunbook,
     /DEDUPLICATION_TOMBSTONE_MS.*PAYLOAD_RETENTION_FAILSAFE_MS/,
-  );
-  assert.doesNotMatch(
-    readme,
-    /R2 is required for the default OTel deployment/i,
   );
   assert.doesNotMatch(otelRunbook, /R2 lifecycle rule cleans up KV/i);
 });

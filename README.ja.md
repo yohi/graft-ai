@@ -70,14 +70,16 @@ proxy WorkerをAI requestのupstream endpointとして利用し、`X-Proxy-Secre
 具体的な手順:
 
 - [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md)
+- [Logpush Deployment](docs/logpush.md)
 - [Dedicated Cloudflare Worker OTel path](docs/cloudflare-worker-ai-gateway-otel.md)
 - [Provider metrics](docs/provider-metrics.md)
+- [Ollama Cloud reset metrics](docs/ollama-cloud.md)
 
 ## Configuration
 
 proxyで最も重要な設定は `workers/wrangler.proxy.jsonc` の `CF_ACCOUNT_ID` と `AI_GATEWAY_ID` です。secretはrepositoryへcommitせず、Wranglerまたは提供されているsetup workflowで設定してください。
 
-完全な人間向けreferenceは [Configuration](docs/configuration.md) を参照してください。具体的な変数名とshapeについてはmachine-usable exampleを正本とします。
+完全な人間向けreferenceは [Configuration](docs/configuration.md) を参照してください。具体的な変拰名とshapeについてはmachine-usable exampleを正本とします。
 
 ## Documentation
 
@@ -88,14 +90,17 @@ proxyで最も重要な設定は `workers/wrangler.proxy.jsonc` の `CF_ACCOUNT_
 - [Operations](docs/operations.md) — monitoring / recovery / quota
 - [Migration](docs/migration.md) — payload-store / deployment migration
 - [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md) — Free Tier walkthrough
+- [Logpush Deployment](docs/logpush.md) — Logpush setup / deployment runbook
 - [Dedicated Cloudflare Worker OTel path](docs/cloudflare-worker-ai-gateway-otel.md) — dedicated OTel Worker runbook
 - [Provider metrics](docs/provider-metrics.md) — provider metrics integration
+- [Ollama Cloud reset metrics](docs/ollama-cloud.md) — scheduled reset-window metrics
 
 ## Development
 
-Worker dependencyをinstallし、repository rootからcheckを実行します。
+Worker dependencyをinstallし、repository rootからtestを実行します。
 
 ```bash
+make install
 make test
 ```
 

@@ -30,13 +30,12 @@ access logs, and rate-limit reset windows.
   `workers/.dev.vars` for local development and Wrangler secrets for deployed
   Workers. Do not put them in `*.tfvars`, dashboard JSON, Compose files, or
   any tracked configuration.
-- **Universal data contract:** Loki labels are strictly limited to `model`,
-  `status_code`, `env`, `gateway` on every path that writes to Loki; never add
-  high-cardinality labels.
-- **Authoritative docs:** read `README.md` and `SPEC.md` before changing the AI
-  Gateway log pipeline, Terraform, or Workers code. Detailed OTel design
-  invariants (sampling, redaction, spanlogs, dispatch) are in `SPEC.md`
-  § _OTel signal contracts (design invariants)_.
+- **Technical contracts:** do not redefine protocol, label, sampling,
+  redaction, storage, or failure-semantics contracts here. Follow `SPEC.md`
+  and the implementation/tests it references.
+- **Documentation routing:** use `README.md` for onboarding and navigation,
+  `SPEC.md` for normative technical contracts, and `docs/` for human-facing
+  operational and explanatory guides.
 - **Code organization:** follow the existing module-by-responsibility pattern in
   `workers/src/` (e.g., `index`, `crypto`, `transform`, `loki`, `types`,
   `ollama-cloud`, `provider-metrics`). Add new modules following the same

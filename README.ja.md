@@ -1,587 +1,106 @@
-<!-- markdownlint-disable MD013 -->
-
 # graft-ai
 
-Grafana Cloud 向けの Cloudflare AI Gateway、OpenAI、Ollama
-Cloud テレメトリ（メトリクス/ログ）集約基盤です。
+[English](README.md)
 
-English version: [README.md](./README.md)
+Cloudflare AI Gateway 向けのルーティングと可観測性を提供する補助プロジェクトです。Free Tier の proxy 経路を最短の導入経路とし、必要に応じて OpenTelemetry パイプラインを追加できます。
 
----
+## 概要
 
-## 📌 概要
+`graft-ai` は Cloudflare AI Gateway 用の Worker proxy と、AI リクエストのテレメトリを OpenTelemetry 互換バックエンドへ送るための任意の可観測性経路を提供します。
 
-`graft-ai`
-は、複数の AI プロバイダーエンドポイントから得られるコスト、トークン使用量、アクセスログを、統一された
-**Grafana Cloud** ダッシュボードへ集約するためのテレメトリパイプラインです。
+最初に試す場合は **Free Tier proxy-only** を使用してください。Logpush と dedicated OTel Worker は、より広い可観測性や production 規模の ingestion が必要な場合の追加経路です。
 
-本プロジェクトは **Grafana Cloud Free Tier**（14日間保持、10k active
-series、50GB logs）の制約内で動作するように最適化されています。デフォルトのデプロイ経路は Cloudflare
-**Workers Logpush** を使用し、これには **Cloudflare Workers Paid plan** が必要です。一方で、Cloudflare Worker だけで通信を中継する **Free Tier proxy-only mode** も利用できるため、Logpush job や Tail Worker なしで運用できます。
+## Quick Start
 
-### 📊 機能サポート・ロードマップ マトリクス
+### 必要条件
 
-本プロジェクトの現在のサポート状況、および将来の対応予定は以下の通りです。
+- Node.js 22
+- `npm` / `npx`
+- `jq`
+- Cloudflare アカウント
+- 作成済みの Cloudflare AI Gateway
 
-| 機能 / プロバイダ | 現在できること (現状のサポート) | できないこと / 制限事項 | 将来の対応予定 (ロードマップ) |
-| :--- | :--- | :--- | :--- |
-| **Workers AI** | AI Gateway 経由で Workers AI を利用可能 | - | - |
-| **OpenAI (via AI Gateway)** | AI Gateway 経由で OpenAI を利用可能 | usage API を介した直接の使用量取得 | usage API を介した usage scraping 機能 (個別 API キーからの直接取得) |
-| **Anthropic (via AI Gateway)** | AI Gateway 経由で Anthropic を利用可能 | usage API を介した直接の使用量取得 | - |
-| **AI Gateway アクセスログ転送** | Workers Logpush 経由で AI Gateway のアクセスログを収集し、Grafana Loki に転送 | Proxy-only mode ではアクセスログを転送しない | - |
-| **Ollama Cloud** | セッション/週次のレートリミットリセット時間の算出と Grafana Metrics (Prometheus 形式) への転送 | リアルタイムアクセスログの転送 | リセット時間アンカーの動的な自動検出（現在は固定値ベース） |
-| **OpenAI (直接接続)** | - (AI Gateway 経由のみ) | APIキーを指定した使用量データの直接取得 | OpenAI API からの使用量データの自動定期スクレイピング |
+### 設定
 
+`workers/wrangler.proxy.jsonc` を編集し、次を設定します。
 
-## 🏗️ アーキテクチャ
+- `CF_ACCOUNT_ID`
+- `AI_GATEWAY_ID`
 
-- **Cloudflare AI Gateway:** Workers
-  Logpush 経由でプロキシログとレイテンシを Grafana Loki に送信します。
-- **OpenAI GPT Usage:** Management
-  API からトークン消費量とドル建てコストを取得し、Grafana
-  Prometheus に送ります。
-- **Ollama Cloud:** 設定されたアンカー時刻と間隔から session / weekly
-  レート制限リセット時刻を派生させ、Grafana Cloud Metrics に push します。
-- **Provider Metrics Worker:** 毎分 Codex、OpenAI API、OpenCodeGo の使用量を取得し、
-  OTLP/v1 メトリクスとして Grafana Cloud Prometheus に push します。
+Provider API key はファイルへ保存しないでください。Provider credential はリクエスト時に渡し、proxy secret で保護します。
 
-AI Gateway OTel は専用の `workers.dev` Worker で OTLP/JSON を受信します。
-Worker は payload store/Queue に渡す前に資格情報と payload をレダクションし、Tempo、Loki、
-Prometheus を backend ごとの Queue/DLQ から独立して送信します。デプロイ、Secret、
-Queue/DLQ、Grafana 検証、rollback 手順は
-[`docs/cloudflare-worker-ai-gateway-otel.md`](./docs/cloudflare-worker-ai-gateway-otel.md)
-にまとめています。`make otel-worker-test` と `make otel-worker-validate` を
-デプロイ前に実行してください。
-
-Grafana Cloud の telemetry 用 Access Policy には `logs:write`、`metrics:write`、
-`traces:write` が必要です。Loki 専用 token を使う場合は `logs:write` のみを許可し、
-endpoint や Authorization 値を Wrangler vars、Terraform tfvars、Compose YAML、
-ソースコードへ書き込まないでください。
-Dashboard workflow の前に、実際の Cloud OTel datasource UID を次の production
-environment variables に設定してください。
-`GRAFANA_OTEL_PROMETHEUS_DATASOURCE_UID`、`GRAFANA_OTEL_LOKI_DATASOURCE_UID`、
-`GRAFANA_OTEL_TEMPO_DATASOURCE_UID`。Workflow は
-`GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED=true` を設定し、UID不足時はGrafana APIを
-呼び出す前に失敗します。
-
-旧Tunnel/Alloy経路の手順は[legacy Free Tier AI Gateway OTel runbook](./docs/free-tier-ai-gateway-otel.md)
-にあります。専用Workerの24時間観測期間が完了するまで、rollback経路として保持します。
-
-### AI Gateway OTel の payload storage と移行
-
-`OTEL_PAYLOAD_STORE=d1` が新しいデフォルトです。Cloudflare D1 は Workers Free において
-クレジットカード登録不要（zero credit card requirement）で利用可能であり、
-100,000 writes/day（100,000書き込み/日）、5,000,000 reads/day（5,000,000読み取り/日）、
-アカウント全体の合計 5 GB/account 保存容量、および 1データベースあたり
-500 MB/database の上限を提供します。D1 は強整合性（strong consistency）を持ちます。
-D1 pointer の Queue 設定上の `delaySeconds` は 0 秒（意図的な遅延なし）ですが、Queue 配信は
-非同期です。consumer のスケジューリング、バッチタイムアウト、backlog、再試行により、
-実際の即時配信時間は保証されません。D1 を利用したデプロイ前には
-データベースマイグレーションを適用します:
-`cd workers && npx wrangler d1 migrations apply graft-ai-aig-otel-payloads-v1 --remote`
-（`make deploy-otel-worker` 実行時に自動適用されます）。
-
-以前のデフォルトであった Workers KV (`OTEL_PAYLOAD_STORE=kv`) および Cloudflare R2
-(`OTEL_PAYLOAD_STORE=r2`) も、明示的な設定により引き続き利用可能です。Worker は
-`OTEL_PAYLOAD_KV` に payload を保存し、`OTEL_OBJECTS` R2 binding は
-`OTEL_PAYLOAD_STORE=r2` または明示的な `OTEL_PAYLOAD_R2_DRAIN=true` の場合だけ
-有効にします。Workers Free の KV には 1 GB の保存容量、1,000 writes/day
-（1,000書き込み/日）、100,000 reads/day（100,000読み取り/日）、1,000 deletes/day
-（1,000削除/日）、25 MiB の value limit があります。現在の
-4 MB export payload cap はこの value limit 未満です。Free limit に達した場合は
-その操作が失敗し、paid overage へ自動移行しません。
-
-Metrics Durable Object の serialized cumulative state は、SQLite-backed Durable Object
-の 2 MiB value limit を下回る 1,500,000 UTF-8 bytes に制限します。series ごとの start
-time は sample に保持し、last flush には compact な metadata だけを保存します。
-cumulative state または export payload が cap に達した場合は current flush window へ
-rollover します。current window 単独でも大きすぎる場合は sample を黙って破棄せず、
-`/append` が `metrics_window_too_large` の HTTP 413 を返して enqueue しません。alarm は
-Durable Object の concurrency gate の外側で同じ失敗を報告します。
-
-KV の eventual consistency のため、KV pointer の最初の Queue delivery は
-60秒遅延します。新しい pointer は schema version 2 と `storageBackend` を持ち、
-schema-version-1 pointer は常に R2 を選択します。schema-version-2 の R2 pointer
-も drain 中は R2 から読み取り・削除でき、現在の selector で解釈し直しません。
-また D1 や R2 稼働時でも既存の KV pointer は正常に読み取り・削除されます。
-
-KV Analytics または Cloudflare GraphQL API では、読み取り、書き込み、削除、
-保存データを別々に監視します。80,000 reads/day、800 writes/day、800 deletes/day、
-0.8 GiB 保存データで alert し、quota-related Worker failure が確認された場合に
-page します。削除 quota の失敗だけで読み取り・書き込み停止とは判断しません。
-R2 への切替は Cloudflare が quota exhaustion を確認した場合、または次の UTC
-reset 前に閾値到達が予測される場合の手動判断です。一時的な削除エラーだけで
-自動切替しません。R2 lifecycle rule は R2 payload だけを削除し、KV payload は
-削除しません。drain 完了後に dual binding を外して KV-only または D1 に戻します。
-
-### スケジュール実行 Worker
-
-| Worker | Trigger | Responsibility |
-| :--- | :--- | :--- |
-| `graft-ai-provider-metrics` | Cron `* * * * *` | Codex / OpenAI API / OpenCodeGo の使用量を取得し、Grafana Cloud Prometheus に push |
-| `graft-ai-ollama-cloud` | Cron `* * * * *` | session / weekly リセットメトリクスを計算し、Grafana Cloud Prometheus に push |
-
-#### `graft-ai-provider-metrics` の secrets
-
-```sh
-cd workers
-npx wrangler secret put OPENAI_ADMIN_API_KEY --config wrangler.provider-metrics.jsonc
-npx wrangler secret put CODEX_ACCESS_TOKEN --config wrangler.provider-metrics.jsonc
-npx wrangler secret put CODEX_ACCOUNT_ID --config wrangler.provider-metrics.jsonc      # optional
-npx wrangler secret put CODEX_PROXY_URL --config wrangler.provider-metrics.jsonc       # optional（住宅用プロキシ・Cloudflare Tunnel 連携推奨）
-npx wrangler secret put CODEX_PROXY_SECRET --config wrangler.provider-metrics.jsonc    # optional（プロキシ共有シークレット認証用）
-npx wrangler secret put OPENCODEGO_SESSION_COOKIE --config wrangler.provider-metrics.jsonc
-npx wrangler secret put OPENCODEGO_WORKSPACE_ID --config wrangler.provider-metrics.jsonc  # optional
-npx wrangler secret put OLLAMA_SESSION_COOKIE --config wrangler.provider-metrics.jsonc    # optional（Ollama Cloud 使用率・リアルタイムリセット追跡用）
-npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.provider-metrics.jsonc
-npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.provider-metrics.jsonc
-npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.provider-metrics.jsonc
-cd ..
-```
-
-> **Codex の Cloudflare WAF チャレンジ（403）に関する注意事項:**
-> `chatgpt.com` への直接リクエストは、データセンター IP（Cloudflare Workers を含む）からのアクセス時に Cloudflare Turnstile / Managed Challenge（403 Forbidden）でブロックされる場合があります。これを完全無料で安定して回避するため、自宅マシン（Raspberry Pi や PC 等）で [`deploy/codex-proxy/`](./deploy/codex-proxy/) の軽量プロキシと Cloudflare Tunnel を起動し、発行された URL を `CODEX_PROXY_URL` に設定することを推奨します。ワンライナー起動や systemd / Docker 永続化の手順は [`deploy/codex-proxy/README.md`](./deploy/codex-proxy/README.md) を参照してください。
-
-Secret ではない設定値（履歴期間やカスタム Base URL 等）は `workers/wrangler.provider-metrics.jsonc` の `vars` で設定します。
-
-```jsonc
-{
-  "vars": {
-    "OPENAI_API_HISTORY_DAYS": "1",
-    "CODEX_API_BASE_URL": "https://chatgpt.com" // optional（カスタムエンドポイント利用時）
-  }
-}
-```
-
-`OPENAI_API_HISTORY_DAYS` のデフォルトは1日で、1〜31日の整数を指定できます。
-Secret 登録後、リポジトリルートで `make deploy-provider-metrics` を実行してデプロイします。
-
-`make setup-free-tier` は Logpush と Tail Worker を使わない Proxy Worker のみを構築します。
-Provider Metrics はプロバイダー資格情報が別管理のため、Secret 登録後に
-`make deploy-provider-metrics` で個別にデプロイしてください。
-
-#### `graft-ai-ollama-cloud`
-
-```sh
-cd workers
-npx wrangler secret put OLLAMA_CLOUD_RESET_ANCHOR_ISO --config wrangler.ollama.jsonc
-npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_URL --config wrangler.ollama.jsonc
-npx wrangler secret put GRAFANA_CLOUD_PROMETHEUS_USERNAME --config wrangler.ollama.jsonc
-npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN --config wrangler.ollama.jsonc
-cd ..
-make deploy-ollama
-```
-
-`GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` には Prometheus 送信に必要な
-`metrics:write` scope が必要です。`logs:write` のみを持つ Loki 専用 token
-ではメトリクス送信に失敗します。Terraform の telemetry token を
-Prometheus Worker に、`grafana_loki_write_token` をLoki Workerに分けて使用します。
-`OLLAMA_CLOUD_RESET_ANCHOR_ISO` は厳密な ISO 8601
-時刻、Prometheus エンドポイントは HTTPS で指定してください。スクリプトは
-さらに Ollama ダッシュボードの import と
-`grafana/alerts/graft-ai-ollama-cloud-rules.json` の Alert Rule 登録を行います。
-
-## 📁 ディレクトリ構成
-
-```text
-graft-ai/
-├── workers/          # AI Gateway telemetry 用 TypeScript Cloudflare Workers
-│   ├── src/
-│   │   ├── index.ts      # fetch handler: auth → decompress → decrypt → transform → push
-│   │   ├── proxy.ts      # Free Tier proxy: client → AI Gateway
-│   │   ├── tail-worker.ts # Paid-plan optional Tail Worker: telemetry log → Loki
-│   │   ├── crypto.ts     # 暗号化フィールド向け RSA-OAEP unwrap + AES-GCM decrypt
-│   │   ├── transform.ts  # NDJSON → Loki JSON streams（labels, timestamp, log line）
-│   │   ├── loki.ts       # Basic Auth と 429 retry を持つ Loki HTTP push client
-│   │   ├── types.ts      # 共有 TypeScript 型
-│   │   ├── ollama-cloud.ts      # Cron Worker: reset メトリクスを派生させ Grafana に push
-│   │   └── ollama-cloud/        # reset 計算機 + OTLP/JSON メトリクス client
-│   │       ├── calc.ts
-│   │       └── prometheus.ts
-│   │   ├── provider-metrics.ts   # Cron Worker: provider usage → Prometheus
-│   │   └── provider-metrics/     # provider fetcher + OTLP metrics client
-│   ├── tests/        # Vitest による unit / integration tests（179 cases）
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── vitest.config.ts
-│   ├── wrangler.jsonc       # Logpush mode Worker config
-│   ├── wrangler.proxy.jsonc # Free Tier proxy Worker config
-│   ├── wrangler.tail.jsonc  # Paid-plan optional Tail Worker config
-│   ├── wrangler.ollama.jsonc # Ollama Cloud reset metrics Worker config
-│   └── wrangler.provider-metrics.jsonc # Provider metrics Worker config
-├── grafana/
-│   └── dashboards/
-│       ├── graft-ai-overview.json      # AI Gateway ダッシュボード定義（13 パネル）
-│       └── graft-ai-ollama-cloud.json  # Ollama Cloud reset metrics ダッシュボード
-├── scripts/
-│   ├── setup-free-tier.sh   # Proxy-only Free Tier セットアップ
-│   └── setup.sh             # Legacy: 旧来の統合セットアップ
-├── terraform/        # Terraform: Cloudflare Logpush API helper + Grafana リソース（optional）
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── grafana/          # Grafana Cloud provider: Access Policy + token（optional）
-│   └── versions.tf
-├── tests/fixtures/   # AI Gateway NDJSON サンプル fixture
-├── Makefile          # install, typecheck, test, fmt, validate, deploy, deploy-ollama, deploy-provider-metrics, deploy-dashboards, setup-free-tier, setup-grafana 用ターゲット
-├── README.md         # 英語版 README
-└── README.ja.md      # このファイル
-```
-
-## 🔌 サブシステム
-
-### Subsystem 1 — Cloudflare AI Gateway ログ収集
-
-このサブシステムは2つのモードをサポートします。
-
-
-- **Logpush mode:** Cloudflare Logpush から暗号化された AI Gateway
-  アクセスログを受信し、Loki JSON streams へ変換して Grafana Cloud Loki に push します。
-- **Free Tier proxy-only mode:** client traffic を proxy Worker 経由にし、上流の AI Gateway に転送してクライアントにそのまま返します。このモードでは Grafana Cloud Loki へのアクセスログ転送は行いません。
-
-#### データフロー
-
-##### Logpush Mode (Workers Paid Plan)
-
-```text
-[Cloudflare AI Gateway] ── logs ──→ [Cloudflare Logpush]
-                                       ↓ gzip + RSA-encrypted NDJSON
-[Cloudflare Workers - workers/src/index.ts]
-  ├─ X-Origin-Secret header を検証
-  ├─ gzip body を解凍
-  ├─ 暗号化フィールドを復号（RSA-OAEP unwrap AES key, AES-GCM decrypt）
-  ├─ NDJSON lines を parse
-  ├─ 各行を Loki stream entry に変換
-  │     ├─ timestamp: seconds/milliseconds → nanoseconds
-  │     ├─ labels: model, status_code, env, gateway
-  │     └─ log line: snake_case の選択フィールド
-  └─ HTTPS + Basic Auth で Grafana Cloud Loki に push
-```
-
-```text
-[Client/App]
-  └─ AI Gateway ではなく proxy Worker を直接呼ぶ
-       ↓
-[Cloudflare Workers - proxy.ts]
-  ├─ X-Proxy-Secret ヘッダーを検証
-  ├─ Cloudflare AI Gateway にリクエストを forward
-  └─ AI Gateway response を client にそのまま返す
-       ↓
-  [Client receives the upstream response]
-```
-
-#### 主要な設計ルール
-
-- **入口認証:** Logpush は `X-Origin-Secret` ヘッダーを送信し、Worker は
-  `env.ORIGIN_SECRET` と定数時間比較します。不一致の場合は retry
-  loop を避けるため `401` を返します。
-- **タイムスタンプ処理:** `RequestTime`
-  は10桁以下なら秒、11〜13桁ならミリ秒として扱い、14桁以上は精度損失の可能性があるため拒否します。該当ログ行はスキップされ、ログに記録されます。
-- **モデル名正規化:** `@cf/meta/llama-3.1-8b-instruct` のような Cloudflare model
-  ID から `llama-3.1-8b-instruct` を抽出します。
-- **カーディナリティ制御:** Loki labels は
-  `model`、`status_code`、`env`、`gateway` に厳密に限定します。
-- **ログ本文フィールド:**
-  `request_id`、`cache_status`、`prompt_tokens`、`completion_tokens`、`total_tokens`、`duration_ms`、`path`、`method`
-  を含めます。復号済みの `request_body`、`response_body`、`metadata` は
-  `env.INCLUDE_*`
-  flags が明示的に有効な場合のみ含めます。デフォルトでは prompt、response
-  body、metadata の保護のため除外します。
-- **機密本文の扱い:** Worker は有効化された request body、response body、metadata
-  を自動でマスキングしません。PII や認証情報を含み得る機密データとして扱い、
-  フラグを有効化する前に送信元で無害化してください。決定的にマスキングできない
-  場合はフラグを無効のままにします。Loki の保持期間は Grafana Cloud Free Tier
-  の14日以内とし、最小限の Grafana ユーザー／チームと `logs:write` のみを持つ
-  token にアクセスを制限してください。
-- **Retry policy:** Loki 429
-  response は指数バックオフで最大3回 retry します。Loki 側の最終失敗時は upstream の status を返し、Worker 側で
-  `429` と `>=500` を `503`、それ以外の non-2xx を `400` に変換します。
-- **Security:** Secrets は `*.tfvars` に保存しません。`TF_VAR_*`
-  環境変数または Wrangler secrets を使用します。
-- **Encryption:** Logpush payload fields は RSA-OAEP で wrap された AES-GCM
-  key によって暗号化されます。Worker は設定済み PKCS#8 RSA private
-  key（`env.RSA_PRIVATE_KEY_PEM`）で復号します。
-
-#### よく使うコマンド
+### デプロイ
 
 ```bash
-make typecheck        # TypeScript type check
-make test             # Vitest suite を実行
-make fmt              # Terraform と Workers source を format
-make validate         # terraform validate（Logpush mode only）
-make deploy           # wrangler deploy + terraform apply（Logpush mode only）
-make setup-free-tier  # scripts/setup-free-tier.sh を実行（Proxy-only Free Tier）
-make setup-grafana    # scripts/tf-apply-grafana.sh を実行し、Access Policy トークンの作成/ローテーションと Wrangler シークレットの再登録を行う
+make setup-free-tier
 ```
 
-### Free Tier セットアップ（No Logpush）
+setup script が Worker dependency のinstall、proxy Worker のdeploy、proxy secret の設定を行います。
 
-Cloudflare アカウントで Workers Logpush を使えない場合は、この Proxy-only モードを使います。Logpush receiver と Tail Worker はこのモードではデプロイしません。Proxy Worker は `workers/src/proxy.ts` にあり、`wrangler.proxy.jsonc` でデプロイします。
+### 動作確認
 
-#### ワンコマンドセットアップ（推奨）
+deploy 済みproxyへ `X-Proxy-Secret` header付きで1リクエスト送信します。AI Gateway の正常な応答が返れば最小経路は成功です。
 
-次のスクリプトで Proxy Worker を自動セットアップできます。
+具体的なリクエスト例、local observability stack、troubleshooting は [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md) を参照してください。
+
+## Features
+
+- Cloudflare AI Gateway 向けFree Tier proxy
+- 任意のLogpush telemetry ingestion
+- 任意のdedicated OTel Worker ingestion
+- redaction とpayload保護
+- OpenTelemetry traces / logs / metrics
+- Tempo / Loki / Prometheus / Grafana のlocal・self-hosted workflow
+- Terraform / Wrangler deployment
+
+## How It Works
+
+主な経路は3つです。
+
+1. **Free Tier proxy-only** — 標準のonboarding経路。リクエストをproxy Worker経由でCloudflare AI Gatewayへ送ります。
+2. **Logpush** — AI Gateway logsをobservability pipelineへexportする任意のCloudflare経路です。
+3. **Dedicated OTel Worker** — payload storage、queue processing、OTLP exportを備えた任意のingestion経路です。
+
+技術的invariant、storage semantics、failure behavior、redaction requirement、protocol contractの英語正本は [SPEC.md](SPEC.md) です。
+
+## Usage
+
+proxy WorkerをAI requestのupstream endpointとして利用し、`X-Proxy-Secret` で認証します。
+
+具体的な手順:
+
+- [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md)
+- [Dedicated Cloudflare Worker OTel path](docs/cloudflare-worker-ai-gateway-otel.md)
+- [Provider metrics](docs/provider-metrics.md)
+
+## Configuration
+
+proxyで最も重要な設定は `workers/wrangler.proxy.jsonc` の `CF_ACCOUNT_ID` と `AI_GATEWAY_ID` です。secretはrepositoryへcommitせず、Wranglerまたは提供されているsetup workflowで設定してください。
+
+完全な人間向けreferenceは [Configuration](docs/configuration.md) を参照してください。具体的な変数名とshapeについてはmachine-usable exampleを正本とします。
+
+## Documentation
+
+- [SPEC.md](SPEC.md) — normative technical contract / invariant の英語正本
+- [AGENTS.md](AGENTS.md) — AI coding agent 向け指示
+- [Configuration](docs/configuration.md) — 完全なconfiguration reference
+- [Deployment](docs/deployment.md) — deployment経路の入口
+- [Operations](docs/operations.md) — monitoring / recovery / quota
+- [Migration](docs/migration.md) — payload-store / deployment migration
+- [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md) — Free Tier walkthrough
+- [Dedicated Cloudflare Worker OTel path](docs/cloudflare-worker-ai-gateway-otel.md) — dedicated OTel Worker runbook
+- [Provider metrics](docs/provider-metrics.md) — provider metrics integration
+
+## Development
+
+Worker dependencyをinstallし、repository rootからcheckを実行します。
 
 ```bash
-bash scripts/setup-free-tier.sh
+make test
 ```
 
-スクリプトは次の 5 ステップを自動で実行します。
+その他のdevelopment commandは `Makefile` と `workers/` 配下のpackage scriptsを参照してください。
 
-1. 前提ツールの確認 (`npx wrangler` と `jq`)
-2. `PROXY_SECRET` の自動生成
-3. Proxy Worker への Wrangler secret (`PROXY_SECRET`) の登録
-4. ローカル開発用の `.dev.vars` ファイルの生成/更新
-5. Proxy Worker (`wrangler.proxy.jsonc`) のデプロイ
+## License
 
-`make setup-free-tier` でも実行できます。
-
-Proxy-only mode では AI Gateway access logs を Grafana Cloud Loki に転送しません。Proxy Worker を経由したリクエストのみが上流 AI Gateway に到達します。
-
-Proxy-only モードでは Loki 用の Cloud Access Policy token は必要ありません。Logpush モードの Loki 設定は、下記の「Logpush セットアップとデプロイ」節に従ってください。
-
-#### 変数リファレンス
-
-**ルーティング変数**（上流 AI Gateway URL の構築に使用）:
-- `CF_ACCOUNT_ID` — Cloudflare アカウント ID（32 桁の 16 進数文字列）。`workers/wrangler.proxy.jsonc` に設定してください。
-- `AI_GATEWAY_ID` — URL パス中の AI Gateway スラッグ（例: `my-gateway`）。**実際の gateway スラッグと一致している必要があります**。既定値のままではデプロイできません。
-デプロイ前に非シークレット値を `workers/wrangler.proxy.jsonc` に記入してください。
-
-#### Free Tier データフロー
-
-```text
-[Client/App]
-  └─ AI Gateway URL を直接呼ばず、proxy Worker を呼び出す
-       ↓
-[workers/src/proxy.ts]
-  ├─ X-Proxy-Secret ヘッダーを検証
-  ├─ method, headers, body, path, query を Cloudflare AI Gateway に forward
-  └─ AI Gateway response を client へそのまま返す
-       ↓
-  [Client receives the upstream response]
-```
-
-## CI/CD
-
-
-GitHub Actions ワークフローで継続的インテグレーションと自動デプロイを行います:
-
-- `.github/workflows/ci.yml`: Pull Request および `master` 以外の push 時に実行
-  - TypeScript 型検査、Vitest テスト、Prettier フォーマットチェック
-  - Cloudflare および Grafana の Terraform fmt / validate
-- `.github/workflows/deploy.yml`: `master` への push および `workflow_dispatch` で実行
-  - Proxy Worker、Ollama Cloud Worker、Provider Metrics Worker を Wrangler でデプロイ
-  - Grafana ダッシュボード（`graft-ai-overview.json`、`graft-ai-ollama-cloud.json`）を Grafana HTTP API 経由でデプロイ
-  - `production` GitHub Environment を使用
-
-必要なリポジトリ Secrets / Variables:
-- Cloudflare: `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`
-- Grafana Dashboards: `GRAFANA_STACK_SLUG`（Variable）または `GRAFANA_URL`、`GRAFANA_SERVICE_ACCOUNT_TOKEN` / `GRAFANA_API_KEY`（Secret）
-
-## 🛠️ Logpush セットアップとデプロイ（Workers Paid）
-
-
-### クイックスタート
-
-このリポジトリを初めて使う場合は、下の手順を上から順に実行してください。
-目標はシンプルで、最後に `make test`、`make validate`、`make deploy` が
-ファイル不足や secret 不足で止まらない状態にすることです。
-
-### 必要なもの
-
-- ターミナル
-- `workers/` で使う最近の Node.js LTS
-- `npm`
-- Terraform `>= 1.5.0`
-- Cloudflare AI Gateway と Logpush へのアクセス権
-- Grafana Cloud Loki の tenant URL、username、access policy token
-- Cloudflare API token (Workers のデプロイやシークレットの書き込みを行う場合、`Account.Workers Scripts: Edit`、`Account.AI Gateway: Read`、`User.Memberships: Read` の権限を持つトークンが必要です。同じトークンは `TF_VAR_cloudflare_api_token` として `make deploy` の Terraform Logpush apply でも使用されるため、追加で Logpush/Logs 権限が必要です。詳細は後述の「⚠️ 運用メモ」を参照してください)
-
-### 初回セットアップ
-
-1. Worker ワークスペースから Cloudflare にログインします。
-
-   ```bash
-   cd workers
-   npx wrangler login
-   cd ..
-   ```
-
-   ブラウザが開き、ローカル環境と Cloudflare がつながります。
-
-2. 依存関係をインストールし、Worker の型を生成します。
-
-   ```bash
-   make install
-   ```
-
-   失敗する場合は、`npm` が入っているか、repo ルートで実行しているかを確認
-   してください。
-
-3. example file をコピーし、値を適切な場所に入れます。
-
-   ```bash
-   cp workers/.dev.vars.example workers/.dev.vars
-   cp terraform/terraform.tfvars.example terraform/terraform.tfvars
-   ```
-
-   - `workers/.dev.vars` はローカル Worker 開発用です。
-   - `terraform/terraform.tfvars` には secret 以外の Terraform 入力だけを置きます。
-   - secret 値は `TF_VAR_*` 環境変数か Wrangler secrets に保持します。
-
-4. `workers/.dev.vars` に値を入れます。
-   - `GRAFANA_CLOUD_LOKI_URL` - Loki の endpoint
-   - `GRAFANA_CLOUD_LOKI_USERNAME` - Loki の tenant ID / username
-   - `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` - Grafana token
-   - `ORIGIN_SECRET` - Logpush → Worker 用の共有 secret
-   - `RSA_PRIVATE_KEY_PEM` - Logpush payload を復号する private key
-
-   `your-random-origin-secret-here` のような値は、自分で決めた文字列に置き換えて
-   ください。
-
-5. `terraform/terraform.tfvars` に値を入れます。
-   - `cloudflare_account_id` - Cloudflare account ID
-   - `logpush_dataset` - 通常は `ai_gateway_events`
-   - `worker_script_name` - Cloudflare 上の Worker script 名
-   - `logpush_job_name` - Logpush job の名前
-   - `workers_subdomain` - Worker に使う subdomain
-
-6. Worker runtime secrets を Wrangler で設定します。
-
-   ```bash
-   cd workers
-   npx wrangler secret put ORIGIN_SECRET
-   npx wrangler secret put RSA_PRIVATE_KEY_PEM
-   npx wrangler secret put GRAFANA_CLOUD_LOKI_URL
-   npx wrangler secret put GRAFANA_CLOUD_LOKI_USERNAME
-   npx wrangler secret put GRAFANA_CLOUD_ACCESS_POLICY_TOKEN
-   cd ..
-   ```
-
-   プロンプトが出たら、セットアップ済みの値をそのまま貼り付けます。
-
-7. Terraform variables を shell に export します（commit しないでください）。
-
-   ```bash
-   export TF_VAR_cloudflare_api_token="..."
-   export TF_VAR_cloudflare_account_id="..."
-   export TF_VAR_workers_subdomain="..."
-   export TF_VAR_origin_secret="..."
-   export TF_VAR_rsa_private_key_pem="..."
-   export TF_VAR_grafana_cloud_loki_url="..."
-   export TF_VAR_grafana_cloud_loki_username="..."
-   export TF_VAR_grafana_cloud_access_policy_token="..."
-   ```
-
-   Terraform を実行する間は、このターミナルを開いたままにします。
-
-   `terraform apply` または `terraform destroy` の前には同じ shell で
-   `CF_API_TOKEN` も export してください。Terraform の destroy provisioner は
-   通常の Terraform variable を参照できないため、この変数を継承して使用します。
-   Logpush helper は `TF_VAR_cloudflare_api_token` から自動推測しません。
-
-8. デプロイ前にローカルチェックを実行します。
-
-   ```bash
-   make typecheck
-   make test
-   make validate
-   ```
-
-   成功とは、これらのコマンドがエラーなしで終わることです。
-
-9. デプロイし、end-to-end で検証します。
-
-   ```bash
-   make deploy
-   ```
-
-   その後、下記の **Deployment Verification Flow** に従います。
-
-### Deployment Verification Flow
-
-設計時と同じ段階的な検証を行います。
-
-1. `terraform plan` — `terraform_data.aig_logpush_job` と Logpush API helper により
-   対象ジョブだけが作成されることを確認します。
-2. `make test` — Worker unit / integration tests を実行します。
-3. `wrangler dev` — gzipped NDJSON sample payload を POST し、`200`
-   が返ることを確認します。
-4. Real request — AI
-   Gateway 経由で request を送信し、Loki に log が表示されるまで待ちます。
-5. Grafana dashboard — `sum by (status_code) (count_over_time(...))`
-   が data を返すことを確認します。
-
-### セットアップ時の確認ポイント
-
-- `make install` が失敗する場合は、`npm` が入っているか、repo ルートで実行し
-  ているかを確認します。
-- Terraform に secret 値を入れないでください。必要な値は `TF_VAR_*`
-  環境変数に戻します。
-- `make deploy` が Terraform apply の前に失敗する場合は、
-  `scripts/verify-deployment-env.sh` の出力と Cloudflare の login 状態を確認します。
-- Logpush が届かない場合は、`terraform/terraform.tfvars` の dataset 名が
-  Cloudflare アカウントと一致しているか、RSA public key を Logpush settings に
-  upload 済みかを確認します。
-
-### コピペ確認リスト
-
-デプロイ前に、次を満たしているか確認してください。
-
-- `workers/.dev.vars` が存在し、ローカル Worker 用の値が入っている
-- `terraform/terraform.tfvars` が存在し、secret 以外の値だけが入っている
-- `workers/` で `npx wrangler login` を実行済み
-- `make install` が成功済み
-- `make typecheck`、`make test`、`make validate` がすべて成功済み
-- 使っている shell に `TF_VAR_*` 環境変数が入っている
-
-### よくある初心者のミス
-
-- `workers/` ではなく repo ルートで `npx wrangler secret put ...` を実行する
-- secret 値を `terraform/terraform.tfvars` に書いてしまう
-- `your-random-origin-secret-here` のような placeholder をそのまま残す
-- Cloudflare account ID や worker subdomain を間違える
-- `make install` を飛ばして先に `make test` を実行する
-
-## ⚠️ 運用メモ
-
-- Terraform state は `graft-ai-cloudflare` Terraform Cloud workspace に保存されます。
-  適用前に設定済みの Terraform Cloud workspace へログインしてください。
-- 適用前に Cloudflare API で Cloudflare Logpush dataset
-  name と利用可能 field を確認してください（`/accounts/{id}/logpush/datasets/{dataset}/fields`）。`terraform/variables.tf`
-  の default dataset は `ai_gateway_events`
-  です。アカウントと一致するか確認してください。
-- RSA _public_ key を AI Gateway Logpush settings に upload し、private key は
-  `TF_VAR_rsa_private_key_pem` に保持します。
-- 適用前に Cloudflare API
-  token が最小限必要な Logpush/Logs 権限を持つことを確認してください（正確な権限は Cloudflare
-  docs を参照してください）。
-- **Quota and monitoring:** この pipeline は Grafana Cloud Free
-  Tier 向けに設計されています。変換後 log size は 1 request あたり約 0.5〜1.5
-  KB（raw は 3〜8 KB）です。100k requests/day の場合、月間約 1.5〜4.5
-  GB であり、50 GB/month limit を十分下回ります。デプロイ後は Workers
-  Analytics の exceptions/subrequest errors、Logpush `last_delivery`
-  status、Grafana Cloud Logs
-  Usage を監視し、この見積もりと週次で比較してください。
-- **対応サービス (LLM) プロバイダの追加・拡張:**
-  - **AI Gateway 経由での利用 (OpenAI, Anthropic 等):** すでにデプロイ済みの Proxy Worker がリクエストを自動で中継するため、`setup-free-tier.sh` の再実行や再デプロイは不要です。アプリ側の接続先を Proxy Worker URL に向け、各モデルを設定するだけで利用できます。
-  - **新規 Worker や独自の API キーの追加:** 新しい Worker やプロバイダ固有の API キーを追加する場合は、対象 Worker の Wrangler 設定と Secret を個別に更新し、対応する `make deploy-*` ターゲットを実行してください。
-- **AI Gateway のレート制限:** 各 AI Gateway には独自の rate limit
-  （`rate_limiting_limit` / `rate_limiting_interval` /
-  `rate_limiting_technique`）が設定されており、上記の Loki 429 retry
-  ロジックとは別物です。同じ gateway を他の高並列クライアント（例: 複数の AI
-  エージェントの並列実行や負荷テスト）と共有していると、デフォルトの limit では
-  不足し、超過したリクエストはモデルプロバイダに到達する**前**に AI Gateway 自体
-  から `429` で拒否されます。この場合、変換後の Loki ログでは `cf-aig-model` /
-  `cf-aig-tokens` レスポンスヘッダーが一切付与されず、`model="unknown"` かつ
-  `total_tokens=0` になります。現在の設定は
-  `GET /accounts/{account_id}/ai-gateway/gateways/{gateway_id}`（または
-  Cloudflare Dashboard → AI Gateway → 対象 gateway → Settings →
-  Rate-limiting）で確認できます。この症状が出た場合は `rate_limiting_limit` の
-  引き上げや `rate_limiting_interval` の調整を行ってください（なお、`"sliding"`
-  方式はスループット上限を緩和するものではなく、厳格なローリングウィンドウ制御を
-  適用するための設定です）。
-
-## 📄 ライセンス
-
-[LICENSE](./LICENSE) を参照してください。
+[LICENSE](LICENSE) を参照してください。

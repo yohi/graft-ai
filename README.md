@@ -70,8 +70,10 @@ Use the proxy Worker as the upstream endpoint for AI requests and authenticate t
 For concrete commands and examples:
 
 - [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md)
+- [Logpush Deployment](docs/logpush.md)
 - [Dedicated Cloudflare Worker OTel path](docs/cloudflare-worker-ai-gateway-otel.md)
 - [Provider metrics](docs/provider-metrics.md)
+- [Ollama Cloud reset metrics](docs/ollama-cloud.md)
 
 ## Configuration
 
@@ -88,14 +90,17 @@ For the complete human-readable reference, see [Configuration](docs/configuratio
 - [Operations](docs/operations.md) — monitoring, recovery, and quota guidance
 - [Migration](docs/migration.md) — payload-store and deployment migration guidance
 - [Free Tier AI Gateway + OTel](docs/free-tier-ai-gateway-otel.md) — Free Tier walkthrough
+- [Logpush Deployment](docs/logpush.md) — Logpush setup and deployment runbook
 - [Dedicated Cloudflare Worker OTel path](docs/cloudflare-worker-ai-gateway-otel.md) — dedicated OTel Worker runbook
 - [Provider metrics](docs/provider-metrics.md) — provider-side metrics integration
+- [Ollama Cloud reset metrics](docs/ollama-cloud.md) — scheduled reset-window metrics
 
 ## Development
 
-Install Worker dependencies and run the repository checks from the project root:
+Install Worker dependencies and run the repository tests from the project root:
 
 ```bash
+make install
 make test
 ```
 

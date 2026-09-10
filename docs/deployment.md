@@ -16,7 +16,7 @@ See [Free Tier AI Gateway + OTel](free-tier-ai-gateway-otel.md) for the complete
 
 Use Logpush when your Cloudflare plan and observability requirements call for AI Gateway log export.
 
-See the existing Logpush-related runbooks and Terraform configuration in this repository. The README intentionally does not duplicate the full procedure.
+See [Logpush Deployment](logpush.md) for first-time setup, secrets, Terraform inputs, deployment, and verification.
 
 ## Dedicated OTel Worker
 

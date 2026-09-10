@@ -13,11 +13,20 @@ Use the observability backend appropriate to your deployment path:
 
 The Free Tier local/self-hosted workflow is documented in [Free Tier AI Gateway + OTel](free-tier-ai-gateway-otel.md).
 
+Provider-account metrics and Ollama reset-window metrics have separate operational guides:
+
+- [Provider Metrics](provider-metrics.md)
+- [Ollama Cloud Reset Metrics](ollama-cloud.md)
+
 ## Dedicated OTel Worker
 
 Operational behavior for the dedicated Worker includes queue processing, payload-store cleanup, OTLP export, and failure classification.
 
 The normative failure semantics and storage invariants are defined in [`../SPEC.md`](../SPEC.md). Deployment-specific commands are in [Dedicated Cloudflare Worker AI Gateway OTel](cloudflare-worker-ai-gateway-otel.md).
+
+## Metrics Temporality
+
+The local Alloy/OTLP metrics pipeline aggregates event-level samples into DELTA reporting windows before export. Implementation notes and the Japanese translation are maintained in [OTLP Metrics Temporality and Aggregation Window Notes](otel-metrics-temporality.md).
 
 ## Quotas and Limits
 
@@ -44,4 +53,8 @@ Payload retention and cleanup behavior are normative technical contracts. See [`
 - [Configuration](configuration.md)
 - [Deployment](deployment.md)
 - [Migration](migration.md)
+- [Logpush Deployment](logpush.md)
 - [Dedicated Cloudflare Worker AI Gateway OTel](cloudflare-worker-ai-gateway-otel.md)
+- [Provider Metrics](provider-metrics.md)
+- [Ollama Cloud Reset Metrics](ollama-cloud.md)
+- [OTLP Metrics Temporality and Aggregation Window Notes](otel-metrics-temporality.md)

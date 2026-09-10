@@ -1,47 +1,49 @@
 # OTLP Metrics Temporality and Aggregation Window Notes
 
-## 背景
+[日本語](otel-metrics-temporality.ja.md)
 
-レビュー指摘で `deploy/otel/alloy/internal/wire/metrics.go` に対し、以下が挙げられました：
+## Background
 
-- イベント単位の Sum / Histogram の temporality を `CUMULATIVE` から `DELTA` に変更する。
-- 各 `EncodeMetrics` 呼び出しの報告区間内で series ごとに集計してからデータポイントを出力する。
-- `Normalize` が span ごとに生成する Value / Count を累積状態として扱わず、span の開始・終了時刻を共有区間として使用しないようにする。
-- 各報告区間の共通 timestamp を設定する。
+A review of `deploy/otel/alloy/internal/wire/metrics.go` identified the following requirements:
 
-## 対応内容
+- Change event-level Sum and Histogram temporality from `CUMULATIVE` to `DELTA`.
+- Aggregate samples by series within each `EncodeMetrics` reporting interval before emitting data points.
+- Do not treat the Value and Count produced by `Normalize` for each span as cumulative state, and do not use individual span start/end timestamps as the shared reporting interval.
+- Use a common timestamp for each reporting interval.
 
-### 1. DELTA + 集計済みの維持
+## Implementation
 
-`EncodeMetrics` は `aggregateSamples` で name + labels ごとにサンプルを集計し、Sum / Histogram ともに `AGGREGATION_TEMPORALITY_DELTA` を使用しています。`CUMULATIVE` 指定は存在しません。
+### 1. DELTA temporality with pre-aggregation
 
-### 2. 二重加算バグの修正
+`EncodeMetrics` uses `aggregateSamples` to aggregate samples by name and labels. Both Sum and Histogram use `AGGREGATION_TEMPORALITY_DELTA`; there is no `CUMULATIVE` setting.
 
-`aggregateSamples` で新規 group の `Value` を `sample.Value` で初期化した後、同じ sample を再度加算していたため、1 sample 目が 2 倍になっていました。これを修正し、新規 group の `Value` は `0` で初期化してから全 sample を統一的に加算するようにしました。
+### 2. Double-counting fix
 
-### 3. processLoop 側への accumulator 導入
+`aggregateSamples` previously initialized a new group's `Value` with `sample.Value` and then added the same sample again, doubling the first sample. New groups now initialize `Value` to `0`, and all samples are added through the same aggregation path.
 
-`processLoop` 内に `metrics.Accumulator` を追加し、30 秒ごとの `metricsTicker` で flush して `wire.EncodeMetrics` を呼び出すようにしました。
+### 3. Accumulator in `processLoop`
 
-- `dispatchTrace` は各 trace の `result.Metrics.Samples` を accumulator に追加するのみ。
-- `flushAccumulator` は accumulator を flush し、flush 開始時刻を `startTime`、現在時刻を `endTime` として `EncodeMetrics` に渡す。
-- これにより、同一 series の複数 trace が共通の報告区間（30 秒間隔）で集計されます。
-- shutdown 時（`queue.Items()` が close された場合）にも最後の accumulator を flush します。
+`processLoop` uses `metrics.Accumulator` and flushes it on the 30-second `metricsTicker` before calling `wire.EncodeMetrics`.
 
-### 4. StartTimeUnixNano / TimeUnixNano の導出
+- `dispatchTrace` only adds each trace's `result.Metrics.Samples` to the accumulator.
+- `flushAccumulator` flushes the accumulator and passes the flush start time as `startTime` and the current time as `endTime` to `EncodeMetrics`.
+- Multiple traces for the same series are therefore aggregated into a shared 30-second reporting interval.
+- The final accumulator is also flushed during shutdown when `queue.Items()` is closed.
 
-`EncodeMetrics` のシグネチャを `EncodeMetrics(normalized, startTime, endTime)` に変更しました。`startTime` と `endTime` は accumulator の報告区間を表し、これまでの「サンプル群の最小・最大 timestamp」ではなく、accumulator が導出する値になります。
+### 4. Deriving `StartTimeUnixNano` and `TimeUnixNano`
 
-## 残る考慮事項
+The `EncodeMetrics` signature is `EncodeMetrics(normalized, startTime, endTime)`. `startTime` and `endTime` represent the accumulator reporting interval. They are derived by the accumulator rather than from the minimum and maximum timestamps of the input samples.
 
-- 現状の accumulator 間隔は `metricsTicker` と同じ 30 秒固定です。必要に応じて設定可能にするか、または cron 区間に合わせて調整できます。
-- `Normalize` は引き続き span ごとの raw sample を生成します。集計は accumulator / `EncodeMetrics` 側で完結します。
-- `_total` 系は monotonic counter（Sum）、duration は histogram として維持します。gauge 化は行いません。
+## Remaining Considerations
 
-## 関連ファイル
+- The accumulator interval is currently fixed at 30 seconds, matching `metricsTicker`. It could be made configurable or aligned with a cron interval if needed.
+- `Normalize` continues to produce raw samples per span. Aggregation is completed by the accumulator and `EncodeMetrics`.
+- `_total` series remain monotonic counters (Sum), and duration remains a Histogram. They are not converted to gauges.
 
-- `deploy/otel/alloy/internal/metrics/accumulator.go` — 新規追加
-- `deploy/otel/alloy/internal/metrics/canonical.go` — `MetricSample` に `Count` / `BucketCounts` を追加
-- `deploy/otel/alloy/internal/wire/metrics.go` — `EncodeMetrics` シグネチャ変更、二重加算修正
-- `deploy/otel/alloy/cmd/alloy-otel/pipeline.go` — accumulator 導入
-- `deploy/otel/alloy/internal/wire/metrics_test.go` — テスト追加・更新
+## Related Files
+
+- `deploy/otel/alloy/internal/metrics/accumulator.go` — accumulator implementation
+- `deploy/otel/alloy/internal/metrics/canonical.go` — adds `Count` and `BucketCounts` to `MetricSample`
+- `deploy/otel/alloy/internal/wire/metrics.go` — `EncodeMetrics` signature and aggregation fix
+- `deploy/otel/alloy/cmd/alloy-otel/pipeline.go` — accumulator integration
+- `deploy/otel/alloy/internal/wire/metrics_test.go` — tests

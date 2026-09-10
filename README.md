@@ -2,6 +2,8 @@
 
 [日本語](README.ja.md)
 
+[![CI](https://github.com/yohi/graft-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/yohi/graft-ai/actions/workflows/ci.yml)
+
 Observability and routing helpers for Cloudflare AI Gateway, with a Free Tier proxy path and optional OpenTelemetry pipelines.
 
 ## What it does

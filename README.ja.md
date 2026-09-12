@@ -81,7 +81,7 @@ proxy Worker を AI requests の upstream endpoint として利用し、`X-Proxy
 
 proxy で最も重要な設定は `workers/wrangler.proxy.jsonc` の `CF_ACCOUNT_ID` と `AI_GATEWAY_ID` です。secret は repository へ commit せず、Wrangler または提供されている setup workflow で設定してください。
 
-完全な人間向け reference は [Configuration](docs/configuration.md) を参照してください。具体的な変拰名と shape については machine-usable example を正本とします。
+完全な人間向け reference は [Configuration](docs/configuration.md) を参照してください。具体的な変数名と shape については machine-usable example を正本とします。
 
 ## Documentation
 

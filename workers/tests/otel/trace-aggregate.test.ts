@@ -31,6 +31,7 @@ describe("TraceAggregate", () => {
     await expect(aggregate.cleanup()).resolves.toEqual({ kind: "deleted" });
     expect(deleteAlarm).toHaveBeenCalledOnce();
     expect(deleteAll).toHaveBeenCalledOnce();
+    await expect(state.storage.get("trace")).resolves.toBeUndefined();
   });
 
   it("keeps an active trace during maintenance cleanup", async () => {
@@ -165,6 +166,36 @@ describe("TraceAggregate", () => {
       payloadStoreForPointer(otelEnv, lokiPointer).readBytesObject(lokiPointer),
     ).resolves.toBeInstanceOf(Uint8Array);
   });
+
+  it("deletes the completed trace after the tombstone alarm", async () => {
+    const trace = parseOtlpJson(validOtlpJson)[0];
+    if (!trace) throw new Error("fixture did not produce a span");
+    const traceId = `cleanup-${crypto.randomUUID()}`;
+    const stub = otelEnv.OTEL_TRACE_AGGREGATE.getByName(traceId);
+    const body = {
+      ingressId: `ingress-${crypto.randomUUID()}`,
+      receivedAtMs: Date.now(),
+      spans: [{ ...redactSpan(trace), traceId }],
+    };
+
+    await stub.fetch("https://trace/ingest", { method: "POST", body: JSON.stringify(body) });
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+    await expect(
+      stub
+        .fetch("https://trace/ingest", { method: "POST", body: JSON.stringify(body) })
+        .then((response) => response.json()),
+    ).resolves.toEqual({
+      accepted: false,
+      reason: "late_span",
+    });
+
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+    const afterCleanup = await stub.fetch("https://trace/ingest", {
+      method: "POST",
+      body: JSON.stringify({ ...body, ingressId: `late-${crypto.randomUUID()}` }),
+    });
+    expect(afterCleanup.ok).toBe(true);
+  });
 });
 
 function createTraceAggregateState({ storedState: initialState }: { storedState?: unknown } = {}): {
@@ -173,14 +204,17 @@ function createTraceAggregateState({ storedState: initialState }: { storedState?
   deleteAlarm: ReturnType<typeof vi.fn>;
   deleteAll: ReturnType<typeof vi.fn>;
 } {
-  let storedState: unknown = initialState;
+  const values = new Map<string, unknown>();
+  if (initialState !== undefined) values.set("trace", initialState);
   const alarms: number[] = [];
   const deleteAlarm = vi.fn(async (): Promise<void> => undefined);
-  const deleteAll = vi.fn(async (): Promise<void> => undefined);
+  const deleteAll = vi.fn(async (): Promise<void> => {
+    values.clear();
+  });
   const storage = {
-    get: async <T>(_key: string): Promise<T | undefined> => storedState as T | undefined,
-    put: async (_key: string, value: unknown): Promise<void> => {
-      storedState = value;
+    get: async <T>(key: string): Promise<T | undefined> => values.get(key) as T | undefined,
+    put: async (key: string, value: unknown): Promise<void> => {
+      values.set(key, value);
     },
     setAlarm: async (deadlineMs: number): Promise<void> => {
       alarms.push(deadlineMs);

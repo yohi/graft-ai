@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { handleTraceAggregateCleanup } from "../../src/otel/maintenance";
 import { TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH } from "../../src/otel/trace-aggregate";
 import type { OtelEnv } from "../../src/otel/types";
@@ -61,6 +61,30 @@ describe("TraceAggregate maintenance", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "invalid_json" });
+  });
+
+  it("rejects oversized object ID arrays before iterating over their elements", async () => {
+    const objectIds = Array.from({ length: 101 }, () => "a".repeat(64));
+    let iteratorAccesses = 0;
+    const oversizedObjectIds = new Proxy(objectIds, {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator) iteratorAccesses += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const { requestedIds, testEnv } = createCleanupEnv();
+    const request = new Request(cleanupPath, {
+      method: "POST",
+      headers: { authorization: "Bearer admin-token" },
+    });
+    vi.spyOn(request, "json").mockResolvedValue({ objectIds: oversizedObjectIds });
+
+    const response = await handleTraceAggregateCleanup(request, testEnv);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_object_ids" });
+    expect(iteratorAccesses).toBe(0);
+    expect(requestedIds).toHaveLength(0);
   });
 
   it("returns failed for cleanup operations that throw non-Error values", async () => {

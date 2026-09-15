@@ -62,13 +62,14 @@ export async function handleTraceAggregateCleanup(
 }
 
 function readObjectIds(value: unknown): readonly string[] | null {
-  if (!isRecord(value) || !Array.isArray(value["objectIds"])) return null;
+  if (!isRecord(value)) return null;
+  const rawObjectIds = value["objectIds"];
+  if (!Array.isArray(rawObjectIds) || rawObjectIds.length > MAX_CLEANUP_OBJECT_IDS) return null;
   const objectIds: string[] = [];
-  for (const objectId of value["objectIds"]) {
+  for (const objectId of rawObjectIds) {
     if (typeof objectId !== "string" || !OBJECT_ID_PATTERN.test(objectId)) return null;
     objectIds.push(objectId);
   }
-  if (objectIds.length > MAX_CLEANUP_OBJECT_IDS) return null;
   return objectIds;
 }
 

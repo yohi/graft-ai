@@ -16,6 +16,40 @@ afterEach(() => {
 });
 
 describe("TraceAggregate", () => {
+  it("deletes completed trace storage during maintenance cleanup", async () => {
+    const { state, deleteAlarm, deleteAll } = createTraceAggregateState({
+      storedState: {
+        traceId: "completed-trace",
+        ingressIds: ["ingress-1"],
+        spans: [],
+        lastReceivedAtMs: 1_000,
+        completed: true,
+      },
+    });
+    const aggregate = new TraceAggregate(state, env as unknown as OtelEnv);
+
+    await expect(aggregate.cleanup()).resolves.toEqual({ kind: "deleted" });
+    expect(deleteAlarm).toHaveBeenCalledOnce();
+    expect(deleteAll).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an active trace during maintenance cleanup", async () => {
+    const { state, deleteAlarm, deleteAll } = createTraceAggregateState({
+      storedState: {
+        traceId: "active-trace",
+        ingressIds: ["ingress-1"],
+        spans: [],
+        lastReceivedAtMs: 1_000,
+        completed: false,
+      },
+    });
+    const aggregate = new TraceAggregate(state, env as unknown as OtelEnv);
+
+    await expect(aggregate.cleanup()).resolves.toEqual({ kind: "active" });
+    expect(deleteAlarm).not.toHaveBeenCalled();
+    expect(deleteAll).not.toHaveBeenCalled();
+  });
+
   it("deduplicates an ingress ID across Durable Object eviction", async () => {
     const trace = parseOtlpJson(validOtlpJson)[0];
     if (!trace) throw new Error("fixture did not produce a span");
@@ -133,9 +167,16 @@ describe("TraceAggregate", () => {
   });
 });
 
-function createTraceAggregateState(): { state: DurableObjectState; alarms: number[] } {
-  let storedState: unknown;
+function createTraceAggregateState({ storedState: initialState }: { storedState?: unknown } = {}): {
+  state: DurableObjectState;
+  alarms: number[];
+  deleteAlarm: ReturnType<typeof vi.fn>;
+  deleteAll: ReturnType<typeof vi.fn>;
+} {
+  let storedState: unknown = initialState;
   const alarms: number[] = [];
+  const deleteAlarm = vi.fn(async (): Promise<void> => undefined);
+  const deleteAll = vi.fn(async (): Promise<void> => undefined);
   const storage = {
     get: async <T>(_key: string): Promise<T | undefined> => storedState as T | undefined,
     put: async (_key: string, value: unknown): Promise<void> => {
@@ -145,10 +186,12 @@ function createTraceAggregateState(): { state: DurableObjectState; alarms: numbe
       alarms.push(deadlineMs);
     },
     getAlarm: async (): Promise<number | null> => alarms.at(-1) ?? null,
+    deleteAlarm,
+    deleteAll,
   };
   const state = {
     storage,
     blockConcurrencyWhile: async <T>(callback: () => Promise<T>): Promise<T> => callback(),
   } as unknown as DurableObjectState;
-  return { state, alarms };
+  return { state, alarms, deleteAlarm, deleteAll };
 }

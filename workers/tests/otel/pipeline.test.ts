@@ -4,6 +4,7 @@ import {
   createMessageBatch,
   getQueueResult,
   runDurableObjectAlarm,
+  runInDurableObject,
 } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleIngress, handleQueue } from "../../src/otel";
@@ -75,7 +76,9 @@ describe("OTel Worker pipeline", () => {
     });
 
     const trace = otelEnv.OTEL_TRACE_AGGREGATE.getByName(validTraceId);
-    await expect(runDurableObjectAlarm(trace)).resolves.toBe(true);
+    await runInDurableObject(trace, async (instance) => {
+      await instance.alarm?.();
+    });
 
     const metrics = otelEnv.OTEL_METRICS_AGGREGATE.getByName("global");
     await expect(runDurableObjectAlarm(metrics)).resolves.toBe(true);

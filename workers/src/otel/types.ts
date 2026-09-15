@@ -205,6 +205,7 @@ export interface OtelEnv {
   readonly OTEL_METRICS_AGGREGATE: DurableObjectNamespace;
   readonly OTEL_INGEST_TOKEN: string;
   readonly OTEL_RATE_LIMIT_HMAC_KEY: string;
+  readonly OTEL_ADMIN_TOKEN?: string;
   readonly GRAFANA_CLOUD_OTLP_TRACES_URL: string;
   readonly GRAFANA_CLOUD_OTLP_METRICS_URL: string;
   readonly GRAFANA_CLOUD_OTLP_AUTHORIZATION: string;

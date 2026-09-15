@@ -3,6 +3,7 @@ import { OtelMetricsAggregate } from "./otel/metrics-aggregate";
 import { OtelRateLimit } from "./otel/rate-limit";
 import { TraceAggregate } from "./otel/trace-aggregate";
 import { handleIngress } from "./otel/ingress";
+import { handleTraceAggregateCleanup, TRACE_AGGREGATE_CLEANUP_PATH } from "./otel/maintenance";
 import { handleQueue } from "./otel/queue";
 import { D1PayloadStore } from "./otel/storage";
 import type { OtelEnv, QueuePointer } from "./otel/types";
@@ -12,6 +13,9 @@ export { handleIngress, handleQueue };
 
 export default {
   async fetch(request: Request, env: OtelEnv): Promise<Response> {
+    if (new URL(request.url).pathname === TRACE_AGGREGATE_CLEANUP_PATH) {
+      return handleTraceAggregateCleanup(request, env);
+    }
     return handleIngress(request, env);
   },
   async queue(

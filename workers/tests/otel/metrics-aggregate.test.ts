@@ -73,25 +73,22 @@ describe("OtelMetricsAggregate", () => {
     });
     expect(await duplicate.json()).toMatchObject({ accepted: 0, pending: 1, flushed: false });
 
-    let final: Response | undefined;
-    for (let index = 1; index < 200; index += 1) {
-      final = await stub.fetch("https://metrics/append", {
-        method: "POST",
-        body: JSON.stringify({
-          samples: [
-            {
-              ...base,
-              sampleId: `sample-${index}`,
-              value: index,
-              labels: { env: "prod", gateway: `main-${index}` },
-            },
-          ],
-          nowMs,
+    const final = await stub.fetch("https://metrics/append", {
+      method: "POST",
+      body: JSON.stringify({
+        samples: Array.from({ length: 199 }, (_, offset) => {
+          const index = offset + 1;
+          return {
+            ...base,
+            sampleId: `sample-${index}`,
+            value: index,
+            labels: { env: "prod", gateway: `main-${index}` },
+          };
         }),
-      });
-    }
-    expect(final).toBeDefined();
-    expect(await final?.json()).toMatchObject({ accepted: 1, pending: 0, flushed: true });
+        nowMs,
+      }),
+    });
+    expect(await final.json()).toMatchObject({ accepted: 199, pending: 0, flushed: true });
   });
 
   it("queues a Prometheus payload when the metrics window alarm flushes", async () => {

@@ -1,13 +1,7 @@
-import { TRACE_IDLE_ALARM_MS } from "./contracts";
+import { DEDUPLICATION_TOMBSTONE_MS, TRACE_IDLE_ALARM_MS } from "./contracts";
 import { enqueueBackendJob, traceJobId } from "./exporter";
 import { selectRequestSpan, shouldSampleTrace } from "./selection";
-import {
-  encodeLokiJson,
-  encodeTempoJson,
-  toMetricSamples,
-  toLokiRecords,
-  toTempoTrace,
-} from "./otlp-json";
+import { encodeLokiJson, encodeTempoJson, toMetricSamples, toLokiRecords } from "./otlp-json";
 import { sha256Hex } from "./storage";
 import type { MetricSample, OtelEnv, RedactedSpan, SelectedTrace } from "./types";
 
@@ -20,14 +14,33 @@ type TraceState = Readonly<{
   sampled?: boolean;
 }>;
 
+export type TraceCleanupResult =
+  Readonly<{ kind: "deleted" }> | Readonly<{ kind: "active" }> | Readonly<{ kind: "empty" }>;
+
+export const TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH = "/_internal/cleanup";
+
 export class TraceAggregate {
   constructor(
     private readonly state: DurableObjectState,
     private readonly env: OtelEnv,
   ) {}
 
+  async cleanup(): Promise<TraceCleanupResult> {
+    return this.state.blockConcurrencyWhile(async () => {
+      const stored = await this.state.storage.get<TraceState>("trace");
+      if (stored && !stored.completed) return { kind: "active" };
+      await this.state.storage.deleteAll();
+      await this.state.storage.deleteAlarm();
+      return stored ? { kind: "deleted" } : { kind: "empty" };
+    });
+  }
+
   async fetch(request: Request): Promise<Response> {
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/ingest") {
+    const pathname = new URL(request.url).pathname;
+    if (request.method === "POST" && pathname === TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH) {
+      return Response.json(await this.cleanup());
+    }
+    if (request.method !== "POST" || pathname !== "/ingest") {
       return Response.json({ error: "not_found" }, { status: 404 });
     }
     return this.state.blockConcurrencyWhile(async () => {
@@ -62,16 +75,28 @@ export class TraceAggregate {
   async alarm(): Promise<void> {
     await this.state.blockConcurrencyWhile(async () => {
       const stored = await this.state.storage.get<TraceState>("trace");
-      if (!stored || stored.completed) return;
+      if (!stored) return;
+      if (stored.completed) {
+        await this.state.storage.deleteAll();
+        await this.state.storage.deleteAlarm();
+        return;
+      }
       const selected = selectRequestSpan(stored.spans);
       const metrics = toMetricSamples(selected);
       await this.appendMetrics(metrics, stored.lastReceivedAtMs);
       const sampled = await shouldSampleTrace(selected.traceId, this.env.OTEL_SAMPLING_RATE || "0");
       if (sampled) {
         await this.enqueueSampledSignals(selected);
-        await this.rememberSampledSignals(selected);
       }
-      await this.state.storage.put("trace", { ...stored, completed: true, sampled });
+      await this.state.storage.put("trace", {
+        traceId: stored.traceId,
+        ingressIds: [],
+        spans: [],
+        lastReceivedAtMs: stored.lastReceivedAtMs,
+        completed: true,
+        sampled,
+      } satisfies TraceState);
+      await this.state.storage.setAlarm(Date.now() + DEDUPLICATION_TOMBSTONE_MS);
     });
   }
 
@@ -83,14 +108,6 @@ export class TraceAggregate {
       body: JSON.stringify({ samples, nowMs }),
     });
     if (!response.ok) throw new Error(`metrics aggregate rejected: ${response.status}`);
-  }
-
-  private async rememberSampledSignals(trace: SelectedTrace): Promise<void> {
-    const state = {
-      tempoSpans: toTempoTrace(trace, true).length,
-      lokiRecords: toLokiRecords(trace, true).length,
-    };
-    await this.state.storage.put("lastSampledSignals", state);
   }
 
   private async enqueueSampledSignals(trace: SelectedTrace): Promise<void> {

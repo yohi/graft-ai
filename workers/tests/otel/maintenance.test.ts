@@ -7,20 +7,7 @@ const cleanupPath = "https://otel/_admin/trace-aggregate/cleanup";
 describe("TraceAggregate maintenance", () => {
   it("cleans the requested object IDs with the admin token", async () => {
     const objectId = "a".repeat(64);
-    const requestedIds: string[] = [];
-    const namespace = {
-      idFromString: (id: string): string => id,
-      get: (id: string) => ({
-        fetch: async (): Promise<Response> => {
-          requestedIds.push(id);
-          return Response.json({ kind: "deleted" });
-        },
-      }),
-    };
-    const testEnv = {
-      OTEL_ADMIN_TOKEN: "admin-token",
-      OTEL_TRACE_AGGREGATE: namespace,
-    } as unknown as OtelEnv;
+    const { requestedIds, testEnv } = createCleanupEnv();
 
     const response = await handleTraceAggregateCleanup(
       new Request(cleanupPath, {
@@ -42,20 +29,7 @@ describe("TraceAggregate maintenance", () => {
   });
 
   it("rejects a request with an invalid admin token", async () => {
-    const requestedIds: string[] = [];
-    const namespace = {
-      idFromString: (id: string): string => id,
-      get: (id: string) => ({
-        fetch: async (): Promise<Response> => {
-          requestedIds.push(id);
-          return Response.json({ kind: "deleted" });
-        },
-      }),
-    };
-    const testEnv = {
-      OTEL_ADMIN_TOKEN: "admin-token",
-      OTEL_TRACE_AGGREGATE: namespace,
-    } as unknown as OtelEnv;
+    const { requestedIds, testEnv } = createCleanupEnv();
 
     const response = await handleTraceAggregateCleanup(
       new Request(cleanupPath, {
@@ -70,3 +44,21 @@ describe("TraceAggregate maintenance", () => {
     expect(requestedIds).toHaveLength(0);
   });
 });
+
+function createCleanupEnv(): Readonly<{ requestedIds: string[]; testEnv: OtelEnv }> {
+  const requestedIds: string[] = [];
+  const namespace = {
+    idFromString: (id: string): string => id,
+    get: (id: string) => ({
+      fetch: async (): Promise<Response> => {
+        requestedIds.push(id);
+        return Response.json({ kind: "deleted" });
+      },
+    }),
+  };
+  const testEnv = {
+    OTEL_ADMIN_TOKEN: "admin-token",
+    OTEL_TRACE_AGGREGATE: namespace,
+  } as unknown as OtelEnv;
+  return { requestedIds, testEnv };
+}

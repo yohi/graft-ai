@@ -27,8 +27,8 @@ export class TraceAggregate {
     return this.state.blockConcurrencyWhile(async () => {
       const stored = await this.state.storage.get<TraceState>("trace");
       if (stored && !stored.completed) return { kind: "active" };
-      await this.state.storage.deleteAlarm();
       await this.state.storage.deleteAll();
+      await this.state.storage.deleteAlarm();
       return stored ? { kind: "deleted" } : { kind: "empty" };
     });
   }
@@ -75,8 +75,8 @@ export class TraceAggregate {
       const stored = await this.state.storage.get<TraceState>("trace");
       if (!stored) return;
       if (stored.completed) {
-        await this.state.storage.deleteAlarm();
         await this.state.storage.deleteAll();
+        await this.state.storage.deleteAlarm();
         return;
       }
       const selected = selectRequestSpan(stored.spans);

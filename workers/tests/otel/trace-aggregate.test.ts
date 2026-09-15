@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe("TraceAggregate", () => {
   it("deletes completed trace storage during maintenance cleanup", async () => {
-    const { state, deleteAlarm, deleteAll } = createTraceAggregateState({
+    const { state, deleteAlarm, deleteAll, operations } = createTraceAggregateState({
       storedState: {
         traceId: "completed-trace",
         ingressIds: ["ingress-1"],
@@ -29,9 +29,48 @@ describe("TraceAggregate", () => {
     const aggregate = new TraceAggregate(state, env as unknown as OtelEnv);
 
     await expect(aggregate.cleanup()).resolves.toEqual({ kind: "deleted" });
+    expect(operations).toEqual(["deleteAll", "deleteAlarm"]);
     expect(deleteAlarm).toHaveBeenCalledOnce();
     expect(deleteAll).toHaveBeenCalledOnce();
     await expect(state.storage.get("trace")).resolves.toBeUndefined();
+  });
+
+  it("keeps the cleanup alarm when completed trace deletion fails", async () => {
+    const deletionError = new Error("delete failed");
+    const { state, deleteAlarm, operations } = createTraceAggregateState({
+      deleteAllError: deletionError,
+      storedState: {
+        traceId: "completed-trace",
+        ingressIds: ["ingress-1"],
+        spans: [],
+        lastReceivedAtMs: 1_000,
+        completed: true,
+      },
+    });
+    const aggregate = new TraceAggregate(state, env as unknown as OtelEnv);
+
+    await expect(aggregate.cleanup()).rejects.toBe(deletionError);
+    expect(operations).toEqual(["deleteAll"]);
+    expect(deleteAlarm).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tombstone alarm when completed alarm cleanup fails", async () => {
+    const deletionError = new Error("delete failed");
+    const { state, deleteAlarm, operations } = createTraceAggregateState({
+      deleteAllError: deletionError,
+      storedState: {
+        traceId: "completed-trace",
+        ingressIds: [],
+        spans: [],
+        lastReceivedAtMs: 1_000,
+        completed: true,
+      },
+    });
+    const aggregate = new TraceAggregate(state, env as unknown as OtelEnv);
+
+    await expect(aggregate.alarm()).rejects.toBe(deletionError);
+    expect(operations).toEqual(["deleteAll"]);
+    expect(deleteAlarm).not.toHaveBeenCalled();
   });
 
   it("keeps an active trace during maintenance cleanup", async () => {
@@ -195,20 +234,30 @@ describe("TraceAggregate", () => {
       body: JSON.stringify({ ...body, ingressId: `late-${crypto.randomUUID()}` }),
     });
     expect(afterCleanup.ok).toBe(true);
+    expect(await afterCleanup.json()).toMatchObject({ accepted: true });
   });
 });
 
-function createTraceAggregateState({ storedState: initialState }: { storedState?: unknown } = {}): {
+function createTraceAggregateState({
+  storedState: initialState,
+  deleteAllError,
+}: { storedState?: unknown; deleteAllError?: Error } = {}): {
   state: DurableObjectState;
   alarms: number[];
   deleteAlarm: ReturnType<typeof vi.fn>;
   deleteAll: ReturnType<typeof vi.fn>;
+  operations: string[];
 } {
   const values = new Map<string, unknown>();
   if (initialState !== undefined) values.set("trace", initialState);
   const alarms: number[] = [];
-  const deleteAlarm = vi.fn(async (): Promise<void> => undefined);
+  const operations: string[] = [];
+  const deleteAlarm = vi.fn(async (): Promise<void> => {
+    operations.push("deleteAlarm");
+  });
   const deleteAll = vi.fn(async (): Promise<void> => {
+    operations.push("deleteAll");
+    if (deleteAllError) throw deleteAllError;
     values.clear();
   });
   const storage = {
@@ -227,5 +276,5 @@ function createTraceAggregateState({ storedState: initialState }: { storedState?
     storage,
     blockConcurrencyWhile: async <T>(callback: () => Promise<T>): Promise<T> => callback(),
   } as unknown as DurableObjectState;
-  return { state, alarms, deleteAlarm, deleteAll };
+  return { state, alarms, deleteAlarm, deleteAll, operations };
 }

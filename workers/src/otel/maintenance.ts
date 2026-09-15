@@ -1,10 +1,11 @@
 import { timingSafeSecretEqual } from "../crypto";
+import { TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH } from "./trace-aggregate";
 import type { TraceCleanupResult } from "./trace-aggregate";
 import type { OtelEnv } from "./types";
 
 export const TRACE_AGGREGATE_CLEANUP_PATH = "/_admin/trace-aggregate/cleanup";
 
-const TRACE_AGGREGATE_INTERNAL_CLEANUP_URL = "https://trace/_internal/cleanup";
+const TRACE_AGGREGATE_INTERNAL_CLEANUP_URL = `https://trace${TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH}`;
 const MAX_CLEANUP_OBJECT_IDS = 100;
 const OBJECT_ID_PATTERN = /^[0-9a-f]{64}$/i;
 
@@ -31,11 +32,8 @@ export async function handleTraceAggregateCleanup(
   let body: unknown;
   try {
     body = await request.json();
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      return Response.json({ error: "invalid_json" }, { status: 400 });
-    }
-    throw error;
+  } catch {
+    return Response.json({ error: "invalid_json" }, { status: 400 });
   }
   const objectIds = readObjectIds(body);
   if (!objectIds) return Response.json({ error: "invalid_object_ids" }, { status: 400 });
@@ -54,9 +52,8 @@ export async function handleTraceAggregateCleanup(
           if (!response.ok) return { objectId, kind: "failed" };
           const result = readCleanupResult(await response.json());
           return result ? { objectId, kind: result.kind } : { objectId, kind: "failed" };
-        } catch (error) {
-          if (error instanceof Error) return { objectId, kind: "failed" };
-          throw error;
+        } catch {
+          return { objectId, kind: "failed" };
         }
       },
     ),

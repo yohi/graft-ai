@@ -17,6 +17,8 @@ type TraceState = Readonly<{
 export type TraceCleanupResult =
   Readonly<{ kind: "deleted" }> | Readonly<{ kind: "active" }> | Readonly<{ kind: "empty" }>;
 
+export const TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH = "/_internal/cleanup";
+
 export class TraceAggregate {
   constructor(
     private readonly state: DurableObjectState,
@@ -35,7 +37,7 @@ export class TraceAggregate {
 
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
-    if (request.method === "POST" && pathname === "/_internal/cleanup") {
+    if (request.method === "POST" && pathname === TRACE_AGGREGATE_INTERNAL_CLEANUP_PATH) {
       return Response.json(await this.cleanup());
     }
     if (request.method !== "POST" || pathname !== "/ingest") {

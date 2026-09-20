@@ -218,11 +218,11 @@ workers/src/provider-metrics/
 ├── opencodego/
 │   ├── index.ts          # adapter エントリ
 │   ├── api-key.ts        # /zen/go/v1/usage 取得
-│   └── zen-balance.ts    # cookie/RPC fallback（optional）
+│   └── zen-balance.ts    # cookie/RPC enrichment（optional）
 ├── ollama/
 │   ├── index.ts          # adapter エントリ
 │   ├── api-usage.ts      # /api/usage JSON
-│   └── settings-html.ts  # cookie/HTML fallback
+│   └── settings-html.ts  # cookie/HTML enrichment or fallback
 └── commandcode/
     ├── index.ts          # adapter エントリ
     └── billing.ts        # alpha billing/usage endpoints
@@ -324,8 +324,8 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - `activity.cost` は非負の decimal string とし、number へ変換できない場合は activity cost だけを omit する。limits が有効なら Provider success を維持する。
 - legacy と monthly の fields が同時に存在する場合、session/weekly limits と activity cost を独立に採用する。monthly plan の存在を理由に legacy limits を上書きしない。
 - JSON に plan や exact reset timestamp は存在しないため、API response だけでは plan/reset metric を生成しない。
-- `OLLAMA_SESSION_COOKIE` があり、JSON API が plan/reset を返さない場合、または API request が失敗した場合だけ `/settings` HTML fallback を実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
-- API が quota/activity を返した場合に HTML から plan または reset だけ取得できれば、JSON の primary result を維持して enrichment を追加する。この場合の fallback failure は primary failure にしない。API request が失敗した場合は、HTML が認識可能な quota、または required な plan/reset result を返したときだけ fallback result で success とし、HTML も失敗した場合は元の API failure を provider failure とする。
+- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API request が失敗した場合は、HTML が認識可能な quota、または required な plan/reset result を返したときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
+- API が quota/activity を返した場合に HTML から plan または reset だけ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。この場合の HTML failure は primary failure にしない。API request が失敗した場合は、HTML が認識可能な quota または required な plan/reset result を返したときだけ HTML fallback result で success とし、`ollama-settings-html` を `fallback` として追加する。HTML も失敗した場合は元の API failure を provider failure とする。
 - API と HTML の両方が同じ field を返した場合は API の quota/activity を優先し、HTML は plan/reset の不足分だけを補う。
 - 認識できない top-level period や limit key は arbitrary label として emit しない。
 
@@ -339,7 +339,7 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 
 同じ `model` が session と weekly の双方に存在する場合は、別の `period` series として独立して emit し、合算・dedupe しない。同一 window の同一 model が複数 entry に分かれている場合は、その window 内で `request_count` を合算して1 seriesにする。不正な model entry は該当 entry だけを omit する。`activity.period.type` の値から `monthly` などの label を合成しない。
 
-**Support level:** `official-internal`（`/api/usage`）、`scraping`（HTML fallback）。source role はそれぞれ `primary`、`fallback` とする。
+**Support level:** `official-internal`（`/api/usage`）、`scraping`（`/settings` HTML）。`ollama-api-usage` は `primary` とし、`ollama-settings-html` は JSON API 成功時の不足 field 補完では `enrichment`、API 失敗時の ProviderResult 代替では `fallback` とする。
 
 ### 6.3 CommandCode
 
@@ -394,6 +394,7 @@ GET /alpha/whoami?limits=1
     "freeCredits": 0.0
   },
   "windowLimits": {
+    "limited": true,
     "fiveHour": { "used": 0.57, "cap": 14.0, "resetAt": 1789923600000 },
     "weekly": { "used": 0.57, "cap": 35.0, "resetAt": 1790355600000 }
   }
@@ -403,8 +404,20 @@ GET /alpha/whoami?limits=1
 - `credits` が存在しない、または `monthlyCredits` が finite な非負 number でない場合は `schema` failure とする。
 - `purchasedCredits` と `freeCredits` は optional な非負 number とし、欠落時はその個別 metric を omit する。0 として補完しない。
 - `remainingCredits` は wire field として信頼せず、`monthlyCredits + purchasedCredits + freeCredits` のうち存在する値だけを合計して算出する。monthly が存在しない場合は remaining metric を omit する。
-- `windowLimits` は optional とし、`fiveHour` は canonical `session`、`weekly` は canonical `weekly` へ変換する。各 entry の `used`、`cap` は非負 finite number、`resetAt` は Unix milliseconds、Unix seconds、numeric string、または ISO 8601 string を受け付け、epoch seconds に正規化する。
+- `windowLimits` は optional とし、存在する場合は `limited` を boolean として検証する。`limited=false` は Provider が bounded quota を適用していない明示的な unlimited semantics とし、`fiveHour` / `weekly` が存在しても quota window を生成しない。`usageRatio`、`used`、`limit`、`exceeded`、reset metric のいずれも emit しない。
+- `limited=true` の場合、`fiveHour` は canonical `session`、`weekly` は canonical `weekly` へ変換する。entry の `used`、`cap` は非負 finite number とし、`cap` は 0 より大きくなければならない。`used` または `cap` の型・範囲が不正、または `cap==0` の bounded window は `billing/credits` の `schema` failure とし、0 除算による `usageRatio=0` / `1` の補完は行わない。
 - `resetAt` の単位を桁数だけで決めず、10^12 以上を milliseconds、それ未満を seconds として扱う。負値、非有限値、parse 不可値はその window の reset だけを omit する。
+
+CommandCode quota の `QuotaWindow` normalization は次の規則で固定する。
+
+```text
+windowLimits.fiveHour.used → period="session", used
+windowLimits.fiveHour.cap  → period="session", limit
+windowLimits.weekly.used   → period="weekly", used
+windowLimits.weekly.cap    → period="weekly", limit
+```
+
+`cap>0` の bounded window では、`rawRatio = used / cap`、`usageRatio = min(rawRatio, 1)` とする。`usageRatio` は常に public contract の `0..1` に clamp するが、`used` と `limit` には wire の非負 finite な値をそのまま保持する。したがって `used>cap` は許容し、over-cap の raw 値を保持したまま `usageRatio=1`、`exceeded=true` とする。`used<cap` は `exceeded=false`、`used==cap` は `usageRatio=1` かつ `exceeded=true` とする。`resetAt` が valid な場合だけ `resetTimestampSeconds` を設定する。
 
 `billing/subscriptions` の expected response は次の shape とする。
 
@@ -481,6 +494,8 @@ failure ownership は次のとおり固定する。
 ```
 
 `period` は `QuotaPeriod` の closed set だけを使用する。各 window の `usageRatio` が存在する場合だけ usage metric、`resetTimestampSeconds` が存在する場合だけ reset metric を emit する。`used`、`limit`、`rawPeriod` は arbitrary label に変換しない。
+
+`usageRatio` の public range は全 Provider で `0..1` とする。wire の使用量と上限を持つ Provider は、raw value と public ratio の normalization を Provider 別設計で固定し、共通 builder は既に検証済みの `QuotaWindow` を再解釈しない。
 
 ### 7.2 Provider 固有 metric
 
@@ -641,11 +656,13 @@ bounded exponential backoff を使用する。
 | `opencodego-usage-api`            | `opencodego`   | `official-internal` | primary                                              |
 | `opencodego-zen-rpc`              | `opencodego`   | `web-internal`      | enrichment                                          |
 | `ollama-api-usage`                | `ollama_cloud` | `official-internal` | primary                                              |
-| `ollama-settings-html`            | `ollama_cloud` | `scraping`          | fallback                                             |
+| `ollama-settings-html`            | `ollama_cloud` | `scraping`          | runtime: enrichment/fallback                         |
 | `commandcode-whoami`              | `commandcode`  | `official-internal` | internal prerequisite; never included in `sources`  |
 | `commandcode-billing-credits`     | `commandcode`  | `official-internal` | primary                                              |
 | `commandcode-billing-subscriptions` | `commandcode` | `official-internal` | enrichment                                          |
 | `commandcode-usage-summary`       | `commandcode`  | `official-internal` | enrichment                                          |
+
+Ollama の `ProviderResult.sources` は実際に result へ寄与した runtime path で role を決定する。JSON API が quota/activity を生成し、HTML が plan/reset の不足分を補った場合は `ollama-api-usage` を `primary`、`ollama-settings-html` を `enrichment` として追加する。JSON API が失敗し、HTML が ProviderResult 全体を代替して成功した場合は `ollama-settings-html` だけを `fallback` として追加し、失敗した API を `primary` として追加しない。HTML を呼ばなかった場合、または呼んでも result に有効な field を寄与しなかった場合は `ollama-settings-html` を追加しない。同一 adapter 実行の `ProviderResult.sources` に同じ source ID を複数 role で重複追加せず、実際の path に対応する role を1つだけ選択する。
 
 CommandCode の `ProviderResult.sources` は次の規則で生成する。`billing/credits` が成功した場合は `commandcode-billing-credits` を必ず追加する。subscription の valid field が1つ以上 result へ採用された場合だけ `commandcode-billing-subscriptions` を追加し、summary の valid field が1つ以上 result へ採用された場合だけ `commandcode-usage-summary` を追加する。配列順も `billing-credits`、`billing-subscriptions`、`usage-summary` の固定順とする。`commandcode-whoami` は `org.id` を後続 request の入力としてだけ使用し、成功時も `sources` へ追加しない。required source が失敗して `ProviderResult` を生成しない場合、`sources` も返さない。これにより credits/quota、subscription、usage summary の各 data point の寄与元が一意になる。
 
@@ -686,13 +703,13 @@ MYBROWSER
 
 ### 9.2 移行方針
 
-| Provider     | 移行内容                                                                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| OpenAI       | 現行維持、破壊的変更なし                                                                                                                               |
-| Codex        | 現行 `/wham/usage` と session/weekly metric を維持。共通 `QuotaWindow[]` への最小変換のみ追加し、未知 limit の一般化は行わない                         |
-| OpenCodeGo   | Primary を API key 経由 `/zen/go/v1/usage` へ。Cookie/RPC は Zen balance fallback のみ残す                                                             |
-| Ollama Cloud | Primary を API key 経由 `/api/usage` へ。Cookie/HTML は plan/reset と quota の optional fallback。JSON の monthly activity に quota ratio を推測しない |
-| CommandCode  | 新規追加                                                                                                                                               |
+| Provider     | 移行内容                                                                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAI       | 現行維持、破壊的変更なし                                                                                                                     |
+| Codex        | 現行 `/wham/usage` と session/weekly metric を維持。共通 `QuotaWindow[]` への最小変換のみ追加し、未知 limit の一般化は行わない               |
+| OpenCodeGo   | Primary を API key 経由 `/zen/go/v1/usage` へ。Cookie/RPC は Zen balance enrichment                                                          |
+| Ollama Cloud | Primary を API key 経由 `/api/usage` へ。Cookie/HTML は runtime の enrichment/fallback。JSON の monthly activity に quota ratio を推測しない |
+| CommandCode  | 新規追加                                                                                                                                     |
 
 `OPENCODEGO_API_KEY`、`OLLAMA_API_KEY`、`COMMAND_CODE_API_KEY` が primary credential の正式名である。既存の `OPENCODEGO_SESSION_COOKIE` と `OLLAMA_SESSION_COOKIE` は fallback/enrichment 専用であり、primary の代替 credential として扱わない。
 
@@ -748,6 +765,12 @@ Provider-specific fixture は次を必須とする。
 - Ollama monthly: `limits` 欠落または session/weekly 欠落、activity-only success、activity models を model metric にしないこと、`last_4_weeks` を `monthly` にしないこと、plan/reset の HTML enrichment、API と HTML の同時存在
 - Command Code request: `whoami?limits=1`、`orgId` の credits/subscriptions への伝播、subscription `currentPeriodStart` の summary `since` への伝播、body なし、required headers、query encoding
 - Command Code response: `whoami`、`billing/credits`、`billing/subscriptions`、`usage/summary` の exact shape、`windowLimits` の top-level 所在、resetAt の seconds/milliseconds/ISO normalization
+- CommandCode quota normalization: `fiveHour.used/cap` が `session` の `used/limit`、`weekly.used/cap` が `weekly` の `used/limit` へ対応すること
+- CommandCode quota boundary: `used=0, cap=14` が `usageRatio=0`、`exceeded=false` になること
+- CommandCode quota boundary: `used=13.9, cap=14` が `usageRatio=13.9/14`、`exceeded=false` になること
+- CommandCode quota boundary: `used=14, cap=14` が `usageRatio=1`、`exceeded=true` になること
+- CommandCode quota boundary: `used=16, cap=14` が raw `used=16` / `limit=14` を保持し、`usageRatio=1`、`exceeded=true` になること
+- CommandCode quota boundary: `limited=false` が quota window を生成せず、`limited=true` の `cap=0` が `schema` failure になること
 - Command Code partial failure: credits success + subscription failure、credits success + summary failure、required endpoint failure
 
 ### 10.2 Orchestrator test
@@ -760,6 +783,10 @@ Provider-specific fixture は次を必須とする。
 - retry と optional enrichment を含めた duration が計測されることを確認
 - optional enrichment failure で primary quota result が残ることを確認
 - source provenance が primary / fallback / enrichment を実際に寄与した経路として返すことを確認
+- Ollama の API success + HTML plan/reset contribution で `ollama-api-usage=primary`、`ollama-settings-html=enrichment` になることを確認
+- Ollama の API failure + HTML replacement success で `ollama-settings-html=fallback` だけが sources に入り、API failure source は primary にならないことを確認
+- Ollama が HTML を呼ばなかった場合、または HTML が result に有効な field を寄与しなかった場合に `ollama-settings-html` が sources に入らないことを確認
+- OpenCode Go usage + Zen balance success で `opencodego-usage-api=primary`、`opencodego-zen-rpc=enrichment` になることを確認
 - CommandCode の `whoami` を `sources` に含めず、credits/subscription/summary の valid output ごとに固定 source ID と role が返り、endpoint failure の `ProviderError.sourceId` も固定されることを確認
 - existing metric compatibility table の name/label snapshot が維持されることを確認
 
@@ -784,6 +811,9 @@ Provider-specific fixture は次を必須とする。
 - Ollama の存在しない window を `0` として出力しない
 - Ollama `model_requests{period,model}` が session/weekly limits だけから生成され、activity models や `last_4_weeks` が public label に流入しない
 - CommandCode の 5h / weekly quota を取得できる
+- CommandCode の `fiveHour` / `weekly` の wire `used` / `cap` が、それぞれ `QuotaWindow.used` / `limit` / `usageRatio` / `exceeded` へ本書の規則どおり一意に正規化される
+- CommandCode の `usageRatio` が `rawRatio=used/cap` の 0..1 clamp と `used>=cap` の `exceeded=true` semantics を維持する
+- CommandCode の `windowLimits.limited=false` は明示的 unlimited semantics として quota window を emit せず、`limited=true` の `cap==0` は `schema` failure とする
 - CommandCode credits を取得できる
 - CommandCode の exact endpoint、auth、response shape、failure ownership が本書どおり固定されている
 - CommandCode の `org.id`、`orgId`、`currentPeriodStart` の request dependency と各 endpoint の query/body/header contract が本書どおり固定されている
@@ -794,6 +824,8 @@ Provider-specific fixture は次を必須とする。
 - last-success timestamp が Worker-side persistent state なしで Grafana query から確認できる
 - `ProviderId`、canonical period、unknown-period policy が固定されている
 - `ProviderResult.sources` が mixed-source result の実際の provenance を表現できる
+- Ollama の JSON API success + HTML 補完では `ollama-settings-html` が `enrichment`、API failure + HTML 代替では `fallback` となり、同じ source ID を同一 result に複数 role で重複追加しない
+- OpenCode Go の Zen balance source が `fallback` ではなく `enrichment` として記録される
 - CommandCode の `ProviderResult.sources` が `commandcode-billing-credits`、`commandcode-billing-subscriptions`、`commandcode-usage-summary` の実際の寄与だけを表し、`commandcode-whoami` を含めない
 - `opencodego_reset_seconds_remaining` を含む existing metric compatibility が維持されている
 - undocumented API の schema mismatch を安全に検知できる

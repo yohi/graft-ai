@@ -249,7 +249,7 @@ An attempted run always passes the health array to the push function, including 
 - `workers/src/provider-metrics/ollama/settings-html.ts`
 - `workers/src/provider-metrics/commandcode/index.ts`
 - `workers/src/provider-metrics/commandcode/billing.ts`
-- `workers/tests/provider-metrics/types-smoke.test.ts`
+- `workers/tests/provider-metrics/types-smoke.test-d.ts`
 - `workers/tests/http-retry.test.ts`
 - `workers/tests/provider-metrics/health.test.ts`
 - `workers/tests/provider-metrics/adapters.test.ts`
@@ -277,7 +277,7 @@ An attempted run always passes the health array to the push function, including 
 
 - Modify: `workers/src/provider-metrics/types.ts`
 - Modify: `workers/src/http-retry.ts`
-- Create: `workers/tests/provider-metrics/types-smoke.test.ts`
+- Create: `workers/tests/provider-metrics/types-smoke.test-d.ts`
 - Create: `workers/tests/http-retry.test.ts`
 
 **Consumes:** Existing provider result interfaces and `getWithRetry()`.
@@ -327,13 +327,19 @@ const ollama: ProviderResult = {
 
 Add transport tests that make `fetchFn` reject with a timeout-shaped error and a network-shaped error after retry exhaustion. The expected errors are `HttpTransportError` with `kind` equal to `timeout` and `network`, respectively.
 
+`types-smoke.test-d.ts` is a type-only Vitest test. It must be checked with Vitest's typecheck mode; the repository's regular `vitest run` path does not typecheck and is not evidence for the closed-union contract. `--typecheck.ignoreSourceErrors` is required here because Tasks 2-11 intentionally leave existing consumers to be migrated; it ignores unrelated source-file errors while still checking the selected type-test file.
+
 **RED command:** From `workers/`, run:
 
 ```bash
-npx vitest run tests/provider-metrics/types-smoke.test.ts tests/http-retry.test.ts
+npx vitest --typecheck.only --typecheck.ignoreSourceErrors tests/provider-metrics/types-smoke.test-d.ts
+npx vitest run tests/http-retry.test.ts
 ```
 
-**Expected RED result:** Missing provider-specific types and typed transport error exports.
+**Expected RED result:**
+
+- `types-smoke.test-d.ts`: Typecheck fails because the closed `ProviderResult` union and provider-specific exports or fields are missing or still have the legacy shape.
+- `tests/http-retry.test.ts`: Runtime tests fail because `HttpTransportError` or the typed network/timeout behavior is not implemented.
 
 ### GREEN
 
@@ -344,15 +350,16 @@ Add `OPENCODEGO_API_KEY`, `OPENCODEGO_SESSION_COOKIE`, `OPENCODEGO_WORKSPACE_ID`
 **GREEN command:**
 
 ```bash
-npx vitest run tests/provider-metrics/types-smoke.test.ts tests/http-retry.test.ts
+npx vitest --typecheck.only --typecheck.ignoreSourceErrors tests/provider-metrics/types-smoke.test-d.ts
+npx vitest run tests/http-retry.test.ts
 ```
 
-**Expected GREEN result:** All targeted tests pass and the typed transport tests prove network/timeout distinction.
+**Expected GREEN result:** The type-only contract check passes under Vitest typecheck mode, and the separate runtime transport tests pass while proving the network/timeout distinction.
 
 ### Commit
 
 ```bash
-git add workers/src/provider-metrics/types.ts workers/src/http-retry.ts workers/tests/provider-metrics/types-smoke.test.ts workers/tests/http-retry.test.ts
+git add workers/src/provider-metrics/types.ts workers/src/http-retry.ts workers/tests/provider-metrics/types-smoke.test-d.ts workers/tests/http-retry.test.ts
 git commit -m "feat(provider-metrics): 共通型とtyped transport errorを定義"
 ```
 

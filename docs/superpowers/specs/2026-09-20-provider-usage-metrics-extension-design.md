@@ -193,7 +193,15 @@ export type AdapterOutcome =
   | { status: "failed"; error: ProviderError };
 ```
 
-`empty` は response を正常に取得・検証したが、出力対象の data point がない状態であり、health 上は scrape success とする。schema mismatch、認証失敗、transport failure は `failed` とする。
+`empty` は response を正常に取得・検証したが、出力対象の data point がない状態であり、health 上は scrape success とする。`failed` は required primary source の request failure（auth、forbidden、rate limit、upstream 5xx、network、timeout を含む）、または required primary contract を満たせない fatal な schema/parse failure に限る。
+
+schema / parse failure の ownership は次の順序で決定する。
+
+- **Fatal required-contract failure:** required primary source または `ProviderResult` の生成に必須な field の failure は `AdapterOutcome.status = "failed"` とし、`ProviderError.kind` に `schema` または `parse` を設定する。該当 Provider の data metric は push しない。
+- **Optional field failure:** Provider-specific contract が optional と定義した field の validation / parse failure は、その field または metric だけを omit する。`ProviderError` は返さず、primary result を `success` として維持する。
+- **Optional enrichment-source failure:** primary result が成立した後の optional enrichment source の transport / schema / parse failure は、その enrichment contribution だけを omit する。`ProviderError` は返さず、primary result を `success` として維持する。
+
+§6.x に field-level omission または enrichment-only failure が明示されている場合は、その Provider-specific rule が generic schema-failure rule より優先する。generic schema mismatch を `failed` とするのは、required primary contract を満たせず、かつ Provider-specific partial-success rule が存在しない場合だけである。
 
 ### 4.4 Orchestrator の流れ
 
@@ -272,7 +280,7 @@ expected response は次の JSON shape とする。`usage` と3 window は必須
 - `percent` は「使用済み percent」であり、`usageRatio = percent / 100` とする。
 - `resetsAt` は absolute ISO 8601 timestamp とし、parse 後に Unix epoch seconds へ変換する。残秒数 variant は受け付けない。
 - `status` が `ok` 以外でも、percent が範囲内なら値を採用する。`rate-limited`、`exhausted` は `exceeded=true` とし、percent が100未満なら schema error とする。
-- `rolling`、`weekly`、`monthly` をそれぞれ canonical period の `rolling`、`weekly`、`monthly` へ変換する。window 欠落、percent の型・範囲不正、timestamp の不正は `schema` または `parse` failure とする。
+- `rolling`、`weekly`、`monthly` をそれぞれ canonical period の `rolling`、`weekly`、`monthly` へ変換する。`usage` または各 required window の欠落、`status` / `percent` の型・範囲不正は required primary contract の fatal `schema` failure とする。`resetsAt` は optional field とし、欠落は正常として扱い、存在しても ISO 8601 として parse できない場合は reset metric だけを omit して quota result を `success` とする。この場合は `ProviderError` を返さない。
 - Zen balance は Go usage endpoint が返さない場合のみ、既存 cookie/RPC adapter を `enrichment` として実行する。
 - Zen balance 取得失敗は Go quota の失敗にせず、`opencodego_zen_balance_usd` を emit しない。
 - Cookie/RPC 経路を primary にしない。
@@ -291,7 +299,7 @@ Accept: application/json
 
 request body と query は持たず、成功 status は `200` とする。`OLLAMA_API_KEY` がない場合は adapter を起動せず orchestrator が skip する。401/403 は `auth`/`forbidden`、429 は `rate_limit`、5xx は `upstream_5xx` とする。
 
-API の観測済み envelope は次のとおりである。`limits` と `activity` はそれぞれ optional であり、少なくともどちらか一方の認識可能な内容があれば success とする。両方が欠落、または両方が認識不能な場合は `schema` failure とする。
+API の観測済み envelope は次のとおりである。`limits` と `activity` はそれぞれ optional contribution であり、少なくともどちらか一方の認識可能な primary content があれば `success` とする。片方の optional field、model entry、または activity cost の schema / parse failure は該当 contribution だけを omit し、もう片方の認識可能な primary content による result を維持する。両方が欠落、または両方が認識不能な場合だけ required primary content の fatal `schema` failure とする。
 
 ```json
 {
@@ -324,8 +332,8 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - `activity.cost` は非負の decimal string とし、number へ変換できない場合は activity cost だけを omit する。limits が有効なら Provider success を維持する。
 - legacy と monthly の fields が同時に存在する場合、session/weekly limits と activity cost を独立に採用する。monthly plan の存在を理由に legacy limits を上書きしない。
 - JSON に plan や exact reset timestamp は存在しないため、API response だけでは plan/reset metric を生成しない。
-- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API request が失敗した場合は、HTML が認識可能な quota、または required な plan/reset result を返したときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
-- API が quota/activity を返した場合に HTML から plan または reset だけ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。この場合の HTML failure は primary failure にしない。API request が失敗した場合は、HTML が認識可能な quota または required な plan/reset result を返したときだけ HTML fallback result で success とし、`ollama-settings-html` を `fallback` として追加する。HTML も失敗した場合は元の API failure を provider failure とする。
+- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API request が失敗した場合は、HTML が少なくとも1つの valid な quota window、plan、または reset timestamp を寄与できたときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
+- API が quota/activity を返した場合に HTML から valid な plan または reset timestamp を少なくとも1つ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。plan と各 reset timestamp は独立した optional field とし、invalid / missing な field はその field だけを omit する。HTML が有効な field を1つも寄与できない場合も HTML enrichment-only failure とし、API の primary failure にはしない。API request が失敗した場合は、HTML が valid な quota window、plan、または reset timestamp を1つも返さなければ fallback failure とし、元の API failure を provider failure とする。fallback が成功した場合は `ollama-settings-html` を `fallback` として追加する。
 - API と HTML の両方が同じ field を返した場合は API の quota/activity を優先し、HTML は plan/reset の不足分だけを補う。
 - 認識できない top-level period や limit key は arbitrary label として emit しない。
 
@@ -413,8 +421,8 @@ GET /alpha/whoami?limits=1
 - `credits` が存在しない、または `monthlyCredits` が finite な非負 number でない場合は `schema` failure とする。
 - `purchasedCredits` と `freeCredits` は optional な非負 number とし、欠落時はその個別 metric を omit する。0 として補完しない。
 - `remainingCredits` は wire field として信頼せず、`monthlyCredits + purchasedCredits + freeCredits` のうち存在する値だけを合計して算出する。monthly が存在しない場合は remaining metric を omit する。
-- `windowLimits` は optional とし、存在する場合は `limited` を boolean として検証する。`limited=false` は Provider が bounded quota を適用していない明示的な unlimited semantics とし、`fiveHour` / `weekly` が存在しても quota window を生成しない。`usageRatio`、`used`、`limit`、`exceeded`、reset metric のいずれも emit しない。
-- `limited=true` の場合、`fiveHour` は canonical `session`、`weekly` は canonical `weekly` へ変換する。entry の `used`、`cap` は非負 finite number とし、`cap` は 0 より大きくなければならない。`used` または `cap` の型・範囲が不正、または `cap==0` の bounded window は `billing/credits` の `schema` failure とし、0 除算による `usageRatio=0` / `1` の補完は行わない。
+- `windowLimits` は optional とし、欠落時は quota window を生成せず credits result を success とする。存在する場合は `limited` を boolean として検証し、型不正なら optional quota contribution だけを omit して credits result を維持する。`limited=false` は Provider が bounded quota を適用していない明示的な unlimited semantics とし、`fiveHour` / `weekly` が存在しても quota window を生成しない。`usageRatio`、`used`、`limit`、`exceeded`、reset metric のいずれも emit しない。
+- `limited=true` の場合は `fiveHour` と `weekly` の両方を bounded quota の required entry とし、それぞれ canonical `session` / `weekly` へ変換する。いずれかの entry の欠落、`used` / `cap` の型・範囲不正、または `cap==0` は `billing/credits` の required quota contract に対する fatal `schema` failure とし、`ProviderError` を生成する。0 除算による `usageRatio=0` / `1` の補完は行わない。
 - `windowLimits.*.resetAt` の accepted wire representation は JSON number のみとする。finite な非負値について、10^12 以上は epoch milliseconds、それ未満は epoch seconds として扱い、`resetTimestampSeconds` はそれぞれ `Math.floor(resetAt / 1000)` または `Math.floor(resetAt)` で算出する。numeric string、ISO 8601 string、負値、非有限値は current contract 外の invalid optional field とし、ISO parse や数値 coercion は行わず、その window の reset timestamp だけを omit する。quota window、usage ratio、exceeded は success のまま維持する。
 
 CommandCode quota の `QuotaWindow` normalization は次の規則で固定する。
@@ -441,7 +449,7 @@ windowLimits.weekly.cap    → period="weekly", limit
 }
 ```
 
-`data` がない場合は subscription enrichment の schema failure とし、credits/quota result は維持する。`planId`、`status`、`currentPeriodStart`、`currentPeriodEnd` は存在時に non-empty string として検証する。`currentPeriodStart` と `currentPeriodEnd` は subscription 固有の ISO 8601 string contract とし、`resetAt` の numeric seconds/milliseconds rule は適用しない。ISO 8601 として parse できる場合だけ採用し、`currentPeriodStart` が欠落または parse 不能なら subscription metadata の他フィールドは維持して summary request から `since` だけを省略する。`currentPeriodEnd` が欠落または parse 不能なら `billingPeriodEndSeconds` だけを omit する。subscription endpoint の 401/403/429/5xx、network、timeout は subscription metadata のみ omit し、quota failure にはしない。
+`data` がない場合は subscription enrichment の schema failure とし、`AdapterOutcome.failed` や `ProviderError` にはせず、credits/quota result を維持する。`planId`、`status`、`currentPeriodStart`、`currentPeriodEnd` は存在時に non-empty string として検証する。`currentPeriodStart` と `currentPeriodEnd` は subscription 固有の ISO 8601 string contract とし、`resetAt` の numeric seconds/milliseconds rule は適用しない。ISO 8601 として parse できる場合だけ採用し、`currentPeriodStart` が欠落または parse 不能なら subscription metadata の他フィールドは維持して summary request から `since` だけを省略する。`currentPeriodEnd` が欠落または parse 不能なら `billingPeriodEndSeconds` だけを omit する。subscription endpoint の 401/403/429/5xx、network、timeout は subscription metadata のみ omit し、quota failure にはしない。
 
 `usage/summary` の expected response は次の shape とする。
 
@@ -453,14 +461,14 @@ windowLimits.weekly.cap    → period="weekly", limit
 }
 ```
 
-`totalCost` と `totalCount` は存在時に非負 finite number、`totalTokens` は optional な非負 safe integer とする。summary endpoint の transport、HTTP、schema failure は usage summary のみ omit し、quota result は success のまま維持する。summary が成功した場合だけ cost/requests/tokens metric を emit する。
+`totalCost` と `totalCount` は存在時に非負 finite number、`totalTokens` は optional な非負 safe integer とする。summary endpoint の transport、HTTP、schema failure は optional enrichment-source failure として usage summary のみ omit し、`AdapterOutcome.failed` や `ProviderError` にはせず、quota result は `success` のまま維持する。summary が成功した場合だけ cost/requests/tokens metric を emit する。
 
 failure ownership は次のとおり固定する。
 
 - `whoami` failure、`org.id` 欠落、または `billing/credits` failure → CommandCode provider failure。plan/credits/quota を push payload に含めない。
 - `billing/subscriptions` failure → credits/quota は success のまま、plan/status/billing period end を omit。
 - `usage/summary` failure → credits/quota は success のまま、usage summary metric を omit。
-- 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、5xx は `upstream_5xx`、network error は `network`、timeout は `timeout`、JSON shape 不一致は `schema` とする。wire contract 上 required な numeric field の型・範囲不正は `schema`、required な timestamp string の parse 不能は `parse` とする。ただし、optional な `resetAt`、`currentPeriodStart`、`currentPeriodEnd` の扱いは上記の field-level omission を優先し、CommandCode provider failure にはしない。
+- 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、5xx は `upstream_5xx`、network error は `network`、timeout は `timeout` とする。required primary endpoint の JSON shape 不一致、wire contract 上 required な numeric field の型・範囲不正、required な timestamp string の parse 不能は、それぞれ required primary contract の `schema` / `parse` failure として `ProviderError` を生成する。ただし、optional な `resetAt`、`currentPeriodStart`、`currentPeriodEnd` の扱いは上記の field-level omission を優先し、CommandCode provider failure や `ProviderError` にはしない。subscription / summary の optional enrichment-source failure も同様に partial success として扱う。
 - undocumented API の依存は `commandcode/` ディレクトリ内に閉じ、response body、Authorization header、API key は error、log、diagnostic report、metric label のいずれにも出力しない。
 
 `ProviderError.sourceId` は endpoint ごとに `whoami` → `commandcode-whoami`、`billing/credits` → `commandcode-billing-credits`、`billing/subscriptions` → `commandcode-billing-subscriptions`、`usage/summary` → `commandcode-usage-summary` と固定する。
@@ -598,8 +606,8 @@ provider_metrics_scrape_duration_seconds{provider}
 - credential がある Provider の `success` / `empty` / `failed` は health outcome として記録する
 - 1 つ以上の Provider が試行された場合、data payload が0件でも health-only payload を push する
 - 全 Provider が credential 不足等で skipped の場合だけ push を省略する
-- `success` は primary data または optional enrichment の一部が欠けても、required source が正常なら維持する
-- `failed` は required source の failure と schema/parse failure に限定し、optional source failure は partial result として扱う
+- `success` は required primary result が成立していれば、optional field の omission または optional enrichment source failure を含んでも維持する
+- `failed` は required primary source の request failure、または required primary contract の fatal schema/parse failure に限定する。optional field validation failure、optional enrichment source failure、Provider-specific contract で omission が定義された parse failure は `failed` にしない
 
 ### 8.2 Retry policy
 
@@ -630,8 +638,11 @@ bounded exponential backoff を使用する。
 
 - 外部サービスからの response は `unknown` として受け取り、Provider-local type guard で使用前に runtime validation
 - JSON field の存在、型、範囲、timestamp 形式、numeric unit を Provider ごとに検証
-- schema mismatch は parse/schema error として扱い、その Provider の metric 生成を停止
-- 他 Provider は継続
+- schema validation failure の影響範囲は Provider-specific contract（§6.x）で定義した ownership に従う。field-level omission または enrichment-only failure が明示されている場合は、generic schema-failure rule より Provider-specific rule を優先する
+- required primary contract を満たせない fatal schema/parse failure は `AdapterOutcome.failed` とし、`ProviderError.kind = "schema" | "parse"` を設定して、その Provider の data metric を停止する。他 Provider は継続する
+- optional field の validation / parse failure は該当 field または metric だけを omit し、`ProviderError` を返さず primary result を `success` として維持する
+- primary result 成立後の optional enrichment source の transport / schema / parse failure は enrichment contribution だけを omit し、`ProviderError` を返さず primary result を `success` として維持する
+- Provider-specific partial-success rule が存在しない generic schema mismatch だけを、required primary contract の failure として `AdapterOutcome.failed` にする
 - unknown field は ignore するが、required field の欠落を0や空文字で補完しない
 - current contract にない response variant を推測して変換しない
 
@@ -774,6 +785,7 @@ Provider-specific fixture は次を必須とする。
 - OpenCode Go: `usage.rolling/weekly/monthly` の percent scale、ISO `resetsAt`、status non-ok、window 欠落、invalid percent/timestamp
 - Ollama legacy: `limits.session/weekly` の 0..1 ratio、session/weekly `models[]` の `period` mapping、同一 window 内の重複 model の合算、同一 model の別 window series、activity models の未使用、activity cost/period
 - Ollama monthly: `limits` 欠落または session/weekly 欠落、activity-only success、activity models を model metric にしないこと、`last_4_weeks` を `monthly` にしないこと、plan/reset の HTML enrichment、API と HTML の同時存在
+- Ollama HTML ownership: API success + HTML の有効 contribution なしは primary success のまま enrichment field を omit、API failure + HTML の valid な quota/plan/reset ありは fallback success、両方なしは元の API failure
 - Ollama model label: valid identifier、empty model、whitespace-only model、先頭/末尾 whitespace、128 characters 超過、許可文字外、invalid model entry だけの omit、同一 window 内の同じ valid model の aggregation、rejected string が `model` label に流入しないこと
 - Command Code request: `whoami?limits=1`、`orgId` の credits/subscriptions への伝播、subscription `currentPeriodStart` の summary `since` への伝播、body なし、required headers、query encoding
 - Command Code response: `whoami`、`billing/credits`、`billing/subscriptions`、`usage/summary` の exact shape、`windowLimits` の top-level 所在、numeric seconds `resetAt` → epoch seconds、numeric milliseconds `resetAt` → epoch seconds、invalid / negative / non-finite `resetAt` → reset timestamp だけ omit して quota success、ISO string `resetAt` を parse せず current contract 外として受け付けないこと
@@ -785,6 +797,20 @@ Provider-specific fixture は次を必須とする。
 - CommandCode quota boundary: `used=16, cap=14` が raw `used=16` / `limit=14` を保持し、`usageRatio=1`、`exceeded=true` になること
 - CommandCode quota boundary: `limited=false` が quota window を生成せず、`limited=true` の `cap=0` が `schema` failure になること
 - Command Code partial failure: credits success + subscription failure、credits success + summary failure、required endpoint failure
+- CommandCode `windowLimits`: absent / invalid `limited` の optional omission、`limited=false` の unlimited semantics、`limited=true` の fiveHour/weekly 欠落・型不正・`cap=0` の fatal schema failure
+
+#### Error ownership / partial success
+
+次のケースでは、schema / parse failure の ownership と `AdapterOutcome`、health semantics の対応を固定する。
+
+- required primary schema mismatch → `AdapterOutcome.failed`、`ProviderError.kind = schema`、`scrape_success=0`、Provider data metric なし
+- CommandCode の invalid optional `resetAt` → quota success、reset timestamp metric だけ omit
+- CommandCode の subscription schema failure → credits/quota success、subscription metric だけ omit
+- CommandCode の summary schema failure → credits/quota success、usage summary metric だけ omit
+- Ollama の invalid model entry と valid limits → invalid entry だけ omit、Provider success
+- Ollama の invalid `activity.cost` と valid limits → activity cost だけ omit、quota success
+- optional enrichment の transport failure → primary `ProviderResult` success、`scrape_success=1`
+- fatal required-contract の schema / parse failure → partial success へ downgrade せず、Provider failed として扱う
 
 ### 10.2 Orchestrator test
 
@@ -794,7 +820,8 @@ Provider-specific fixture は次を必須とする。
 - success / failed / empty / skipped の health semantics が正しく生成されることを確認
 - `scrape_success=0` の場合に timestamp を更新せず、backend の last-success query semantics を維持することを確認
 - retry と optional enrichment を含めた duration が計測されることを確認
-- optional enrichment failure で primary quota result が残ることを確認
+- optional enrichment failure で primary quota result が残り、`scrape_success=1` になることを確認
+- fatal required-contract schema failure で `scrape_success=0` になり、Provider data metric が送信されないことを確認
 - source provenance が primary / fallback / enrichment を実際に寄与した経路として返すことを確認
 - Ollama の API success + HTML plan/reset contribution で `ollama-api-usage=primary`、`ollama-settings-html=enrichment` になることを確認
 - Ollama の API failure + HTML replacement success で `ollama-settings-html=fallback` だけが sources に入り、API failure source は primary にならないことを確認
@@ -821,13 +848,14 @@ Provider-specific fixture は次を必須とする。
 - Ollama Cloud usage を API key のみで取得できる
 - Ollama legacy session / weekly を扱える
 - Ollama 新 plan monthly usage は、JSON の activity cost と optional HTML plan/reset enrichment として扱える。JSON に存在しない monthly quota ratio は合成しない
+- Ollama API success 後の HTML enrichment は valid な field がなくても primary success を維持し、API failure 後の HTML fallback は valid な quota window、plan、または reset timestamp が1つ以上ある場合だけ success とする
 - Ollama の存在しない window を `0` として出力しない
 - Ollama `ollama_cloud_model_requests{period,model}` が session/weekly limits だけから生成され、activity models や `last_4_weeks` が public label に流入しない
 - Ollama `ollama_cloud_model_requests` の `model` label が §6.2 の 1..128 ASCII characters / `^[A-Za-z0-9._:/-]+$` / whitespace policy を通過した identifier だけを verbatim に使用し、invalid / oversized / unsupported model name を omit する
 - CommandCode の 5h / weekly quota を取得できる
 - CommandCode の `fiveHour` / `weekly` の wire `used` / `cap` が、それぞれ `QuotaWindow.used` / `limit` / `usageRatio` / `exceeded` へ本書の規則どおり一意に正規化される
 - CommandCode の `usageRatio` が `rawRatio=used/cap` の 0..1 clamp と `used>=cap` の `exceeded=true` semantics を維持する
-- CommandCode の `windowLimits.limited=false` は明示的 unlimited semantics として quota window を emit せず、`limited=true` の `cap==0` は `schema` failure とする
+- CommandCode の `windowLimits` は absent または invalid `limited` を optional quota omission とし、`limited=false` は明示的 unlimited semantics として quota window を emit せず、`limited=true` は fiveHour/weekly を required として欠落・型不正・`cap==0` を fatal `schema` failure とする
 - CommandCode の `resetAt` は numeric epoch seconds または numeric epoch milliseconds だけを受け付け、ISO string を parse せず、invalid optional value は reset timestamp のみ omit する
 - CommandCode subscription の ISO `currentPeriodStart` / `currentPeriodEnd` はそれぞれ `since` / billing-period-end の field-level omission semantics を維持する
 - CommandCode credits を取得できる
@@ -844,7 +872,9 @@ Provider-specific fixture は次を必須とする。
 - OpenCode Go の Zen balance source が `fallback` ではなく `enrichment` として記録される
 - CommandCode の `ProviderResult.sources` が `commandcode-billing-credits`、`commandcode-billing-subscriptions`、`commandcode-usage-summary` の実際の寄与だけを表し、`commandcode-whoami` を含めない
 - `opencodego_reset_seconds_remaining` を含む existing metric compatibility が維持されている
-- undocumented API の schema mismatch を安全に検知できる
+- undocumented API の required primary contract に対する fatal schema mismatch を安全に検知し、optional field / enrichment failure は設計された scope だけを omit できる
+- schema / parse failure の error ownership が Provider-specific contract と global policy で一致している
+- required primary contract の fatal schema / parse failure だけが `AdapterOutcome.failed` と `ProviderError.kind = schema | parse` を生成し、optional field / optional enrichment failure は primary `ProviderResult` と `scrape_success=1` を維持する
 - Credential が log / metric へ露出しない
 - Provider ごとの最終成功時刻を監視可能である
 - Provider adapter ごとの unit test が存在する

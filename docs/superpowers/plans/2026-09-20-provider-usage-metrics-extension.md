@@ -551,17 +551,21 @@ git commit -m "feat(provider-metrics): adapter completion wrapperを追加"
 - Create: `workers/src/provider-metrics/opencodego/index.ts`
 - Rename/update: `workers/tests/provider-metrics/opencodego-validation.test.ts` to `workers/tests/provider-metrics/opencodego-api-key.test.ts`
 
-**Consumes:** OpenCode Go API key and `ProviderContext` from Task 1.
+**Consumes:** OpenCode Go API key, `ProviderContext` from Task 1, and the status/exceeded contract in Design §6.1.
 
 **Dependency:** Task 1.
 
-**Produces:** `AdapterOutcome` for `opencodego` using `/zen/go/v1/usage`.
+**Produces:** `AdapterOutcome` for `opencodego` using `/zen/go/v1/usage`, including the Design §6.1 status-to-`QuotaWindow.exceeded` semantics.
 
 ### RED
 
-Add fixtures for the valid rolling/weekly/monthly response, missing required window, invalid percent, invalid optional `resetsAt`, invalid JSON, 401, 403 `EntitlementError`, other 403, 429, 500, network, and timeout. Assert:
+Add fixtures for the valid rolling/weekly/monthly response, missing required window, invalid percent, invalid optional `resetsAt`, invalid JSON, 401, 403 `EntitlementError`, other 403, 429, 500, network, and timeout. The normal fixture uses `status: "ok"` and must assert `QuotaWindow.exceeded === false` for that window. Add table-driven status cases for the Design §6.1 semantic rule and assert:
 
 - success contains three `QuotaWindow` entries and source `opencodego-usage-api`;
+- normal/available status (`status: "ok"`) keeps the valid percentage and maps to `exceeded = false`;
+- `status: "rate-limited"` with `percent = 100` returns `success` and maps to `exceeded = true`;
+- `status: "exhausted"` with `percent = 100` returns `success` and maps to `exceeded = true`;
+- `status: "rate-limited"` or `status: "exhausted"` with any `percent != 100` returns `failed`, `error.kind = "schema"`, `error.sourceId = "opencodego-usage-api"`, and no data result;
 - invalid optional `resetsAt` keeps `success`, omits only that window's `resetTimestampSeconds`, and returns no `ProviderError`;
 - `403 + EntitlementError` is empty;
 - all other failures retain `opencodego-usage-api`;
@@ -577,7 +581,7 @@ npx vitest run tests/provider-metrics/opencodego-api-key.test.ts
 
 ### GREEN
 
-Use `getWithRetry()` with the specified timeout and headers. Convert status and typed transport errors using the fixed source ID. Parse the required three windows into `QuotaWindow[]`. Return `schema` for required `usage` / window / `status` / `percent` shape or range failures. Map invalid JSON to `parse`. `resetsAt` is optional: missing or invalid `resetsAt` omits only that window's `resetTimestampSeconds`, returns quota `success`, and does not create a `ProviderError`. Treat only safe `EntitlementError` 403 as empty.
+Use `getWithRetry()` with the specified timeout and headers. Convert status and typed transport errors using the fixed source ID. Parse the required three windows into `QuotaWindow[]`. Validate `status` as a non-empty string and `percent` as a finite `0..100` number. Preserve the Design §6.1 status semantics: normal/available status such as `ok` maps to `exceeded = false`; `rate-limited` and `exhausted` require exactly `percent = 100` and map to `exceeded = true`; either status with `percent != 100` returns `failed` with `kind = "schema"` and `sourceId = "opencodego-usage-api"`. Return `schema` for required `usage` / window / `status` / `percent` shape or range failures. Map invalid JSON to `parse`. `resetsAt` is optional: missing or invalid `resetsAt` omits only that window's `resetTimestampSeconds`, returns quota `success`, and does not create a `ProviderError`. Treat only safe `EntitlementError` 403 as empty.
 
 The adapter entry reads `OPENCODEGO_API_KEY` only. Missing credentials are handled by the registry and never produce an adapter call.
 
@@ -655,11 +659,11 @@ git commit -m "feat(provider-metrics): OpenCode Go Zen balance enrichmentを追�
 - Create: `workers/src/provider-metrics/ollama/api-usage.ts`
 - Create: `workers/tests/provider-metrics/ollama-api-usage.test.ts`
 
-**Consumes:** `OLLAMA_API_KEY` and `ProviderContext` from Task 1.
+**Consumes:** `OLLAMA_API_KEY`, `ProviderContext` from Task 1, and the model-label validation/cardinality contract in Design §6.2, §7.2, and §8.6.
 
 **Dependency:** Task 1.
 
-**Produces:** An `AdapterOutcome` that distinguishes API success from request failure and fatal 200-response schema/parse failure.
+**Produces:** An `AdapterOutcome` that distinguishes API success from request failure and fatal 200-response schema/parse failure, with validated and `(period, model)`-aggregated `modelRequests`.
 
 ### RED
 
@@ -669,12 +673,13 @@ Add fixtures for:
 - activity cost with `last_4_weeks` period;
 - activity-only success;
 - invalid model entry with valid limits;
+- model names covering valid characters, exactly 128 ASCII characters, 129 characters, leading/trailing/internal whitespace, whitespace-only input, control characters, and non-string values;
 - invalid activity cost with valid limits;
 - empty or unrecognized top-level content;
 - invalid JSON;
 - 400, 401, 403, 429, 500, network, and timeout.
 
-Assert that success stores `modelRequests` with session/weekly periods, stores cost in `activityCostUSD`, ignores `activity.models[]`, and never creates a monthly quota window. Assert that HTTP 400 returns `failed` with `ProviderError.kind = "upstream_4xx"`, `ProviderError.sourceId = "ollama-api-usage"`, and `statusCode = 400`. Assert that empty primary content is a fatal `schema` failure, invalid JSON is `parse`, and API 200 failures never return `null` for fallback interpretation.
+Assert that success stores `modelRequests` with session/weekly periods, stores cost in `activityCostUSD`, ignores `activity.models[]`, and never creates a monthly quota window. For `limits.*.models[].name`, assert the Design §6.2 rule exactly: accept only a string whose `trimmed = name.trim()` has ASCII length `1..128`, whose original value equals `trimmed`, and whose full value matches `^[A-Za-z0-9._:/-]+$`; do not coerce, normalize, case-fold, or replace the label. Assert that a valid 128-character name is retained, a 129-character name is omitted, leading/trailing/internal whitespace and control-character names are omitted, and a non-string name is omitted. Assert duplicate entries with the same `(period, model)` key are emitted as one `modelRequests` entry with the summed `requestCount` (for example, `3 + 4 = 7`), while the same model in `session` and `weekly` remains two independent entries with separate counts. Assert that HTTP 400 returns `failed` with `ProviderError.kind = "upstream_4xx"`, `ProviderError.sourceId = "ollama-api-usage"`, and `statusCode = 400`. Assert that empty primary content is a fatal `schema` failure, invalid JSON is `parse`, and API 200 failures never return `null` for fallback interpretation.
 
 **RED command:**
 
@@ -686,7 +691,7 @@ npx vitest run tests/provider-metrics/ollama-api-usage.test.ts
 
 ### GREEN
 
-Return a typed `AdapterOutcome` from the API module. Parse `limits.session` and `limits.weekly` into quota windows and `modelRequests`. Parse activity cost into `activityCostUSD`. Keep invalid optional model entries and activity cost as field-level omissions. If neither limits nor activity cost contributes a valid primary field, return failed `schema`. Map JSON decoding failure to `parse`.
+Return a typed `AdapterOutcome` from the API module. Parse `limits.session` and `limits.weekly` into quota windows and `modelRequests`. Before aggregation, validate each model entry with the Design §6.2 policy: `name` must be a string, `trimmed = name.trim()` must have ASCII length `1..128`, `name` must equal `trimmed`, and the original name must fully match `^[A-Za-z0-9._:/-]+$`. Omit only invalid entries without coercion, normalization, case folding, or `unknown`/`other` replacement. Aggregate only validated entries by the exact `(period, model)` key, so duplicate entries in one period sum `requestCount` and the same model in `session` and `weekly` remains separate. Parse activity cost into `activityCostUSD`. Keep invalid optional model entries and activity cost as field-level omissions. If neither limits nor activity cost contributes a valid primary field, return failed `schema`. Map JSON decoding failure to `parse`.
 
 Map HTTP and typed transport failures to `ProviderError` with source `ollama-api-usage`. Do not call HTML from this module. HTML fallback ownership belongs exclusively to Task 8.
 
@@ -1098,7 +1103,10 @@ git commit -m "docs(provider-metrics): 新しいcredentialとmetric契約を記�
 | OpenAI existing metric compatibility    | `§6.4`, `§7.2`, `§9.3` | Tasks 3, 11, 12          | line-item and model-label assertions                                  |
 | OpenCode Go Zen balance                 | `§6.1`, `§7.2`         | Task 6                   | `zenBalanceUSD` source/metric assertion                               |
 | OpenCode Go reset-seconds compatibility | `§7.2`, `§9.3`         | Task 3                   | injected `nowSeconds` formula assertion                               |
+| OpenCode Go status / exceeded semantics | `§6.1`, `§10.1`         | Task 5                   | normal/available status, rate-limited/exhausted at 100, and non-100 schema-failure assertions |
 | Ollama model requests                   | `§6.2`, `§7.2`, `§9.3` | Tasks 3, 7               | session/weekly period and model-label assertions                      |
+| Ollama model-label validation/cardinality | `§6.2`, `§7.2`, `§8.6`, `§10.1` | Task 7 | exact string/ASCII/length/whitespace/control validation and invalid-entry omission assertions |
+| Ollama duplicate model-request aggregation | `§6.2`, `§7.2`, `§10.1` | Task 7 | exact `(period, model)` aggregation, summed `requestCount`, and separate session/weekly series assertions |
 | Ollama activity cost                    | `§6.2`, `§7.2`         | Tasks 3, 7               | exact `ollama_cloud_activity_cost_usd` assertion                      |
 | Ollama fallback/enrichment precedence   | `§6.2`, `§8.1`         | Tasks 7, 8               | API 200 fatal, HTTP 400 fallback success/failure, API success enrichment, request-failure fallback tests |
 | CommandCode endpoint error ownership    | `§6.3`, `§8.7`         | Task 9                   | endpoint table-driven source assertions                               |
@@ -1122,6 +1130,8 @@ git commit -m "docs(provider-metrics): 新しいcredentialとmetric契約を記�
 - Ollama model requests include `period` and `model`; activity cost has its exact field.
 - `ProviderContext` has `scheduledTimeSeconds`, normalized `openaiHistoryDays`, and both injectable clocks.
 - `ProviderErrorKind` includes network, timeout, HTTP 4xx/5xx, schema, parse, and contract-only `internal`.
+- OpenCode Go status semantics map normal/available windows to `exceeded = false`, `rate-limited`/`exhausted` at 100 to `exceeded = true`, and non-100 `rate-limited`/`exhausted` to schema failure.
+- Ollama model labels use the Design §6.2 exact validation policy, omit invalid entries, and aggregate only by exact `(period, model)`.
 - `RegisteredProvider`, `ProviderExecutionRecord`, and `runAdapters()` have exact fields, arguments, return type, and ordered-record semantics.
 - Fixed source IDs are endpoint-specific and not inferred from error strings.
 - `pushProviderMetrics` requires data and health input together.

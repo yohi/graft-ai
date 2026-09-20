@@ -1,2594 +1,1052 @@
+<!-- markdownlint-disable MD013 -->
+
 # Provider Usage Metrics Extension Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Implementation scope:** This plan describes the future source and test changes. During plan preparation only this plan and its paired design document are modified.
 
-**Goal:** Refactor the Provider Metrics Worker to a common `ProviderResult` / `ProviderAdapter` architecture, migrate OpenCode Go and Ollama Cloud to API-key primary endpoints, add CommandCode as a new provider, and introduce scrape health metrics.
+**Goal:** Refactor the Provider Metrics Worker to a common `ProviderResult` / `ProviderAdapter` architecture, migrate OpenCode Go and Ollama Cloud to API-key primary endpoints, add CommandCode, preserve all existing metric contracts, and add provider scrape health metrics.
 
-**Architecture:** Each provider adapter consumes `ProviderMetricsEnv` + `ProviderContext` and returns a closed `AdapterOutcome`. A common OTLP builder converts `ProviderResult` into gauge metrics; a separate health builder converts adapter outcomes into `provider_metrics_scrape_*` metrics. The orchestrator runs adapters in parallel with `Promise.allSettled`, skips providers without credentials, and pushes a health-only payload when at least one provider was attempted.
+**Implementation order:** Tasks are dependency ordered. Each task has one concrete interface, one RED test boundary, one minimum GREEN implementation, and one commit boundary. Global typecheck is intentionally run only after all consumers are migrated in Task 12.
 
-**Tech Stack:** TypeScript (strict), Vitest, Cloudflare Workers runtime, existing `workers/src/http-retry.ts`, no new runtime dependencies.
+**Runtime constraints:** TypeScript strict mode, Vitest, Cloudflare Workers runtime, existing dependencies only, no JSON Schema library, no credential or response-body disclosure.
 
-## Global Constraints
+## Binding Contracts
 
-- The spec's external API endpoints, authentication, response shapes, units, and failure handling are fixed and must not be changed at implementation time.
-- `workers/package.json` dependencies must not be changed; no JSON Schema or validation library may be introduced.
-- Type error suppression (`as any`, `@ts-ignore`, `@ts-expect-error`) is forbidden.
-- API keys, OAuth tokens, session cookies, and Authorization headers must never appear in logs, metric labels, error messages, or diagnostic output.
-- HTTP response bodies must not be logged or returned in errors; only status, provider, source, and error category may be recorded.
-- Unknown source periods, model strings, plan names, or error messages must not become arbitrary Prometheus labels.
-- Metric names and existing label values must remain compatible with the "Existing metric compatibility" table in the spec.
-- Commit messages follow Conventional Commits in Japanese.
-- All CI gates (`make typecheck`, `make test`, `make fmt`, `make validate`) must pass before the work is considered complete.
+### 1. Provider result types
 
----
+`ProviderResult` is a closed union discriminated by `provider`. The following fields are mandatory for the corresponding provider and are never folded into a generic field with a different metric meaning.
+
+```ts
+export interface OpenAICostMetric {
+  lineItem: string;
+  costUSD: number;
+}
+
+export interface ProviderModelUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  requests: number;
+}
+
+export interface ProviderModelRequest {
+  period: "session" | "weekly";
+  model: string;
+  requestCount: number;
+}
+
+export interface ProviderResultBase<P extends ProviderId> {
+  provider: P;
+  sources: ProviderSource[];
+  windows: QuotaWindow[];
+}
+
+export type ProviderResult =
+  | (ProviderResultBase<"openai_api"> & {
+      costs: OpenAICostMetric[];
+      modelUsage: ProviderModelUsage[];
+    })
+  | (ProviderResultBase<"codex"> & {
+      plan?: string;
+      credits?: ProviderCredits;
+    })
+  | (ProviderResultBase<"opencodego"> & {
+      zenBalanceUSD?: number;
+    })
+  | (ProviderResultBase<"ollama_cloud"> & {
+      plan?: string;
+      modelRequests: ProviderModelRequest[];
+      activityCostUSD?: number;
+    })
+  | (ProviderResultBase<"commandcode"> & {
+      plan?: string;
+      subscription?: ProviderSubscription;
+      credits?: ProviderCredits;
+      usage?: ProviderUsageSummary;
+    });
+```
+
+The common quota fields remain `windows`, `plan`, `subscription`, `credits`, and `usage` only where their semantics match the provider contract. OpenCode Go Zen balance uses `zenBalanceUSD`. Ollama activity cost uses `activityCostUSD`. OpenAI uses `costs` and `modelUsage`.
+
+### 2. Error and transport seam
+
+`ProviderErrorKind` contains the following closed set:
+
+```text
+auth | forbidden | upstream_4xx | rate_limit | upstream_5xx |
+network | timeout | schema | parse
+```
+
+`getWithRetry()` retains `network` and `timeout` in a typed `HttpTransportError` after retries are exhausted. It does not expose raw exception messages, response bodies, credentials, or headers. HTTP responses remain available to adapters so each endpoint can attach its fixed `sourceId`.
+
+The adapter owns the final conversion:
+
+| Condition                          | `ProviderError.kind` |
+| ---------------------------------- | -------------------- |
+| HTTP 401                           | `auth`               |
+| HTTP 403                           | `forbidden`          |
+| HTTP 429                           | `rate_limit`         |
+| HTTP 500 or greater                | `upstream_5xx`       |
+| Other non-2xx response             | `upstream_4xx`       |
+| Typed transport network failure    | `network`            |
+| Typed transport timeout failure    | `timeout`            |
+| Required JSON shape/type failure   | `schema`             |
+| Required JSON/date parsing failure | `parse`              |
+
+Fixed source ownership is endpoint-specific:
+
+| Provider path             | `sourceId`                          |
+| ------------------------- | ----------------------------------- |
+| OpenAI organization APIs  | `openai-organization-api`           |
+| Codex primary             | `codex-wham-usage`                  |
+| Codex Browser Rendering   | `codex-browser-rendering`           |
+| OpenCode Go API           | `opencodego-usage-api`              |
+| OpenCode Go Zen RPC       | `opencodego-zen-rpc`                |
+| Ollama API                | `ollama-api-usage`                  |
+| Ollama settings HTML      | `ollama-settings-html`              |
+| CommandCode whoami        | `commandcode-whoami`                |
+| CommandCode credits       | `commandcode-billing-credits`       |
+| CommandCode subscriptions | `commandcode-billing-subscriptions` |
+| CommandCode summary       | `commandcode-usage-summary`         |
+
+The adapter execution wrapper has a last-resort contract-violation boundary for an unexpected adapter rejection. That boundary is not used to classify known transport, HTTP, schema, or parse failures; those failures must be returned by the provider adapter with the source ID above.
+
+### 3. Health timing seam
+
+`ProviderContext` contains both clocks:
+
+```ts
+export interface ProviderContext {
+  fetchFn: typeof fetch;
+  scheduledTimeSeconds: number;
+  nowSeconds: () => number;
+  monotonicNowMs: () => number;
+  browserBinding?: Fetcher;
+}
+```
+
+The wrapper captures `monotonicNowMs()` immediately before invoking an adapter and immediately after that adapter promise settles. It captures `nowSeconds()` at the same completion point only for success and empty outcomes. `Promise.allSettled()` receives already wrapped promises, so a slow provider cannot inflate another provider's duration or timestamp.
+
+The diagnostic report preserves `skipped`, `success`, `empty`, and `failed`. Health maps success and empty to `scrape_success=1`; the report does not relabel empty as skipped.
+
+### 4. Metric builder and push input
+
+The metric builder signature is fixed:
+
+```ts
+buildProviderMetrics(
+  results: ProviderResult[],
+  nowUnixNano: string,
+  nowSeconds: number,
+): Record<string, unknown>[]
+```
+
+`opencodego_reset_seconds_remaining{period}` is generated as:
+
+```text
+max(resetTimestampSeconds - nowSeconds, 0)
+```
+
+The push function receives data and health metrics in one required payload object:
+
+```ts
+export interface ProviderMetricsPushInput {
+  results: ProviderResult[];
+  healthMetrics: Record<string, unknown>[];
+  nowUnixNano: string;
+  nowSeconds: number;
+}
+```
+
+An attempted run always passes the health array to the push function, including an empty data-result array. The orchestrator does not call the push function only when no provider was attempted.
 
 ## File Structure
 
 ### Modified files
 
-- `workers/src/provider-metrics/types.ts` — extend with common `ProviderResult`, `ProviderAdapter`, `AdapterOutcome`, `ProviderContext`, and new credential env keys.
-- `workers/src/provider-metrics/prometheus.ts` — rewrite OTLP builder to consume `ProviderResult[]` and emit quota, plan, credits, usage, and model metrics.
-- `workers/src/provider-metrics.ts` — replace sequential `Promise.allSettled` orchestrator with adapter registry, health metric generation, and health-only push.
-- `workers/src/provider-metrics/codex.ts` — refactor to `ProviderResult` + Browser Rendering fallback on HTTP 403.
-- `workers/src/provider-metrics/openai-api.ts` — refactor to `ProviderResult` while keeping existing costs/usage endpoints.
-- `workers/src/provider-metrics/ollama.ts` — move HTML parser to `ollama/settings-html.ts`.
-- `workers/tests/provider-metrics/scheduled.test.ts` — update orchestrator expectations.
-- `workers/tests/provider-metrics/prometheus.test.ts` — rewrite for `ProviderResult` input.
-- `docs/provider-metrics.md` — document new credential variables and source support levels.
+- `workers/src/http-retry.ts` — preserve typed network/timeout failures after retry exhaustion.
+- `workers/src/provider-metrics/types.ts` — define the closed result union, transport/error types, context seam, and credentials.
+- `workers/src/provider-metrics/prometheus.ts` — emit exact common and provider-specific metrics and accept health metrics in the push payload.
+- `workers/src/provider-metrics.ts` — run the registry, build data/health payloads, and produce complete diagnostics.
+- `workers/src/provider-metrics/codex.ts` — return `AdapterOutcome` and classify primary/browser failures.
+- `workers/src/provider-metrics/openai-api.ts` — return the OpenAI union member with cost line items and model usage.
+- `workers/src/provider-metrics/ollama.ts` — remove after its parser is moved to the new Ollama module.
+- `workers/tests/provider-metrics/scheduled.test.ts` — verify orchestration and observable push payloads.
+- `workers/tests/provider-metrics/prometheus.test.ts` — verify exact metric names, labels, and values.
+- `docs/provider-metrics.md` — document credentials, source support levels, and new metrics.
 
 ### Created files
 
-- `workers/src/provider-metrics/health.ts` — scrape health metric builder.
-- `workers/src/provider-metrics/adapters.ts` — adapter registry and execution wrapper.
-- `workers/src/provider-metrics/opencodego/index.ts` — adapter entry.
-- `workers/src/provider-metrics/opencodego/api-key.ts` — `GET /zen/go/v1/usage` with API key.
-- `workers/src/provider-metrics/opencodego/zen-balance.ts` — cookie/RPC Zen balance enrichment.
-- `workers/src/provider-metrics/ollama/index.ts` — adapter entry.
-- `workers/src/provider-metrics/ollama/api-usage.ts` — `GET /api/usage` JSON.
-- `workers/src/provider-metrics/ollama/settings-html.ts` — HTML fallback/enrichment.
-- `workers/src/provider-metrics/commandcode/index.ts` — adapter entry.
-- `workers/src/provider-metrics/commandcode/billing.ts` — whoami / credits / subscriptions / usage summary chain.
-- `workers/tests/provider-metrics/opencodego-api-key.test.ts` — API-key adapter tests.
-- `workers/tests/provider-metrics/opencodego-zen-balance.test.ts` — Zen balance enrichment tests.
-- `workers/tests/provider-metrics/ollama-api-usage.test.ts` — JSON API adapter tests.
-- `workers/tests/provider-metrics/ollama-settings-html.test.ts` — HTML fallback/enrichment tests.
-- `workers/tests/provider-metrics/commandcode.test.ts` — CommandCode adapter tests.
-- `workers/tests/provider-metrics/health.test.ts` — health metric builder tests.
-- `workers/tests/provider-metrics/adapters.test.ts` — registry and execution wrapper tests.
+- `workers/src/provider-metrics/health.ts`
+- `workers/src/provider-metrics/adapters.ts`
+- `workers/src/provider-metrics/opencodego/index.ts`
+- `workers/src/provider-metrics/opencodego/api-key.ts`
+- `workers/src/provider-metrics/opencodego/zen-balance.ts`
+- `workers/src/provider-metrics/ollama/index.ts`
+- `workers/src/provider-metrics/ollama/api-usage.ts`
+- `workers/src/provider-metrics/ollama/settings-html.ts`
+- `workers/src/provider-metrics/commandcode/index.ts`
+- `workers/src/provider-metrics/commandcode/billing.ts`
+- `workers/tests/provider-metrics/types-smoke.test.ts`
+- `workers/tests/http-retry.test.ts`
+- `workers/tests/provider-metrics/health.test.ts`
+- `workers/tests/provider-metrics/adapters.test.ts`
+- `workers/tests/provider-metrics/opencodego-api-key.test.ts`
+- `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
+- `workers/tests/provider-metrics/ollama-api-usage.test.ts`
+- `workers/tests/provider-metrics/ollama-settings-html.test.ts`
+- `workers/tests/provider-metrics/commandcode.test.ts`
 
----
-
-## Task 1: Define common provider types
+## Task 1: Define types and typed transport errors
 
 **Files:**
+
 - Modify: `workers/src/provider-metrics/types.ts`
+- Modify: `workers/src/http-retry.ts`
+- Create: `workers/tests/provider-metrics/types-smoke.test.ts`
+- Create: `workers/tests/http-retry.test.ts`
 
-**Interfaces:**
-- Produces: `ProviderId`, `SupportLevel`, `SourceRole`, `ProviderSource`, `QuotaPeriod`, `QuotaWindow`, `ProviderCredits`, `ProviderSubscription`, `ProviderUsageSummary`, `ProviderResult`, `ProviderContext`, `ProviderErrorKind`, `ProviderError`, `AdapterOutcome`.
+**Consumes:** Existing provider result interfaces and `getWithRetry()`.
 
-- [ ] **Step 1: Write the failing typecheck test**
+**Dependency:** None. This task establishes the shared types and transport seam.
 
-Create `workers/tests/provider-metrics/types-smoke.test.ts`:
+**Produces:** `ProviderResult` closed union, `ProviderModelUsage`, `ProviderModelRequest`, `OpenAICostMetric`, `ProviderContext.monotonicNowMs`, `ProviderErrorKind`, `HttpTransportError`, and new credential keys.
 
-```ts
-import { describe, expect, it } from "vitest";
-import type { AdapterOutcome, ProviderResult } from "../../src/provider-metrics/types";
+### RED
 
-describe("common provider types", () => {
-  it("compiles a success outcome", () => {
-    const outcome: AdapterOutcome = {
-      status: "success",
-      result: {
-        provider: "commandcode",
-        sources: [{ id: "commandcode-billing-credits", supportLevel: "official-internal", role: "primary" }],
-        windows: [{ period: "session", usageRatio: 0.5 }],
-      } satisfies ProviderResult,
-    };
-    expect(outcome.status).toBe("success");
-  });
-});
-```
-
-Run: `npx vitest run workers/tests/provider-metrics/types-smoke.test.ts`
-Expected: FAIL with "Cannot find module" or TypeScript compile error because types do not exist yet.
-
-- [ ] **Step 2: Add common types to `types.ts`**
-
-Append the following to `workers/src/provider-metrics/types.ts`:
+Add a type smoke test with all five union members. The test must assign these exact values:
 
 ```ts
-export type ProviderId =
-  | "openai_api"
-  | "codex"
-  | "opencodego"
-  | "ollama_cloud"
-  | "commandcode";
+const openai: ProviderResult = {
+  provider: "openai_api",
+  sources: [],
+  windows: [],
+  costs: [{ lineItem: "tokens", costUSD: 1.25 }],
+  modelUsage: [
+    {
+      model: "gpt-5",
+      inputTokens: 10,
+      outputTokens: 4,
+      cachedTokens: 2,
+      requests: 1,
+    },
+  ],
+};
 
-export type SupportLevel =
-  | "official-public"
-  | "official-internal"
-  | "web-internal"
-  | "scraping";
+const opencodego: ProviderResult = {
+  provider: "opencodego",
+  sources: [],
+  windows: [],
+  zenBalanceUSD: 23.45,
+};
 
-export type SourceRole = "primary" | "enrichment" | "fallback";
-
-export interface ProviderSource {
-  id: string;
-  supportLevel: SupportLevel;
-  role: SourceRole;
-}
-
-export type QuotaPeriod = "session" | "weekly" | "monthly" | "rolling";
-
-export interface QuotaWindow {
-  period: QuotaPeriod;
-  rawPeriod?: string;
-  usageRatio?: number;
-  used?: number;
-  limit?: number;
-  resetTimestampSeconds?: number;
-  exceeded?: boolean;
-}
-
-export interface ProviderCredits {
-  remaining?: number;
-  monthly?: number;
-  purchased?: number;
-  free?: number;
-  resetCredits?: number;
-  resetCreditsAvailableCount?: number;
-}
-
-export interface ProviderSubscription {
-  status?: string;
-  billingPeriodEndSeconds?: number;
-}
-
-export interface ProviderUsageSummary {
-  costUSD?: number;
-  requests?: number;
-  tokens?: number;
-}
-
-export interface ProviderResult {
-  provider: ProviderId;
-  sources: ProviderSource[];
-  windows: QuotaWindow[];
-  plan?: string;
-  subscription?: ProviderSubscription;
-  credits?: ProviderCredits;
-  usage?: ProviderUsageSummary;
-}
-
-export interface ProviderContext {
-  fetchFn: typeof fetch;
-  scheduledTimeSeconds: number;
-  nowSeconds: () => number;
-  browserBinding?: Fetcher;
-}
-
-export type ProviderErrorKind =
-  | "auth"
-  | "forbidden"
-  | "rate_limit"
-  | "upstream_5xx"
-  | "network"
-  | "timeout"
-  | "schema"
-  | "parse";
-
-export interface ProviderError {
-  kind: ProviderErrorKind;
-  provider: ProviderId;
-  sourceId: string;
-  statusCode?: number;
-}
-
-export type AdapterOutcome =
-  | { status: "success"; result: ProviderResult }
-  | { status: "empty"; reason: "no-supported-window" | "no-activity" }
-  | { status: "failed"; error: ProviderError };
+const ollama: ProviderResult = {
+  provider: "ollama_cloud",
+  sources: [],
+  windows: [],
+  modelRequests: [
+    { period: "session", model: "glm-5.3-flash", requestCount: 54 },
+  ],
+  activityCostUSD: 12.34,
+};
 ```
 
-- [ ] **Step 3: Add new credential env keys to `ProviderMetricsEnv`**
+Add transport tests that make `fetchFn` reject with a timeout-shaped error and a network-shaped error after retry exhaustion. The expected errors are `HttpTransportError` with `kind` equal to `timeout` and `network`, respectively.
 
-In `workers/src/provider-metrics/types.ts`, add inside `ProviderMetricsEnv`:
-
-```ts
-  // OpenCodeGo
-  OPENCODEGO_API_KEY?: string;
-  OPENCODEGO_SESSION_COOKIE?: string;
-  OPENCODEGO_WORKSPACE_ID?: string;
-
-  // Ollama Cloud
-  OLLAMA_API_KEY?: string;
-  OLLAMA_SESSION_COOKIE?: string;
-
-  // CommandCode
-  COMMAND_CODE_API_KEY?: string;
-```
-
-- [ ] **Step 4: Verify typecheck and test**
-
-Run: `cd workers && npx vitest run tests/provider-metrics/types-smoke.test.ts`
-Expected: PASS.
-
-Run: `cd workers && npm run typecheck`
-Expected: PASS (only new types added; no consumers yet).
-
-- [ ] **Step 5: Commit**
+**RED command:** From `workers/`, run:
 
 ```bash
-git add workers/src/provider-metrics/types.ts workers/tests/provider-metrics/types-smoke.test.ts
-git commit -m "feat(provider-metrics): 共通 ProviderResult / AdapterOutcome 型を定義"
+npx vitest run tests/provider-metrics/types-smoke.test.ts tests/http-retry.test.ts
 ```
 
----
+**Expected RED result:** Missing provider-specific types and typed transport error exports.
 
-## Task 2: Implement scrape health metric builder
+### GREEN
+
+Implement the exact union and error types from the Binding Contracts. Update `getWithRetry()` so timeout detection produces `HttpTransportError("timeout")`, other exhausted fetch exceptions produce `HttpTransportError("network")`, and the existing retry/status behavior is unchanged. Do not include the caught exception message in the public error or log output.
+
+Add `OPENCODEGO_API_KEY`, `OPENCODEGO_SESSION_COOKIE`, `OPENCODEGO_WORKSPACE_ID`, `OLLAMA_API_KEY`, `OLLAMA_SESSION_COOKIE`, and `COMMAND_CODE_API_KEY` to `ProviderMetricsEnv`.
+
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/types-smoke.test.ts tests/http-retry.test.ts
+```
+
+**Expected GREEN result:** All targeted tests pass and the typed transport tests prove network/timeout distinction.
+
+### Commit
+
+```bash
+git add workers/src/provider-metrics/types.ts workers/src/http-retry.ts workers/tests/provider-metrics/types-smoke.test.ts workers/tests/http-retry.test.ts
+git commit -m "feat(provider-metrics): 共通型とtyped transport errorを定義"
+```
+
+## Task 2: Implement scrape health builder
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/health.ts`
 - Create: `workers/tests/provider-metrics/health.test.ts`
 
-**Interfaces:**
-- Consumes: `ProviderId`, `AdapterOutcome` from Task 1.
-- Produces: `buildHealthMetrics(outcomes, nowUnixNano)` returning OTLP gauge metric objects.
+**Consumes:** `ProviderId` and the health timing contract from Task 1.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 1.
 
-Create `workers/tests/provider-metrics/health.test.ts`:
+**Produces:** `ScrapeHealthOutcome` and `buildHealthMetrics()`.
 
-```ts
-import { describe, expect, it } from "vitest";
-import { buildHealthMetrics } from "../../src/provider-metrics/health";
-import type { ScrapeHealthOutcome } from "../../src/provider-metrics/health";
+### RED
 
-describe("buildHealthMetrics", () => {
-  it("emits success, timestamp, and duration for a successful scrape", () => {
-    const outcomes: ScrapeHealthOutcome[] = [
-      { provider: "opencodego", success: true, durationSeconds: 0.123, timestampSeconds: 1_000 },
-    ];
-    const metrics = buildHealthMetrics(outcomes, "1234000000000");
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("provider_metrics_scrape_success");
-    expect(names).toContain("provider_metrics_scrape_timestamp_seconds");
-    expect(names).toContain("provider_metrics_scrape_duration_seconds");
-  });
+Add tests for success, empty, and failed outcomes. Assert that success and empty emit `provider_metrics_scrape_success=1`, failure emits `0`, duration is emitted for all attempted outcomes, and timestamp is emitted only for success and empty.
 
-  it("omits timestamp for failed scrapes", () => {
-    const outcomes: ScrapeHealthOutcome[] = [
-      { provider: "ollama_cloud", success: false, durationSeconds: 0.456 },
-    ];
-    const metrics = buildHealthMetrics(outcomes, "1234000000000");
-    const timestampMetric = metrics.find((m) => m.name === "provider_metrics_scrape_timestamp_seconds");
-    expect(timestampMetric).toBeUndefined();
-  });
-});
+**RED command:**
+
+```bash
+npx vitest run tests/provider-metrics/health.test.ts
 ```
 
-Run: `npx vitest run tests/provider-metrics/health.test.ts`
-Expected: FAIL with module not found.
+**Expected RED result:** The health module and builder export do not exist.
 
-- [ ] **Step 2: Implement `health.ts`**
+### GREEN
 
-Create `workers/src/provider-metrics/health.ts`:
+Define:
 
 ```ts
-import type { ProviderId } from "./types";
-
 export interface ScrapeHealthOutcome {
   provider: ProviderId;
-  success: boolean;
+  status: "success" | "empty" | "failed";
   durationSeconds: number;
   timestampSeconds?: number;
 }
-
-function attr(key: string, value: string): Record<string, unknown> {
-  return { key, value: { stringValue: value } };
-}
-
-function gaugeMetric(
-  name: string,
-  attributes: Record<string, unknown>[],
-  value: number,
-  nowUnixNano: string,
-): Record<string, unknown> {
-  return {
-    name,
-    gauge: {
-      dataPoints: [{ attributes, asDouble: value, timeUnixNano: nowUnixNano }],
-    },
-  };
-}
-
-export function buildHealthMetrics(
-  outcomes: ScrapeHealthOutcome[],
-  nowUnixNano: string,
-): Record<string, unknown>[] {
-  return outcomes.flatMap((outcome) => {
-    const providerAttr = attr("provider", outcome.provider);
-    const metrics: Record<string, unknown>[] = [
-      gaugeMetric(
-        "provider_metrics_scrape_success",
-        [providerAttr],
-        outcome.success ? 1 : 0,
-        nowUnixNano,
-      ),
-      gaugeMetric(
-        "provider_metrics_scrape_duration_seconds",
-        [providerAttr],
-        outcome.durationSeconds,
-        nowUnixNano,
-      ),
-    ];
-    if (outcome.success && outcome.timestampSeconds !== undefined) {
-      metrics.push(
-        gaugeMetric(
-          "provider_metrics_scrape_timestamp_seconds",
-          [providerAttr],
-          outcome.timestampSeconds,
-          nowUnixNano,
-        ),
-      );
-    }
-    return metrics;
-  });
-}
 ```
 
-- [ ] **Step 3: Run the test**
+Generate one gauge metric object per provider and metric name. Never emit a timestamp for failed outcomes or skipped providers.
 
-Run: `npx vitest run tests/provider-metrics/health.test.ts`
-Expected: PASS.
+**GREEN command:**
 
-- [ ] **Step 4: Commit**
+```bash
+npx vitest run tests/provider-metrics/health.test.ts
+```
+
+**Expected GREEN result:** Health metric tests pass with the exact success/timestamp/duration semantics.
+
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/health.ts workers/tests/provider-metrics/health.test.ts
-git commit -m "feat(provider-metrics): scrape health metric builder を追加"
+git commit -m "feat(provider-metrics): scrape health metric builderを追加"
 ```
 
----
-
-## Task 3: Implement common OTLP builder from `ProviderResult`
+## Task 3: Implement the exact metric builder and push payload shape
 
 **Files:**
+
 - Modify: `workers/src/provider-metrics/prometheus.ts`
 - Modify: `workers/tests/provider-metrics/prometheus.test.ts`
 
-**Interfaces:**
-- Consumes: `ProviderResult`, `QuotaWindow`, `ProviderCredits`, `ProviderSubscription`, `ProviderUsageSummary` from Task 1.
-- Produces: `buildProviderMetrics(results, nowUnixNano)` returning OTLP gauge metric objects.
+**Consumes:** The closed `ProviderResult` union from Task 1.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 1.
 
-Replace `workers/tests/provider-metrics/prometheus.test.ts` with:
+**Produces:** `buildProviderMetrics(results, nowUnixNano, nowSeconds)` and `pushProviderMetrics(env, input, fetchFn)`.
 
-```ts
-import { describe, expect, it } from "vitest";
-import { buildProviderMetrics } from "../../src/provider-metrics/prometheus";
-import type { ProviderResult } from "../../src/provider-metrics/types";
+### RED
 
-describe("buildProviderMetrics", () => {
-  it("emits quota and reset metrics for all supported windows", () => {
-    const result: ProviderResult = {
-      provider: "opencodego",
-      sources: [{ id: "opencodego-usage-api", supportLevel: "official-internal", role: "primary" }],
-      windows: [
-        { period: "rolling", usageRatio: 0.12, resetTimestampSeconds: 1_000 },
-        { period: "weekly", usageRatio: 0.08, resetTimestampSeconds: 2_000 },
-      ],
-    };
-    const metrics = buildProviderMetrics([result], "1234000000000");
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("opencodego_usage_ratio");
-    expect(names).toContain("opencodego_reset_timestamp_seconds");
-    const rolling = metrics.find((m) => m.name === "opencodego_usage_ratio")!;
-    expect(rolling.gauge.dataPoints).toHaveLength(2);
-  });
+Replace the existing builder test with a fixture containing OpenAI, OpenCode Go, and Ollama results. Assert these exact contracts:
 
-  it("emits credits and plan metrics for CommandCode", () => {
-    const result: ProviderResult = {
-      provider: "commandcode",
-      sources: [{ id: "commandcode-billing-credits", supportLevel: "official-internal", role: "primary" }],
-      windows: [],
-      plan: "individual-go",
-      credits: { remaining: 74.43, monthly: 70, purchased: 5, free: 0 },
-    };
-    const metrics = buildProviderMetrics([result], "1234000000000");
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("commandcode_credits_remaining");
-    expect(names).toContain("commandcode_credits_monthly");
-    expect(names).toContain("commandcode_credits_purchased");
-    expect(names).toContain("commandcode_credits_free");
-    expect(names).toContain("commandcode_plan_info");
-  });
-});
+```text
+openai_api_cost_usd{line_item="tokens"}
+openai_api_input_tokens{model="gpt-5"}
+openai_api_output_tokens{model="gpt-5"}
+openai_api_cached_tokens{model="gpt-5"}
+openai_api_requests{model="gpt-5"}
+opencodego_zen_balance_usd
+opencodego_reset_seconds_remaining{period="weekly"}
+ollama_cloud_model_requests{period="session",model="glm-5.3-flash"}
+ollama_cloud_activity_cost_usd
 ```
 
-Run: `npx vitest run tests/provider-metrics/prometheus.test.ts`
-Expected: FAIL with export not found.
+For quota metrics, collect all metric objects with the requested name before asserting. The test must not assume that multiple data points are stored in one metric object. Assert the OpenCode Go remaining value using `resetTimestampSeconds=1_250` and `nowSeconds=1_000`, expecting `250`.
 
-- [ ] **Step 2: Rewrite `prometheus.ts` to consume `ProviderResult`**
+Add a push test that supplies one data result and one health metric and asserts both appear under the POSTed OTLP payload. The test must also supply an empty data-result array with a non-empty health array and assert that the health metric remains in the payload.
 
-Replace `workers/src/provider-metrics/prometheus.ts` with:
+**RED command:**
 
-```ts
-import type { ProviderResult, QuotaWindow } from "./types";
-import { postWithRetry, validatePrometheusConfig } from "../http-retry";
-
-type PrometheusEnv = {
-  GRAFANA_CLOUD_PROMETHEUS_URL: string;
-  GRAFANA_CLOUD_PROMETHEUS_USERNAME: string;
-  GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: string;
-};
-
-function attr(key: string, value: string): Record<string, unknown> {
-  return { key, value: { stringValue: value } };
-}
-
-function gaugeMetric(
-  name: string,
-  attributes: Record<string, unknown>[],
-  value: number,
-  nowUnixNano: string,
-): Record<string, unknown> {
-  return {
-    name,
-    gauge: {
-      dataPoints: [{ attributes, asDouble: value, timeUnixNano: nowUnixNano }],
-    },
-  };
-}
-
-function buildQuotaMetrics(
-  provider: string,
-  window: QuotaWindow,
-  nowUnixNano: string,
-): Record<string, unknown>[] {
-  const periodAttr = [attr("period", window.period)];
-  const metrics: Record<string, unknown>[] = [];
-  if (window.usageRatio !== undefined) {
-    metrics.push(gaugeMetric(`${provider}_usage_ratio`, periodAttr, window.usageRatio, nowUnixNano));
-  }
-  if (window.resetTimestampSeconds !== undefined) {
-    metrics.push(
-      gaugeMetric(
-        `${provider}_reset_timestamp_seconds`,
-        periodAttr,
-        window.resetTimestampSeconds,
-        nowUnixNano,
-      ),
-    );
-  }
-  return metrics;
-}
-
-function buildProviderSpecificMetrics(
-  result: ProviderResult,
-  nowUnixNano: string,
-): Record<string, unknown>[] {
-  const metrics: Record<string, unknown>[] = [];
-  const p = result.provider;
-
-  if (result.credits) {
-    const c = result.credits;
-    if (c.remaining !== undefined) {
-      metrics.push(gaugeMetric(`${p}_credits_remaining`, [], c.remaining, nowUnixNano));
-    }
-    if (c.monthly !== undefined) {
-      metrics.push(gaugeMetric(`${p}_credits_monthly`, [], c.monthly, nowUnixNano));
-    }
-    if (c.purchased !== undefined) {
-      metrics.push(gaugeMetric(`${p}_credits_purchased`, [], c.purchased, nowUnixNano));
-    }
-    if (c.free !== undefined) {
-      metrics.push(gaugeMetric(`${p}_credits_free`, [], c.free, nowUnixNano));
-    }
-    if (c.resetCredits !== undefined) {
-      metrics.push(gaugeMetric(`${p}_reset_credits`, [], c.resetCredits, nowUnixNano));
-    }
-    if (c.resetCreditsAvailableCount !== undefined) {
-      metrics.push(
-        gaugeMetric(`${p}_reset_credits_available_count`, [], c.resetCreditsAvailableCount, nowUnixNano),
-      );
-    }
-  }
-
-  if (result.plan) {
-    metrics.push(gaugeMetric(`${p}_plan_info`, [attr("plan", result.plan)], 1, nowUnixNano));
-  }
-
-  if (result.subscription) {
-    const s = result.subscription;
-    if (s.status !== undefined && result.plan) {
-      metrics.push(
-        gaugeMetric(
-          `${p}_subscription_info`,
-          [attr("plan", result.plan), attr("status", s.status)],
-          1,
-          nowUnixNano,
-        ),
-      );
-    }
-    if (s.billingPeriodEndSeconds !== undefined) {
-      metrics.push(
-        gaugeMetric(
-          `${p}_billing_period_end_seconds`,
-          [],
-          s.billingPeriodEndSeconds,
-          nowUnixNano,
-        ),
-      );
-    }
-  }
-
-  if (result.usage) {
-    const u = result.usage;
-    if (u.costUSD !== undefined) {
-      metrics.push(gaugeMetric(`${p}_usage_cost_usd`, [], u.costUSD, nowUnixNano));
-    }
-    if (u.requests !== undefined) {
-      metrics.push(gaugeMetric(`${p}_usage_requests`, [], u.requests, nowUnixNano));
-    }
-    if (u.tokens !== undefined) {
-      metrics.push(gaugeMetric(`${p}_usage_tokens`, [], u.tokens, nowUnixNano));
-    }
-  }
-
-  return metrics;
-}
-
-export function buildProviderMetrics(
-  results: ProviderResult[],
-  nowUnixNano: string,
-): Record<string, unknown>[] {
-  return results.flatMap((result) => [
-    ...result.windows.flatMap((window) => buildQuotaMetrics(result.provider, window, nowUnixNano)),
-    ...buildProviderSpecificMetrics(result, nowUnixNano),
-  ]);
-}
-
-function buildOtlpPayload(results: ProviderResult[], nowUnixNano: string): Record<string, unknown> {
-  return {
-    resourceMetrics: [
-      {
-        resource: {
-          attributes: [{ key: "service.name", value: { stringValue: "graft-ai-provider-metrics" } }],
-        },
-        scopeMetrics: [
-          {
-            scope: { name: "graft-ai-provider-metrics" },
-            metrics: buildProviderMetrics(results, nowUnixNano),
-          },
-        ],
-      },
-    ],
-  };
-}
-
-export async function pushProviderMetrics(
-  env: PrometheusEnv,
-  results: ProviderResult[],
-  fetchFn: typeof fetch = fetch,
-): Promise<{ ok: boolean; status: number }> {
-  const url = validatePrometheusConfig(
-    env.GRAFANA_CLOUD_PROMETHEUS_URL,
-    env.GRAFANA_CLOUD_PROMETHEUS_USERNAME,
-    env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN,
-  );
-  const basicAuth = btoa(
-    `${env.GRAFANA_CLOUD_PROMETHEUS_USERNAME}:${env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN}`,
-  );
-  const nowUnixNano = `${Date.now()}000000`;
-  const body = JSON.stringify(buildOtlpPayload(results, nowUnixNano));
-
-  return postWithRetry({
-    url,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Basic ${basicAuth}`,
-    },
-    body,
-    fetchFn,
-    logLabel: "Provider metrics push",
-    isRetryableStatus: (status) => !(status >= 400 && status < 500 && status !== 429),
-  });
-}
+```bash
+npx vitest run tests/provider-metrics/prometheus.test.ts
 ```
 
-- [ ] **Step 3: Run the test**
+**Expected RED result:** The current builder accepts the legacy result shape, lacks the new exact metrics, and cannot accept the health payload.
 
-Run: `npx vitest run tests/provider-metrics/prometheus.test.ts`
-Expected: PASS.
+### GREEN
 
-Run: `npm run typecheck`
-Expected: PASS (other callers of `pushProviderMetrics` will still fail until later tasks).
+Implement an exhaustive `switch (result.provider)`:
 
-- [ ] **Step 4: Commit**
+- OpenAI emits cost metrics from `costs` and four model metrics from `modelUsage`.
+- Codex emits the existing quota, credits, and plan metrics.
+- OpenCode Go emits quota metrics, `opencodego_reset_seconds_remaining`, and `opencodego_zen_balance_usd` from `zenBalanceUSD`.
+- Ollama emits quota, plan, model request, and activity cost metrics from the dedicated fields.
+- CommandCode emits its existing quota, credits, subscription, and usage metrics.
+
+Use `assertNever` for the closed union. Do not construct provider-specific names from a generic `usage` object. Make `buildOtlpPayload()` accept both data metrics and health metrics. Make `pushProviderMetrics()` accept the required `ProviderMetricsPushInput` object and include both arrays in one payload.
+
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/prometheus.test.ts
+```
+
+**Expected GREEN result:** Exact names, labels, values, reset remaining calculation, and health-only payload tests pass.
+
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/prometheus.ts workers/tests/provider-metrics/prometheus.test.ts
-git commit -m "feat(provider-metrics): ProviderResult から OTLP metric を生成する共通 builder を追加"
+git commit -m "feat(provider-metrics): exact metric builderとhealth payloadを追加"
 ```
 
----
-
-## Task 4: Implement adapter registry and execution wrapper
+## Task 4: Implement adapter registry and completion-time wrapper
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/adapters.ts`
 - Create: `workers/tests/provider-metrics/adapters.test.ts`
 
-**Interfaces:**
-- Consumes: `ProviderMetricsEnv`, `ProviderContext`, `ProviderAdapter`, `AdapterOutcome` from Task 1.
-- Produces: `RegisteredProvider[]`, `runAdapters(env, ctx)` returning `{ outcomes: AdapterOutcome[]; health: ScrapeHealthOutcome[]; attempted: boolean }`.
+**Consumes:** `ProviderContext`, `ProviderAdapter`, `AdapterOutcome`, and `ScrapeHealthOutcome` from Tasks 1 and 2.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Tasks 1 and 2.
 
-Create `workers/tests/provider-metrics/adapters.test.ts`:
+**Produces:** `RegisteredProvider[]` and `runAdapters(env, ctx, registry)`.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { runAdapters } from "../../src/provider-metrics/adapters";
-import type { ProviderAdapter, ProviderMetricsEnv } from "../../src/provider-metrics/types";
+### RED
 
-const env: ProviderMetricsEnv = {
-  GRAFANA_CLOUD_PROMETHEUS_URL: "https://example.com/otlp",
-  GRAFANA_CLOUD_PROMETHEUS_USERNAME: "u",
-  GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "t",
-  COMMAND_CODE_API_KEY: "key",
-};
+Add tests for credential skipping, parallel execution, success/empty/failed health mapping, and completion-time measurement. The timing test uses two deferred adapters. The fast adapter settles while the slow adapter remains pending, and the injected monotonic clock returns `0` at both starts, `100` at the fast completion, and `10_000` at the slow completion. Assert durations of `0.1` and `10` seconds and distinct completion timestamps.
 
-const ctx = { fetchFn: fetch, scheduledTimeSeconds: 1_000, nowSeconds: () => 1_000 };
+**RED command:**
 
-describe("runAdapters", () => {
-  it("runs only providers with credentials and returns health outcomes", async () => {
-    const adapter: ProviderAdapter = async () => ({
-      status: "success",
-      result: {
-        provider: "commandcode",
-        sources: [{ id: "x", supportLevel: "official-internal", role: "primary" }],
-        windows: [],
-      },
-    });
-    const { outcomes, health, attempted } = await runAdapters(env, ctx, [
-      { provider: "commandcode", credentialKey: "COMMAND_CODE_API_KEY", adapter },
-    ]);
-    expect(attempted).toBe(true);
-    expect(outcomes).toHaveLength(1);
-    expect(health[0]).toMatchObject({ provider: "commandcode", success: true });
-  });
-
-  it("skips providers without credentials", async () => {
-    const adapter: ProviderAdapter = vi.fn();
-    const { attempted, outcomes } = await runAdapters(
-      { ...env, COMMAND_CODE_API_KEY: undefined },
-      ctx,
-      [{ provider: "commandcode", credentialKey: "COMMAND_CODE_API_KEY", adapter }],
-    );
-    expect(attempted).toBe(false);
-    expect(outcomes).toHaveLength(0);
-    expect(adapter).not.toHaveBeenCalled();
-  });
-});
+```bash
+npx vitest run tests/provider-metrics/adapters.test.ts
 ```
 
-Run: `npx vitest run tests/provider-metrics/adapters.test.ts`
-Expected: FAIL with module not found.
+**Expected RED result:** The registry module is absent; the legacy orchestrator has no completion-time wrapper.
 
-- [ ] **Step 2: Implement `adapters.ts`**
+### GREEN
 
-Create `workers/src/provider-metrics/adapters.ts`:
+Filter registry entries by non-empty credential. For each selected entry, execute this wrapper:
 
-```ts
-import type {
-  AdapterOutcome,
-  ProviderAdapter,
-  ProviderContext,
-  ProviderId,
-  ProviderMetricsEnv,
-} from "./types";
-import type { ScrapeHealthOutcome } from "./health";
-
-export interface RegisteredProvider {
-  provider: ProviderId;
-  credentialKey: keyof ProviderMetricsEnv;
-  adapter: ProviderAdapter;
-}
-
-function isNonEmptyCredential(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function shouldRun(provider: RegisteredProvider, env: ProviderMetricsEnv): boolean {
-  return isNonEmptyCredential(env[provider.credentialKey]);
-}
-
-export interface AdapterRunSummary {
-  outcomes: AdapterOutcome[];
-  health: ScrapeHealthOutcome[];
-  attempted: boolean;
-}
-
-export async function runAdapters(
-  env: ProviderMetricsEnv,
-  ctx: ProviderContext,
-  registry: RegisteredProvider[],
-): Promise<AdapterRunSummary> {
-  const toRun = registry.filter((p) => shouldRun(p, env));
-  if (toRun.length === 0) {
-    return { outcomes: [], health: [], attempted: false };
-  }
-
-  const startByProvider = new Map<ProviderId, number>();
-  const settled = await Promise.allSettled(
-    toRun.map(async (p) => {
-      startByProvider.set(p.provider, performance.now());
-      return p.adapter(env, ctx);
-    }),
-  );
-
-  const outcomes: AdapterOutcome[] = [];
-  const health: ScrapeHealthOutcome[] = [];
-
-  for (let i = 0; i < toRun.length; i++) {
-    const p = toRun[i]!;
-    const settledResult = settled[i]!;
-    const end = performance.now();
-    const start = startByProvider.get(p.provider) ?? end;
-    const durationSeconds = (end - start) / 1000;
-
-    if (settledResult.status === "fulfilled") {
-      const outcome = settledResult.value;
-      outcomes.push(outcome);
-      health.push({
-        provider: p.provider,
-        success: outcome.status === "success" || outcome.status === "empty",
-        durationSeconds,
-        ...(outcome.status === "success" || outcome.status === "empty"
-          ? { timestampSeconds: ctx.nowSeconds() }
-          : {}),
-      });
-    } else {
-      outcomes.push({
-        status: "failed",
-        error: {
-          kind: "network",
-          provider: p.provider,
-          sourceId: `${p.provider}-adapter`,
-        },
-      });
-      health.push({
-        provider: p.provider,
-        success: false,
-        durationSeconds,
-      });
-    }
-  }
-
-  return { outcomes, health, attempted: true };
-}
+```text
+startMs = ctx.monotonicNowMs()
+try:
+  outcome = await adapter(env, ctx)
+catch unexpected rejection:
+  outcome = contract-violation failure using the registry's fixed primary source ID
+endMs = ctx.monotonicNowMs()
+timestamp = ctx.nowSeconds() when outcome is success or empty
+return outcome and health computed from these immediate completion values
 ```
 
-- [ ] **Step 3: Run the test**
+Pass the wrapped promises to `Promise.allSettled()`. Preserve the registry order in returned outcomes and health records. Known provider failures must be classified inside their adapters; the wrapper's contract-violation path is not the normal transport/error path.
 
-Run: `npx vitest run tests/provider-metrics/adapters.test.ts`
-Expected: PASS.
+**GREEN command:**
 
-- [ ] **Step 4: Commit**
+```bash
+npx vitest run tests/provider-metrics/adapters.test.ts
+```
+
+**Expected GREEN result:** Fast-provider duration/timestamp values are independent of slow-provider settlement, and skipped providers never invoke their adapter.
+
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/adapters.ts workers/tests/provider-metrics/adapters.test.ts
-git commit -m "feat(provider-metrics): adapter registry と実行ラッパーを追加"
+git commit -m "feat(provider-metrics): adapter completion wrapperを追加"
 ```
 
----
-
-## Task 5: Implement OpenCodeGo API-key adapter
+## Task 5: Implement OpenCode Go API-key adapter
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/opencodego/api-key.ts`
 - Create: `workers/src/provider-metrics/opencodego/index.ts`
 - Create: `workers/tests/provider-metrics/opencodego-api-key.test.ts`
 
-**Interfaces:**
-- Consumes: `ProviderMetricsEnv`, `ProviderContext`.
-- Produces: `AdapterOutcome` for `opencodego` via `/zen/go/v1/usage`.
+**Consumes:** OpenCode Go API key and `ProviderContext` from Task 1.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 1.
 
-Create `workers/tests/provider-metrics/opencodego-api-key.test.ts`:
+**Produces:** `AdapterOutcome` for `opencodego` using `/zen/go/v1/usage`.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { fetchOpenCodeGoUsageApi } from "../../src/provider-metrics/opencodego/api-key";
+### RED
 
-describe("fetchOpenCodeGoUsageApi", () => {
-  it("returns success with rolling/weekly/monthly windows", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          usage: {
-            rolling: { status: "ok", percent: 12, resetsAt: "2026-09-20T17:00:00.000Z" },
-            weekly: { status: "ok", percent: 8, resetsAt: "2026-09-22T00:00:00.000Z" },
-            monthly: { status: "ok", percent: 35, resetsAt: "2026-10-04T11:18:32.000Z" },
-          },
-        }),
-        { status: 200 },
-      ),
-    );
+Add fixtures for the valid rolling/weekly/monthly response, missing required window, invalid percent, invalid optional `resetsAt`, invalid JSON, 401, 403 `EntitlementError`, other 403, 429, 500, network, and timeout. Assert:
 
-    const result = await fetchOpenCodeGoUsageApi("key", mockFetch);
-    expect(result.status).toBe("success");
-    if (result.status !== "success") throw new Error("unexpected");
-    expect(result.result.windows).toHaveLength(3);
-    expect(result.result.windows[0]).toMatchObject({ period: "rolling", usageRatio: 0.12 });
-  });
+- success contains three `QuotaWindow` entries and source `opencodego-usage-api`;
+- invalid optional `resetsAt` omits only that reset metric;
+- `403 + EntitlementError` is empty;
+- all other failures retain `opencodego-usage-api`;
+- network and timeout retain distinct `ProviderError.kind` values.
 
-  it("returns empty on 403 EntitlementError", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ type: "EntitlementError" }), { status: 403 }),
-    );
-    const result = await fetchOpenCodeGoUsageApi("key", mockFetch);
-    expect(result.status).toBe("empty");
-  });
-});
+**RED command:**
+
+```bash
+npx vitest run tests/provider-metrics/opencodego-api-key.test.ts
 ```
 
-Run: `npx vitest run tests/provider-metrics/opencodego-api-key.test.ts`
-Expected: FAIL with module not found.
+**Expected RED result:** The API-key adapter module is absent.
 
-- [ ] **Step 2: Implement `api-key.ts`**
+### GREEN
 
-Create `workers/src/provider-metrics/opencodego/api-key.ts`:
+Use `getWithRetry()` with the specified timeout and headers. Convert status and typed transport errors using the fixed source ID. Parse the required three windows into `QuotaWindow[]`. Return `schema` for required shape/range failures and `parse` for invalid required date parsing. Treat only safe `EntitlementError` 403 as empty.
 
-```ts
-import { getWithRetry } from "../../http-retry";
-import type { AdapterOutcome, ProviderContext, ProviderResult } from "../types";
+The adapter entry reads `OPENCODEGO_API_KEY` only. Missing credentials are handled by the registry and never produce an adapter call.
 
-const USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
-const TIMEOUT_MS = 10000;
-const SOURCE_ID = "opencodego-usage-api";
+**GREEN command:**
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseFinitePercent(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} must be a finite number`);
-  }
-  if (value < 0 || value > 100) {
-    throw new Error(`${path} must be between 0 and 100`);
-  }
-  return value;
-}
-
-function parseStatus(value: unknown, path: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${path} must be a non-empty string`);
-  }
-  return value;
-}
-
-function parseResetsAt(value: unknown, path: string): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") {
-    throw new Error(`${path} must be a string`);
-  }
-  const ms = Date.parse(value);
-  if (Number.isNaN(ms)) {
-    throw new Error(`${path} must be an ISO 8601 timestamp`);
-  }
-  return Math.floor(ms / 1000);
-}
-
-function parseWindow(value: unknown, period: string): {
-  usageRatio: number;
-  resetTimestampSeconds?: number;
-  exceeded: boolean;
-} {
-  if (!isRecord(value)) {
-    throw new Error(`usage.${period} must be an object`);
-  }
-  const status = parseStatus(value["status"], `usage.${period}.status`);
-  const percent = parseFinitePercent(value["percent"], `usage.${period}.percent`);
-  const exceeded = status === "rate-limited" || status === "exhausted";
-  if (exceeded && percent < 100) {
-    throw new Error(`usage.${period}.percent must be 100 when status is ${status}`);
-  }
-  let resetTimestampSeconds: number | undefined;
-  try {
-    resetTimestampSeconds = parseResetsAt(value["resetsAt"], `usage.${period}.resetsAt`);
-  } catch {
-    resetTimestampSeconds = undefined;
-  }
-  return { usageRatio: percent / 100, resetTimestampSeconds, exceeded };
-}
-
-export async function fetchOpenCodeGoUsageApi(
-  apiKey: string,
-  fetchFn: typeof fetch,
-): Promise<AdapterOutcome> {
-  const response = await getWithRetry({
-    url: USAGE_URL,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-    },
-    fetchFn,
-    logLabel: "OpenCodeGo usage API",
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    perAttemptTimeoutMs: TIMEOUT_MS,
-  });
-
-  if (response.status === 403) {
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      body = undefined;
-    }
-    if (isRecord(body) && body["type"] === "EntitlementError") {
-      return { status: "empty", reason: "no-supported-window" };
-    }
-    return {
-      status: "failed",
-      error: {
-        kind: "forbidden",
-        provider: "opencodego",
-        sourceId: SOURCE_ID,
-        statusCode: 403,
-      },
-    };
-  }
-
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    const kind =
-      response.status === 401
-        ? "auth"
-        : response.status === 429
-          ? "rate_limit"
-          : response.status >= 500
-            ? "upstream_5xx"
-            : "network";
-    return {
-      status: "failed",
-      error: {
-        kind,
-        provider: "opencodego",
-        sourceId: SOURCE_ID,
-        statusCode: response.status,
-      },
-    };
-  }
-
-  const body: unknown = await response.json();
-  if (!isRecord(body) || !isRecord(body["usage"])) {
-    return {
-      status: "failed",
-      error: { kind: "schema", provider: "opencodego", sourceId: SOURCE_ID },
-    };
-  }
-
-  const usage = body["usage"] as Record<string, unknown>;
-  const periods = ["rolling", "weekly", "monthly"] as const;
-  const windows: ProviderResult["windows"] = [];
-
-  try {
-    for (const period of periods) {
-      const raw = usage[period];
-      if (raw === undefined) {
-        throw new Error(`usage.${period} is required`);
-      }
-      const parsed = parseWindow(raw, period);
-      windows.push({
-        period,
-        usageRatio: parsed.usageRatio,
-        resetTimestampSeconds: parsed.resetTimestampSeconds,
-        exceeded: parsed.exceeded,
-      });
-    }
-  } catch (err) {
-    return {
-      status: "failed",
-      error: {
-        kind: "schema",
-        provider: "opencodego",
-        sourceId: SOURCE_ID,
-        statusCode: 200,
-      },
-    };
-  }
-
-  const result: ProviderResult = {
-    provider: "opencodego",
-    sources: [{ id: SOURCE_ID, supportLevel: "official-internal", role: "primary" }],
-    windows,
-  };
-  return { status: "success", result };
-}
+```bash
+npx vitest run tests/provider-metrics/opencodego-api-key.test.ts
 ```
 
-- [ ] **Step 3: Implement `opencodego/index.ts` adapter entry**
+**Expected GREEN result:** All endpoint, status, transport, schema, parse, and empty semantics pass.
 
-Create `workers/src/provider-metrics/opencodego/index.ts`:
-
-```ts
-import type { AdapterOutcome, ProviderAdapter } from "../types";
-import { fetchOpenCodeGoUsageApi } from "./api-key";
-
-export const openCodeGoAdapter: ProviderAdapter = async (env, ctx): Promise<AdapterOutcome> => {
-  const apiKey = env.OPENCODEGO_API_KEY?.trim();
-  if (!apiKey) {
-    return {
-      status: "failed",
-      error: {
-        kind: "auth",
-        provider: "opencodego",
-        sourceId: "opencodego-usage-api",
-      },
-    };
-  }
-  return fetchOpenCodeGoUsageApi(apiKey, ctx.fetchFn);
-};
-```
-
-- [ ] **Step 4: Run the tests**
-
-Run: `npx vitest run tests/provider-metrics/opencodego-api-key.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/opencodego workers/tests/provider-metrics/opencodego-api-key.test.ts
-git commit -m "feat(provider-metrics): OpenCode Go /zen/go/v1/usage API key adapter を追加"
+git commit -m "feat(provider-metrics): OpenCode Go API key adapterを追加"
 ```
 
----
-
-## Task 6: Implement OpenCodeGo Zen balance enrichment
+## Task 6: Implement OpenCode Go Zen balance enrichment
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/opencodego/zen-balance.ts`
-- Create: `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
 - Modify: `workers/src/provider-metrics/opencodego/index.ts`
+- Create: `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
 
-**Interfaces:**
-- Consumes: `OPENCODEGO_SESSION_COOKIE`, `OPENCODEGO_WORKSPACE_ID`, `ProviderContext`.
-- Produces: `Promise<number | null>` for Zen balance USD.
+**Consumes:** The successful OpenCode Go result from Task 5 and existing cookie/RPC helpers.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 5.
 
-Create `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`:
+**Produces:** Optional `zenBalanceUSD` enrichment with `opencodego-zen-rpc` provenance.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { fetchZenBalanceEnrichment } from "../../src/provider-metrics/opencodego/zen-balance";
+### RED
 
-const WORKSPACE_HTML = `<script>["wrk_zen123"]</script>`;
-const BILLING_HTML = `{"zenBalance":2345000000}`;
+Add tests for configured cookie with a balance, missing cookie, and RPC failure. Assert that a successful enrichment sets `result.zenBalanceUSD`, adds source role `enrichment`, and does not set `result.credits`. Assert that enrichment failure preserves quota success and emits no Zen balance.
 
-describe("fetchZenBalanceEnrichment", () => {
-  it("returns balance when cookie is configured", async () => {
-    let call = 0;
-    const mockFetch = vi.fn().mockImplementation(async () => {
-      call++;
-      if (call === 1) return new Response(WORKSPACE_HTML, { status: 200 });
-      return new Response(BILLING_HTML, { status: 200 });
-    });
-    const balance = await fetchZenBalanceEnrichment("session=abc", undefined, mockFetch);
-    expect(balance).toBeCloseTo(23.45);
-  });
+**RED command:**
 
-  it("returns null when cookie is missing", async () => {
-    const balance = await fetchZenBalanceEnrichment(undefined, undefined, fetch);
-    expect(balance).toBeNull();
-  });
-});
+```bash
+npx vitest run tests/provider-metrics/opencodego-zen-balance.test.ts
 ```
 
-Run: `npx vitest run tests/provider-metrics/opencodego-zen-balance.test.ts`
-Expected: FAIL with module not found.
+**Expected RED result:** The new enrichment module and provider-specific field are absent.
 
-- [ ] **Step 2: Extract and adapt Zen balance logic**
+### GREEN
 
-Create `workers/src/provider-metrics/opencodego/zen-balance.ts`:
+Move the existing cookie/RPC extraction into `fetchZenBalanceEnrichment()`. After API success, call it only when the session cookie is configured. Store the numeric value in `zenBalanceUSD`; never store it in `credits.remaining`. Append `opencodego-zen-rpc` only when the value contributed to the result.
 
-```ts
-import { fetchOpenCodeGoMetrics } from "../opencodego";
+**GREEN command:**
 
-export async function fetchZenBalanceEnrichment(
-  sessionCookie: string | undefined,
-  workspaceIdOverride: string | undefined,
-  fetchFn: typeof fetch,
-): Promise<number | null> {
-  if (!sessionCookie || sessionCookie.trim().length === 0) {
-    return null;
-  }
-  try {
-    const result = await fetchOpenCodeGoMetrics(sessionCookie, workspaceIdOverride, fetchFn);
-    return result.zenBalanceUSD;
-  } catch {
-    return null;
-  }
-}
+```bash
+npx vitest run tests/provider-metrics/opencodego-zen-balance.test.ts tests/provider-metrics/opencodego-api-key.test.ts
 ```
 
-- [ ] **Step 3: Wire enrichment into `opencodego/index.ts`**
+**Expected GREEN result:** Quota success is independent of optional Zen balance failure, and the source role is enrichment.
 
-Modify `workers/src/provider-metrics/opencodego/index.ts`:
-
-```ts
-import type { AdapterOutcome, ProviderAdapter } from "../types";
-import { fetchOpenCodeGoUsageApi } from "./api-key";
-import { fetchZenBalanceEnrichment } from "./zen-balance";
-
-export const openCodeGoAdapter: ProviderAdapter = async (env, ctx): Promise<AdapterOutcome> => {
-  const apiKey = env.OPENCODEGO_API_KEY?.trim();
-  if (!apiKey) {
-    return {
-      status: "failed",
-      error: {
-        kind: "auth",
-        provider: "opencodego",
-        sourceId: "opencodego-usage-api",
-      },
-    };
-  }
-  const outcome = await fetchOpenCodeGoUsageApi(apiKey, ctx.fetchFn);
-  if (outcome.status !== "success") {
-    return outcome;
-  }
-
-  const balance = await fetchZenBalanceEnrichment(
-    env.OPENCODEGO_SESSION_COOKIE,
-    env.OPENCODEGO_WORKSPACE_ID,
-    ctx.fetchFn,
-  );
-  if (balance !== null) {
-    outcome.result.credits = { ...outcome.result.credits, remaining: balance };
-    outcome.result.sources.push({
-      id: "opencodego-zen-rpc",
-      supportLevel: "web-internal",
-      role: "enrichment",
-    });
-  }
-  return outcome;
-};
-```
-
-- [ ] **Step 4: Run the tests**
-
-Run: `npx vitest run tests/provider-metrics/opencodego-zen-balance.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/opencodego workers/tests/provider-metrics/opencodego-zen-balance.test.ts
-git commit -m "feat(provider-metrics): OpenCode Go Zen balance enrichment を追加"
+git commit -m "feat(provider-metrics): OpenCode Go Zen balance enrichmentを追加"
 ```
-
----
 
 ## Task 7: Implement Ollama Cloud API-key adapter
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/ollama/api-usage.ts`
 - Create: `workers/tests/provider-metrics/ollama-api-usage.test.ts`
 
-**Interfaces:**
-- Consumes: `OLLAMA_API_KEY`, `ProviderContext`.
-- Produces: `Promise<Partial<ProviderResult>>` with primary quota/activity content; returns `null` if no primary content is usable.
+**Consumes:** `OLLAMA_API_KEY` and `ProviderContext` from Task 1.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 1.
 
-Create `workers/tests/provider-metrics/ollama-api-usage.test.ts`:
+**Produces:** An `AdapterOutcome` that distinguishes API success from request failure and fatal 200-response schema/parse failure.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { fetchOllamaApiUsage } from "../../src/provider-metrics/ollama/api-usage";
+### RED
 
-describe("fetchOllamaApiUsage", () => {
-  it("returns primary result from limits and activity", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          limits: {
-            session: { usage: 0.03, models: [{ name: "glm-5.3-flash", request_count: 54 }] },
-            weekly: { usage: 0.005, models: [{ name: "glm-5.3-flash", request_count: 458 }] },
-          },
-          activity: { cost: "12.34000", period: { type: "last_4_weeks" }, models: [] },
-        }),
-        { status: 200 },
-      ),
-    );
-    const result = await fetchOllamaApiUsage("key", mockFetch);
-    expect(result).not.toBeNull();
-    expect(result!.windows).toHaveLength(2);
-    expect(result!.windows[0]).toMatchObject({ period: "session", usageRatio: 0.03 });
-    expect(result!.usage).toMatchObject({ costUSD: 12.34 });
-  });
+Add fixtures for:
 
-  it("returns null when neither limits nor activity are present", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
-    const result = await fetchOllamaApiUsage("key", mockFetch);
-    expect(result).toBeNull();
-  });
-});
+- legacy session/weekly limits with duplicate model entries;
+- activity cost with `last_4_weeks` period;
+- activity-only success;
+- invalid model entry with valid limits;
+- invalid activity cost with valid limits;
+- empty or unrecognized top-level content;
+- invalid JSON;
+- 401, 403, 429, 500, network, and timeout.
+
+Assert that success stores `modelRequests` with session/weekly periods, stores cost in `activityCostUSD`, ignores `activity.models[]`, and never creates a monthly quota window. Assert that empty primary content is a fatal `schema` failure, invalid JSON is `parse`, and API 200 failures never return `null` for fallback interpretation.
+
+**RED command:**
+
+```bash
+npx vitest run tests/provider-metrics/ollama-api-usage.test.ts
 ```
 
-Run: `npx vitest run tests/provider-metrics/ollama-api-usage.test.ts`
-Expected: FAIL with module not found.
+**Expected RED result:** The API-key adapter module is absent.
 
-- [ ] **Step 2: Implement `api-usage.ts`**
+### GREEN
 
-Create `workers/src/provider-metrics/ollama/api-usage.ts`:
+Return a typed `AdapterOutcome` from the API module. Parse `limits.session` and `limits.weekly` into quota windows and `modelRequests`. Parse activity cost into `activityCostUSD`. Keep invalid optional model entries and activity cost as field-level omissions. If neither limits nor activity cost contributes a valid primary field, return failed `schema`. Map JSON decoding failure to `parse`.
 
-```ts
-import { getWithRetry } from "../../http-retry";
-import type { ProviderResult, QuotaWindow } from "../types";
+Map HTTP and typed transport failures to `ProviderError` with source `ollama-api-usage`. Do not call HTML from this module. HTML fallback ownership belongs exclusively to Task 8.
 
-const USAGE_URL = "https://ollama.com/api/usage";
-const TIMEOUT_MS = 10000;
-const SOURCE_ID = "ollama-api-usage";
+**GREEN command:**
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isValidModelName(name: string): boolean {
-  const trimmed = name.trim();
-  if (trimmed.length === 0 || trimmed.length > 128) return false;
-  if (name !== trimmed) return false;
-  return /^[A-Za-z0-9._:/-]+$/.test(name);
-}
-
-function parseUsageRatio(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} must be a finite number`);
-  }
-  if (value < 0 || value > 1) {
-    throw new Error(`${path} must be between 0 and 1`);
-  }
-  return value;
-}
-
-function parseRequestCount(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
-    throw new Error(`${path} must be a non-negative integer`);
-  }
-  return value;
-}
-
-interface ModelEntry {
-  name: string;
-  requestCount: number;
-}
-
-function parseModels(value: unknown, path: string): ModelEntry[] {
-  if (!Array.isArray(value)) return [];
-  const entries: ModelEntry[] = [];
-  for (let i = 0; i < value.length; i++) {
-    const item = value[i];
-    if (!isRecord(item)) continue;
-    const name = item["name"];
-    if (typeof name !== "string" || !isValidModelName(name)) continue;
-    try {
-      const requestCount = parseRequestCount(item["request_count"], `${path}[${i}].request_count`);
-      entries.push({ name, requestCount });
-    } catch {
-      continue;
-    }
-  }
-  return entries;
-}
-
-function aggregateModels(entries: ModelEntry[]): ModelEntry[] {
-  const map = new Map<string, number>();
-  for (const entry of entries) {
-    map.set(entry.name, (map.get(entry.name) ?? 0) + entry.requestCount);
-  }
-  return [...map.entries()].map(([name, requestCount]) => ({ name, requestCount }));
-}
-
-interface LimitContent {
-  windows: QuotaWindow[];
-  modelMetrics: { period: "session" | "weekly"; model: string; requestCount: number }[];
-}
-
-function parseLimits(value: unknown): LimitContent {
-  const windows: QuotaWindow[] = [];
-  const modelMetrics: LimitContent["modelMetrics"] = [];
-  if (!isRecord(value)) return { windows, modelMetrics };
-
-  for (const [wirePeriod, canonical] of [
-    ["session", "session"],
-    ["weekly", "weekly"],
-  ] as [string, "session" | "weekly"][]) {
-    const raw = value[wirePeriod];
-    if (!isRecord(raw)) continue;
-    const usage = parseUsageRatio(raw["usage"], `limits.${wirePeriod}.usage`);
-    windows.push({ period: canonical, usageRatio: usage });
-    const models = parseModels(raw["models"], `limits.${wirePeriod}.models`);
-    for (const entry of aggregateModels(models)) {
-      modelMetrics.push({ period: canonical, model: entry.name, requestCount: entry.requestCount });
-    }
-  }
-
-  return { windows, modelMetrics };
-}
-
-function parseActivityCost(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-  }
-  return undefined;
-}
-
-export interface OllamaApiUsageResult {
-  result: ProviderResult;
-  sourceId: string;
-}
-
-export async function fetchOllamaApiUsage(
-  apiKey: string,
-  fetchFn: typeof fetch,
-): Promise<ProviderResult | null> {
-  const response = await getWithRetry({
-    url: USAGE_URL,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      Accept: "application/json",
-    },
-    fetchFn,
-    logLabel: "Ollama Cloud API usage",
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    perAttemptTimeoutMs: TIMEOUT_MS,
-  });
-
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new OllamaApiError(response.status);
-  }
-
-  const body: unknown = await response.json();
-  if (!isRecord(body)) return null;
-
-  const { windows, modelMetrics } = parseLimits(body["limits"]);
-  const activityCost = isRecord(body["activity"])
-    ? parseActivityCost(body["activity"]["cost"])
-    : undefined;
-
-  if (windows.length === 0 && activityCost === undefined) {
-    return null;
-  }
-
-  const result: ProviderResult = {
-    provider: "ollama_cloud",
-    sources: [{ id: SOURCE_ID, supportLevel: "official-internal", role: "primary" }],
-    windows,
-  };
-
-  if (activityCost !== undefined) {
-    result.usage = { costUSD: activityCost };
-  }
-
-  return result;
-}
-
-export class OllamaApiError extends Error {
-  constructor(readonly statusCode: number) {
-    super(`Ollama API usage request failed: HTTP ${statusCode}`);
-  }
-}
+```bash
+npx vitest run tests/provider-metrics/ollama-api-usage.test.ts
 ```
 
-- [ ] **Step 3: Run the test**
+**Expected GREEN result:** API success, optional omissions, fatal 200 failures, and all error categories pass.
 
-Run: `npx vitest run tests/provider-metrics/ollama-api-usage.test.ts`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/ollama workers/tests/provider-metrics/ollama-api-usage.test.ts
-git commit -m "feat(provider-metrics): Ollama Cloud /api/usage JSON adapter を追加"
+git commit -m "feat(provider-metrics): Ollama Cloud API usage adapterを追加"
 ```
 
----
-
-## Task 8: Implement Ollama HTML fallback/enrichment and adapter entry
+## Task 8: Implement Ollama HTML enrichment/fallback and adapter entry
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/ollama/settings-html.ts`
-- Modify: `workers/src/provider-metrics/ollama.ts` → move to `ollama/settings-html.ts`
 - Create: `workers/src/provider-metrics/ollama/index.ts`
-- Create: `workers/tests/provider-metrics/ollama-settings-html.test.ts`
+- Remove: `workers/src/provider-metrics/ollama.ts`
+- Rename/update: `workers/tests/provider-metrics/ollama.test.ts` to `workers/tests/provider-metrics/ollama-settings-html.test.ts`
 
-**Interfaces:**
-- Consumes: `OLLAMA_SESSION_COOKIE`, `ProviderContext`.
-- Produces: `AdapterOutcome` combining JSON primary and HTML fallback/enrichment.
+**Consumes:** Typed API outcomes from Task 7 and the existing settings HTML parser.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 7.
 
-Create `workers/tests/provider-metrics/ollama-settings-html.test.ts`:
+**Produces:** A state machine with separate API-success enrichment and request-failure fallback paths.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { fetchOllamaSettingsHtml } from "../../src/provider-metrics/ollama/settings-html";
+### RED
 
-const HTML = `<html><body><span>Cloud Usage</span><span>Pro</span><h3>Session usage</h3><div style="width: 25%">25% used</div><span data-time="2026-08-19T06:00:00Z"></span><h3>Weekly usage</h3><div style="width: 12%">12% used</div><span data-time="2026-08-25T00:00:00Z"></span></body></html>`;
+Add tests for all ownership boundaries:
 
-describe("fetchOllamaSettingsHtml", () => {
-  it("parses session and weekly from HTML", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response(HTML, { status: 200 }));
-    const result = await fetchOllamaSettingsHtml("cookie", mockFetch);
-    expect(result).not.toBeNull();
-    expect(result!.plan).toBe("Pro");
-    expect(result!.windows).toHaveLength(2);
-  });
+- API 200 success plus HTML plan/reset contribution keeps API quota/activity as primary and adds only plan/reset fields as enrichment.
+- API 200 success plus HTML quota usage does not add HTML quota values to the primary result.
+- API 200 fatal schema failure does not call HTML and remains failed with `schema` or `parse`.
+- API HTTP 500 plus valid HTML quota/plan/reset returns fallback success with only `ollama-settings-html` as a source.
+- API network or timeout plus unavailable HTML preserves the original `network` or `timeout` and `ollama-api-usage`.
+- API failure plus HTML failure preserves the original API kind, status code, and source.
+- API success with no valid HTML contribution remains success without the HTML source.
+- HTML reset-only contribution is sufficient for fallback success.
 
-  it("returns null for empty cookie", async () => {
-    const result = await fetchOllamaSettingsHtml("", fetch);
-    expect(result).toBeNull();
-  });
-});
-```
-
-Run: `npx vitest run tests/provider-metrics/ollama-settings-html.test.ts`
-Expected: FAIL with module not found.
-
-- [ ] **Step 2: Move HTML parser to `ollama/settings-html.ts`**
-
-Create `workers/src/provider-metrics/ollama/settings-html.ts` by copying the HTML parsing functions from `workers/src/provider-metrics/ollama.ts` and wrapping them in:
-
-```ts
-import { getWithRetry } from "../../http-retry";
-import type { ProviderResult, QuotaWindow } from "../types";
-
-const OLLAMA_SETTINGS_URL = "https://ollama.com/settings";
-const SOURCE_ID = "ollama-settings-html";
-
-// ... existing helpers: firstCapture, parsePlanName, parsePercent, parseISODateSeconds, etc.
-
-export async function fetchOllamaSettingsHtml(
-  sessionCookie: string | undefined,
-  fetchFn: typeof fetch,
-): Promise<ProviderResult | null> {
-  if (!sessionCookie || sessionCookie.trim().length === 0) return null;
-
-  const trimmedCookie = sessionCookie.trim();
-  const cookieHeader = trimmedCookie.includes("=")
-    ? trimmedCookie
-    : `ollama_session=${trimmedCookie}; wos-session=${trimmedCookie}`;
-
-  const response = await getWithRetry({
-    url: OLLAMA_SETTINGS_URL,
-    headers: {
-      Cookie: cookieHeader,
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-    },
-    logLabel: "Ollama Cloud settings HTML",
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    fetchFn,
-  });
-
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    return null;
-  }
-
-  const html = await response.text();
-  const sessionBlock = parseUsageBlockWithLabels(["Session usage", "Hourly usage"], html);
-  const weeklyBlock = parseUsageBlock("Weekly usage", html);
-
-  if (sessionBlock === null && weeklyBlock === null) {
-    return null;
-  }
-
-  const windows: QuotaWindow[] = [];
-  if (sessionBlock) {
-    windows.push({
-      period: "session",
-      usageRatio: sessionBlock.usedPercent / 100,
-      resetTimestampSeconds: sessionBlock.resetTimestampSeconds,
-    });
-  }
-  if (weeklyBlock) {
-    windows.push({
-      period: "weekly",
-      usageRatio: weeklyBlock.usedPercent / 100,
-      resetTimestampSeconds: weeklyBlock.resetTimestampSeconds,
-    });
-  }
-
-  const plan = parsePlanName(html);
-  const result: ProviderResult = {
-    provider: "ollama_cloud",
-    sources: [{ id: SOURCE_ID, supportLevel: "scraping", role: "fallback" }],
-    windows,
-  };
-  if (plan) result.plan = plan;
-  return result;
-}
-```
-
-- [ ] **Step 3: Delete the old `ollama.ts` adapter**
-
-`workers/src/provider-metrics/ollama.ts` will be removed; the existing `ollama.test.ts` should be replaced/updated later.
-
-- [ ] **Step 4: Implement `ollama/index.ts` adapter entry**
-
-Create `workers/src/provider-metrics/ollama/index.ts`:
-
-```ts
-import type { AdapterOutcome, ProviderAdapter, ProviderResult } from "../types";
-import { fetchOllamaApiUsage, OllamaApiError } from "./api-usage";
-import { fetchOllamaSettingsHtml } from "./settings-html";
-
-function mergeApiAndHtml(apiResult: ProviderResult, htmlResult: ProviderResult): ProviderResult {
-  const merged: ProviderResult = {
-    ...apiResult,
-    sources: [...apiResult.sources],
-  };
-
-  if (htmlResult.plan && !merged.plan) {
-    merged.plan = htmlResult.plan;
-  }
-  for (const window of htmlResult.windows) {
-    const existing = merged.windows.find((w) => w.period === window.period);
-    if (!existing) {
-      merged.windows.push(window);
-    } else if (existing.resetTimestampSeconds === undefined && window.resetTimestampSeconds !== undefined) {
-      existing.resetTimestampSeconds = window.resetTimestampSeconds;
-    }
-  }
-
-  merged.sources.push({
-    id: "ollama-settings-html",
-    supportLevel: "scraping",
-    role: "enrichment",
-  });
-  return merged;
-}
-
-export const ollamaAdapter: ProviderAdapter = async (env, ctx): Promise<AdapterOutcome> => {
-  const apiKey = env.OLLAMA_API_KEY?.trim();
-  if (!apiKey) {
-    return {
-      status: "failed",
-      error: {
-        kind: "auth",
-        provider: "ollama_cloud",
-        sourceId: "ollama-api-usage",
-      },
-    };
-  }
-
-  let apiResult: ProviderResult | null = null;
-  let apiStatusCode: number | undefined;
-  try {
-    apiResult = await fetchOllamaApiUsage(apiKey, ctx.fetchFn);
-  } catch (err) {
-    apiStatusCode = err instanceof OllamaApiError ? err.statusCode : undefined;
-  }
-
-  const htmlResult = await fetchOllamaSettingsHtml(env.OLLAMA_SESSION_COOKIE, ctx.fetchFn);
-
-  if (apiResult) {
-    if (htmlResult && (htmlResult.plan || htmlResult.windows.length > 0)) {
-      return { status: "success", result: mergeApiAndHtml(apiResult, htmlResult) };
-    }
-    return { status: "success", result: apiResult };
-  }
-
-  if (htmlResult && (htmlResult.windows.length > 0 || htmlResult.plan)) {
-    htmlResult.sources = [{ id: "ollama-settings-html", supportLevel: "scraping", role: "fallback" }];
-    return { status: "success", result: htmlResult };
-  }
-
-  const kind =
-    apiStatusCode === 401
-      ? "auth"
-      : apiStatusCode === 403
-        ? "forbidden"
-        : apiStatusCode === 429
-          ? "rate_limit"
-          : apiStatusCode !== undefined && apiStatusCode >= 500
-            ? "upstream_5xx"
-            : "network";
-  return {
-    status: "failed",
-    error: {
-      kind,
-      provider: "ollama_cloud",
-      sourceId: "ollama-api-usage",
-      statusCode: apiStatusCode,
-    },
-  };
-};
-```
-
-- [ ] **Step 5: Update old Ollama tests**
-
-Rename `workers/tests/provider-metrics/ollama.test.ts` to `workers/tests/provider-metrics/ollama-settings-html.test.ts` and update imports. The test from Step 1 already covers the new module; extend it with the existing cases for Free plan and signed-out HTML.
-
-- [ ] **Step 6: Run the tests**
-
-Run: `npx vitest run tests/provider-metrics/ollama-settings-html.test.ts tests/provider-metrics/ollama-api-usage.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS (old `ollama.ts` import failures remain until orchestrator is updated).
-
-- [ ] **Step 7: Commit**
+**RED command:**
 
 ```bash
-git add workers/src/provider-metrics/ollama workers/tests/provider-metrics/ollama-settings-html.test.ts workers/tests/provider-metrics/ollama-api-usage.test.ts workers/tests/provider-metrics/ollama.test.ts
-git rm workers/src/provider-metrics/ollama.ts
-git commit -m "feat(provider-metrics): Ollama Cloud HTML fallback/enrichment と adapter entry を追加"
+npx vitest run tests/provider-metrics/ollama-settings-html.test.ts tests/provider-metrics/ollama-api-usage.test.ts
 ```
 
----
+**Expected RED result:** The split module and the ownership-specific tests are absent.
+
+### GREEN
+
+Make `fetchOllamaSettingsHtml()` return a typed HTML contribution containing independently validated plan, quota windows, and reset timestamps. Its request failure is represented separately from an empty contribution.
+
+Implement the adapter state machine in this order:
+
+1. Call the API adapter.
+2. On API success, call HTML only when the cookie exists, and merge plan plus missing reset timestamps. Do not merge HTML usage ratios or add HTML quota windows to the API result.
+3. On API `network`, `timeout`, `auth`, `forbidden`, `rate_limit`, or `upstream_5xx` failure, call HTML only when the cookie exists. Replace the complete result only when HTML contributes at least one valid quota window, plan, or reset timestamp.
+4. On API `schema` or `parse` failure after HTTP 200, do not call HTML.
+5. On fallback failure, return the original API `ProviderError` unchanged.
+6. Assign `ollama-settings-html` the runtime role `enrichment` only for API success contribution and `fallback` only for complete fallback success.
+
+Move the existing parser helpers without placeholder code and remove the old adapter module after imports are updated.
+
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/ollama-settings-html.test.ts tests/provider-metrics/ollama-api-usage.test.ts
+```
+
+**Expected GREEN result:** Fatal 200 responses never become HTML success, HTML quota never contaminates API success, and fallback preserves original failure ownership.
+
+### Commit
+
+```bash
+git rm workers/src/provider-metrics/ollama.ts workers/tests/provider-metrics/ollama.test.ts
+git add workers/src/provider-metrics/ollama workers/tests/provider-metrics/ollama-settings-html.test.ts workers/tests/provider-metrics/ollama-api-usage.test.ts
+git commit -m "feat(provider-metrics): Ollama HTML ownershipを実装"
+```
 
 ## Task 9: Implement CommandCode adapter
 
 **Files:**
+
 - Create: `workers/src/provider-metrics/commandcode/billing.ts`
 - Create: `workers/src/provider-metrics/commandcode/index.ts`
 - Create: `workers/tests/provider-metrics/commandcode.test.ts`
 
-**Interfaces:**
-- Consumes: `COMMAND_CODE_API_KEY`, `ProviderContext`.
-- Produces: `AdapterOutcome` for `commandcode`.
+**Consumes:** `COMMAND_CODE_API_KEY`, typed transport errors, and the fixed four-endpoint graph.
 
-- [ ] **Step 1: Write the failing test**
+**Dependency:** Task 1.
 
-Create `workers/tests/provider-metrics/commandcode.test.ts`:
+**Produces:** CommandCode `AdapterOutcome` with endpoint-specific source ownership and partial enrichment semantics.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { commandCodeAdapter } from "../../src/provider-metrics/commandcode";
+### RED
 
-describe("commandCodeAdapter", () => {
-  it("returns success with quota, credits, plan, and usage", async () => {
-    let call = 0;
-    const mockFetch = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
-      call++;
-      const url = input instanceof Request ? input.url : input.toString();
-      if (url.includes("/alpha/whoami")) {
-        return new Response(JSON.stringify({ org: { id: "org_123", login: "x" } }), { status: 200 });
-      }
-      if (url.includes("/alpha/billing/credits")) {
-        return new Response(
-          JSON.stringify({
-            credits: { monthlyCredits: 70, purchasedCredits: 5, freeCredits: 0 },
-            windowLimits: {
-              limited: true,
-              fiveHour: { used: 0.57, cap: 14, resetAt: 1_789_923_600_000 },
-              weekly: { used: 0.57, cap: 35, resetAt: 1_790_355_600_000 },
-            },
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/alpha/billing/subscriptions")) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              planId: "individual-go",
-              status: "active",
-              currentPeriodStart: "2026-09-01T00:00:00Z",
-              currentPeriodEnd: "2026-10-01T00:00:00Z",
-            },
-          }),
-          { status: 200 },
-        );
-      }
-      if (url.includes("/alpha/usage/summary")) {
-        return new Response(
-          JSON.stringify({ totalCost: 0.57, totalCount: 45, totalTokens: 3_100_000 }),
-          { status: 200 },
-        );
-      }
-      throw new Error(`Unexpected URL: ${url}`);
-    });
+Add request tests asserting exact URLs, `limits=1`, encoded `orgId`, optional encoded `since`, required headers, and no request body. Add response tests for valid output, invalid whoami, invalid credits, optional subscription failure, optional summary failure, invalid resetAt, unlimited semantics, bounded quota `cap=0`, network, timeout, 401, 403, 429, 500, invalid JSON, and required schema/parse errors.
 
-    const outcome = await commandCodeAdapter(
-      { COMMAND_CODE_API_KEY: "key" } as never,
-      { fetchFn: mockFetch, scheduledTimeSeconds: 1_000, nowSeconds: () => 1_000 },
-    );
+Every required endpoint failure must assert its own source:
 
-    expect(outcome.status).toBe("success");
-    if (outcome.status !== "success") throw new Error("unexpected");
-    expect(outcome.result.windows).toHaveLength(2);
-    expect(outcome.result.credits).toMatchObject({ remaining: 75, monthly: 70, purchased: 5, free: 0 });
-    expect(outcome.result.plan).toBe("individual-go");
-    expect(outcome.result.usage).toMatchObject({ costUSD: 0.57, requests: 45, tokens: 3_100_000 });
-  });
-});
+```text
+whoami                 -> commandcode-whoami
+billing/credits       -> commandcode-billing-credits
+billing/subscriptions -> commandcode-billing-subscriptions
+usage/summary         -> commandcode-usage-summary
 ```
 
-Run: `npx vitest run tests/provider-metrics/commandcode.test.ts`
-Expected: FAIL with module not found.
+Assert that `whoami` is never included in `ProviderResult.sources`; valid subscription and summary fields add their source only when they contribute a field.
 
-- [ ] **Step 2: Implement `billing.ts`**
+**RED command:**
 
-Create `workers/src/provider-metrics/commandcode/billing.ts`:
-
-```ts
-import { getWithRetry } from "../../http-retry";
-import type { ProviderResult, QuotaWindow } from "../types";
-
-const BASE_URL = "https://api.commandcode.ai";
-const TIMEOUT_MS = 10000;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseFiniteNonNegativeNumber(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw new Error(`${path} must be a non-negative finite number`);
-  }
-  return value;
-}
-
-function parseFiniteNumber(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} must be a finite number`);
-  }
-  return value;
-}
-
-function parseBoolean(value: unknown, path: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`${path} must be a boolean`);
-  }
-  return value;
-}
-
-function parseIsoTimestampSeconds(value: unknown, path: string): number | undefined {
-  if (typeof value !== "string") return undefined;
-  const ms = Date.parse(value);
-  if (Number.isNaN(ms)) return undefined;
-  return Math.floor(ms / 1000);
-}
-
-function parseResetTimestampSeconds(value: unknown, path: string): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
-  if (value >= 1e12) return Math.floor(value / 1000);
-  return Math.floor(value);
-}
-
-async function getJson(
-  path: string,
-  apiKey: string,
-  fetchFn: typeof fetch,
-): Promise<unknown> {
-  const response = await getWithRetry({
-    url: `${BASE_URL}${path}`,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    fetchFn,
-    logLabel: `CommandCode ${path}`,
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    perAttemptTimeoutMs: TIMEOUT_MS,
-  });
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new CommandCodeHttpError(response.status);
-  }
-  return response.json();
-}
-
-export class CommandCodeHttpError extends Error {
-  constructor(readonly statusCode: number) {
-    super(`CommandCode HTTP ${statusCode}`);
-  }
-}
-
-export interface CommandCodeFetchResult {
-  result: ProviderResult;
-  sourceIds: { credits: string; subscriptions?: string; summary?: string };
-}
-
-export async function fetchCommandCodeResult(
-  apiKey: string,
-  fetchFn: typeof fetch,
-): Promise<CommandCodeFetchResult> {
-  const whoami: unknown = await getJson("/alpha/whoami?limits=1", apiKey, fetchFn);
-  if (!isRecord(whoami) || !isRecord(whoami["org"])) {
-    throw new Error("whoami.org is required");
-  }
-  const orgId = whoami["org"]["id"];
-  if (typeof orgId !== "string" || orgId.length === 0) {
-    throw new Error("whoami.org.id must be a non-empty string");
-  }
-
-  const [creditsRaw, subscriptionsRaw] = await Promise.all([
-    getJson(`/alpha/billing/credits?orgId=${encodeURIComponent(orgId)}`, apiKey, fetchFn),
-    getJson(`/alpha/billing/subscriptions?orgId=${encodeURIComponent(orgId)}`, apiKey, fetchFn).catch(
-      () => undefined,
-    ),
-  ]);
-
-  const result: ProviderResult = {
-    provider: "commandcode",
-    sources: [{ id: "commandcode-billing-credits", supportLevel: "official-internal", role: "primary" }],
-    windows: [],
-  };
-
-  // credits
-  if (!isRecord(creditsRaw) || !isRecord(creditsRaw["credits"])) {
-    throw new Error("credits object is required");
-  }
-  const creditsObj = creditsRaw["credits"] as Record<string, unknown>;
-  const monthlyCredits = parseFiniteNonNegativeNumber(
-    creditsObj["monthlyCredits"],
-    "credits.monthlyCredits",
-  );
-  result.credits = { monthly: monthlyCredits };
-  let remaining = monthlyCredits;
-  if (creditsObj["purchasedCredits"] !== undefined) {
-    const purchased = parseFiniteNonNegativeNumber(
-      creditsObj["purchasedCredits"],
-      "credits.purchasedCredits",
-    );
-    result.credits.purchased = purchased;
-    remaining += purchased;
-  }
-  if (creditsObj["freeCredits"] !== undefined) {
-    const free = parseFiniteNonNegativeNumber(creditsObj["freeCredits"], "credits.freeCredits");
-    result.credits.free = free;
-    remaining += free;
-  }
-  result.credits.remaining = remaining;
-
-  // windowLimits
-  if (isRecord(creditsRaw["windowLimits"])) {
-    const windowLimits = creditsRaw["windowLimits"] as Record<string, unknown>;
-    let limited: boolean;
-    try {
-      limited = parseBoolean(windowLimits["limited"], "windowLimits.limited");
-    } catch {
-      limited = false;
-    }
-    if (limited) {
-      const windows: QuotaWindow[] = [];
-      for (const [wireKey, period] of [
-        ["fiveHour", "session"],
-        ["weekly", "weekly"],
-      ] as [string, "session" | "weekly"][]) {
-        const raw = windowLimits[wireKey];
-        if (!isRecord(raw)) {
-          throw new Error(`windowLimits.${wireKey} is required when limited=true`);
-        }
-        const used = parseFiniteNonNegativeNumber(raw["used"], `windowLimits.${wireKey}.used`);
-        const cap = parseFiniteNonNegativeNumber(raw["cap"], `windowLimits.${wireKey}.cap`);
-        if (cap === 0) {
-          throw new Error(`windowLimits.${wireKey}.cap must be > 0`);
-        }
-        const rawRatio = used / cap;
-        const usageRatio = Math.min(rawRatio, 1);
-        windows.push({
-          period,
-          used,
-          limit: cap,
-          usageRatio,
-          exceeded: used >= cap,
-          resetTimestampSeconds: parseResetTimestampSeconds(
-            raw["resetAt"],
-            `windowLimits.${wireKey}.resetAt`,
-          ),
-        });
-      }
-      result.windows = windows;
-    }
-  }
-
-  const sourceIds: CommandCodeFetchResult["sourceIds"] = {
-    credits: "commandcode-billing-credits",
-  };
-
-  // subscriptions
-  let since: string | undefined;
-  if (subscriptionsRaw !== undefined && isRecord(subscriptionsRaw)) {
-    const data = subscriptionsRaw["data"];
-    if (isRecord(data)) {
-      const planId =
-        typeof data["planId"] === "string" && data["planId"].length > 0
-          ? data["planId"]
-          : undefined;
-      const status =
-        typeof data["status"] === "string" && data["status"].length > 0
-          ? data["status"]
-          : undefined;
-      const currentPeriodStart = parseIsoTimestampSeconds(
-        data["currentPeriodStart"],
-        "data.currentPeriodStart",
-      );
-      const currentPeriodEnd = parseIsoTimestampSeconds(
-        data["currentPeriodEnd"],
-        "data.currentPeriodEnd",
-      );
-      if (planId) result.plan = planId;
-      if (status || currentPeriodEnd) {
-        result.subscription = { status, billingPeriodEndSeconds: currentPeriodEnd };
-      }
-      if (typeof data["currentPeriodStart"] === "string" && currentPeriodStart !== undefined) {
-        since = data["currentPeriodStart"] as string;
-      }
-      sourceIds.subscriptions = "commandcode-billing-subscriptions";
-    }
-  }
-
-  // usage summary
-  const summaryPath = since
-    ? `/alpha/usage/summary?orgId=${encodeURIComponent(orgId)}&since=${encodeURIComponent(since)}`
-    : `/alpha/usage/summary?orgId=${encodeURIComponent(orgId)}`;
-  try {
-    const summaryRaw: unknown = await getJson(summaryPath, apiKey, fetchFn);
-    if (isRecord(summaryRaw)) {
-      const usage: ProviderResult["usage"] = {};
-      if (summaryRaw["totalCost"] !== undefined) {
-        usage.costUSD = parseFiniteNonNegativeNumber(summaryRaw["totalCost"], "totalCost");
-      }
-      if (summaryRaw["totalCount"] !== undefined) {
-        usage.requests = parseFiniteNonNegativeNumber(summaryRaw["totalCount"], "totalCount");
-      }
-      if (summaryRaw["totalTokens"] !== undefined) {
-        const tokens = parseFiniteNumber(summaryRaw["totalTokens"], "totalTokens");
-        if (tokens >= 0 && Number.isInteger(tokens)) usage.tokens = tokens;
-      }
-      if (Object.keys(usage).length > 0) {
-        result.usage = usage;
-        sourceIds.summary = "commandcode-usage-summary";
-      }
-    }
-  } catch {
-    // summary is enrichment-only; ignore failure
-  }
-
-  return { result, sourceIds };
-}
+```bash
+npx vitest run tests/provider-metrics/commandcode.test.ts
 ```
 
-- [ ] **Step 3: Implement `commandcode/index.ts`**
+**Expected RED result:** The CommandCode modules are absent.
 
-Create `workers/src/provider-metrics/commandcode/index.ts`:
+### GREEN
 
-```ts
-import type { AdapterOutcome, ProviderAdapter } from "../types";
-import { fetchCommandCodeResult, CommandCodeHttpError } from "./billing";
+Implement a typed endpoint helper that receives the fixed source ID and converts HTTP/transport/JSON errors before returning endpoint data. Keep `whoami` as an internal prerequisite. Treat credits/quota as required primary data. Treat subscription and summary as optional enrichment, preserving credits success when they fail.
 
-export const commandCodeAdapter: ProviderAdapter = async (env, ctx): Promise<AdapterOutcome> => {
-  const apiKey = env.COMMAND_CODE_API_KEY?.trim();
-  if (!apiKey) {
-    return {
-      status: "failed",
-      error: {
-        kind: "auth",
-        provider: "commandcode",
-        sourceId: "commandcode-whoami",
-      },
-    };
-  }
+Implement the exact quota rules from the design: `fiveHour` maps to `session`, `weekly` maps to `weekly`, `limited=false` emits no window, and `limited=true` requires both positive-cap entries. Invalid optional `resetAt` omits only the reset timestamp.
 
-  try {
-    const { result, sourceIds } = await fetchCommandCodeResult(apiKey, ctx.fetchFn);
-    if (sourceIds.subscriptions) {
-      result.sources.push({
-        id: sourceIds.subscriptions,
-        supportLevel: "official-internal",
-        role: "enrichment",
-      });
-    }
-    if (sourceIds.summary) {
-      result.sources.push({
-        id: sourceIds.summary,
-        supportLevel: "official-internal",
-        role: "enrichment",
-      });
-    }
-    return { status: "success", result };
-  } catch (err) {
-    const statusCode = err instanceof CommandCodeHttpError ? err.statusCode : undefined;
-    const kind =
-      statusCode === 401
-        ? "auth"
-        : statusCode === 403
-          ? "forbidden"
-          : statusCode === 429
-            ? "rate_limit"
-            : statusCode !== undefined && statusCode >= 500
-              ? "upstream_5xx"
-              : err instanceof Error && err.message.includes("whoami")
-                ? "schema"
-                : "network";
-    return {
-      status: "failed",
-      error: {
-        kind,
-        provider: "commandcode",
-        sourceId: "commandcode-billing-credits",
-        statusCode,
-      },
-    };
-  }
-};
+The adapter catch path must use the typed endpoint failure's `kind`, `sourceId`, and `statusCode`; it must not infer endpoint ownership from an error message or assign every failure to credits.
+
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/commandcode.test.ts
 ```
 
-- [ ] **Step 4: Run the tests**
+**Expected GREEN result:** Request graph, partial success, exact source ownership, quota normalization, and all error categories pass.
 
-Run: `npx vitest run tests/provider-metrics/commandcode.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/commandcode workers/tests/provider-metrics/commandcode.test.ts
-git commit -m "feat(provider-metrics): CommandCode adapter を追加"
+git commit -m "feat(provider-metrics): CommandCode adapterを追加"
 ```
 
----
-
-## Task 10: Refactor Codex adapter to `ProviderResult`
+## Task 10: Refactor Codex adapter to ProviderResult
 
 **Files:**
+
 - Modify: `workers/src/provider-metrics/codex.ts`
 - Modify: `workers/tests/provider-metrics/codex.test.ts`
 - Modify: `workers/tests/provider-metrics/codex-validation.test.ts`
 
-**Interfaces:**
-- Consumes: `ProviderContext`, `env.CODEX_*`, `browserBinding`.
-- Produces: `AdapterOutcome` for `codex`.
+**Consumes:** `ProviderContext`, typed transport errors, and Browser Rendering binding.
 
-- [ ] **Step 1: Update Codex tests to expect `AdapterOutcome`**
+**Dependency:** Task 1.
 
-Modify `workers/tests/provider-metrics/codex.test.ts` so that existing assertions check `result.status === "success"` and `result.result.windows` instead of the old `CodexFetchResult` shape.
+**Produces:** Codex `AdapterOutcome` with exact primary/browser ownership.
 
-Example update:
+### RED
 
-```ts
-const outcome = await fetchCodexMetrics("token", undefined, mockFetch);
-expect(outcome.status).toBe("success");
-if (outcome.status !== "success") throw new Error("unexpected");
-expect(outcome.result.windows).toContainEqual(
-  expect.objectContaining({ period: "session", usageRatio: 0.5 }),
-);
+Update existing tests to unwrap `AdapterOutcome`. Add cases for primary 403 with browser success, browser launch/navigation/response timeout, browser schema/parse failure, browser binding unavailable, primary 401, 429, 5xx, network, timeout, primary 200 schema/parse failure, and reset-credit enrichment failure.
+
+Assert:
+
+- Browser fallback is attempted only for primary HTTP 403 with an available binding.
+- Browser success uses source `codex-browser-rendering` with role `fallback`.
+- Browser failure uses source `codex-browser-rendering` and the browser-side final category.
+- Binding unavailable retains `forbidden`, source `codex-wham-usage`, status `403`.
+- Primary 429 and 5xx remain `rate_limit` and `upstream_5xx` and do not invoke Browser Rendering.
+
+**RED command:**
+
+```bash
+npx vitest run tests/provider-metrics/codex.test.ts tests/provider-metrics/codex-validation.test.ts
 ```
 
-Run: `npx vitest run tests/provider-metrics/codex.test.ts`
-Expected: FAIL because `fetchCodexMetrics` no longer returns the expected shape.
+**Expected RED result:** Existing tests expect the legacy result shape and the current implementation does not satisfy the browser error contract.
 
-- [ ] **Step 2: Refactor `codex.ts` to return `AdapterOutcome`**
+### GREEN
 
-Change the signature of `fetchCodexMetrics` to:
+Return the Codex union member with session/weekly windows, plan, and credits. Convert primary responses with the fixed source ID. On primary 403, invoke Browser Rendering only when available; classify its final network, timeout, schema, or parse failure from the browser operation and use the browser source ID. Do not classify every browser failure as forbidden.
 
-```ts
-export async function fetchCodexMetrics(
-  accessToken: string,
-  accountId: string | undefined,
-  fetchFn: typeof fetch,
-  proxyUrlOrBaseUrl?: string,
-  browserBinding?: Fetcher,
-  _now?: Date,
-  proxySecret?: string,
-): Promise<AdapterOutcome>
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/codex.test.ts tests/provider-metrics/codex-validation.test.ts
 ```
 
-At the end of the function, return:
+**Expected GREEN result:** Existing Codex metrics remain compatible and all fallback ownership tests pass.
 
-```ts
-const result: ProviderResult = {
-  provider: "codex",
-  sources: [{ id: "codex-wham-usage", supportLevel: "official-internal", role: "primary" }],
-  windows,
-  plan: data.plan,
-  credits: {
-    remaining: data.creditsRemaining ?? undefined,
-    ...(resetCredits
-      ? { resetCredits: resetCredits.credits, resetCreditsAvailableCount: resetCredits.availableCount }
-      : {}),
-  },
-};
-return { status: "success", result };
-```
-
-When Browser Rendering fallback is used, set `result.sources = [{ id: "codex-browser-rendering", supportLevel: "web-internal", role: "fallback" }]`.
-
-For HTTP failures other than 403 or when browserBinding is unavailable, return:
-
-```ts
-{
-  status: "failed",
-  error: {
-    kind: response.status === 401 ? "auth" : "forbidden",
-    provider: "codex",
-    sourceId: "codex-wham-usage",
-    statusCode: response.status,
-  },
-}
-```
-
-For Browser Rendering failure after 403, return:
-
-```ts
-{
-  status: "failed",
-  error: {
-    kind: "forbidden",
-    provider: "codex",
-    sourceId: "codex-browser-rendering",
-  },
-}
-```
-
-- [ ] **Step 3: Update validation tests**
-
-Adjust `codex-validation.test.ts` to call the new signature and unwrap `AdapterOutcome`.
-
-- [ ] **Step 4: Run the tests**
-
-Run: `npx vitest run tests/provider-metrics/codex.test.ts tests/provider-metrics/codex-validation.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+### Commit
 
 ```bash
 git add workers/src/provider-metrics/codex.ts workers/tests/provider-metrics/codex.test.ts workers/tests/provider-metrics/codex-validation.test.ts
-git commit -m "refactor(provider-metrics): Codex adapter を ProviderResult に移行"
+git commit -m "refactor(provider-metrics): CodexをProviderResultへ移行"
 ```
 
----
-
-## Task 11: Refactor OpenAI adapter to `ProviderResult`
+## Task 11: Refactor OpenAI adapter to ProviderResult
 
 **Files:**
+
 - Modify: `workers/src/provider-metrics/openai-api.ts`
 - Modify: `workers/tests/provider-metrics/openai-api.test.ts`
 
-**Interfaces:**
-- Consumes: `ProviderContext`, `env.OPENAI_ADMIN_API_KEY`, `env.OPENAI_API_HISTORY_DAYS`.
-- Produces: `AdapterOutcome` for `openai_api` with `ProviderUsageSummary` and per-model token metrics.
+**Consumes:** Existing organization costs/completions aggregation and typed transport errors.
 
-- [ ] **Step 1: Update OpenAI tests to expect `AdapterOutcome`**
+**Dependency:** Task 1.
 
-Modify `workers/tests/provider-metrics/openai-api.test.ts` so assertions check `outcome.status === "success"` and `outcome.result.usage` / custom metric builder output.
+**Produces:** OpenAI union member with exact line-item and model payloads.
 
-- [ ] **Step 2: Refactor `openai-api.ts`**
+### RED
 
-Change `fetchOpenAIMetrics` to return `AdapterOutcome`. Keep existing page fetching and aggregation logic, then build:
+Update adapter tests to expect `AdapterOutcome`. Add a fixture with two cost line items and two models, then assert the result retains every `lineItem` and every model's input/output/cached/request values. Add HTTP 401, 403, 429, 5xx, network, timeout, invalid JSON, and required schema/parse cases with source `openai-organization-api`.
 
-```ts
-const result: ProviderResult = {
-  provider: "openai_api",
-  sources: [{ id: "openai-organization-api", supportLevel: "official-public", role: "primary" }],
-  windows: [],
-  usage: {
-    costUSD: totalCost,
-    requests: totalRequests,
-    tokens: totalTokens,
-  },
-};
-return { status: "success", result };
-```
+Add a builder-level assertion that these values become the existing metric names and labels without collapsing cost line items into `usage.costUSD`.
 
-Also store per-model token metrics. Since the common builder does not support per-model labels yet, extend `ProviderResult` with an optional `modelUsage` field or keep the existing `OpenAITokenMetric` shape and emit it in `prometheus.ts` under `buildProviderSpecificMetrics` for `openai_api`:
-
-```ts
-export interface ProviderModelUsage {
-  model: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedTokens?: number;
-  requests?: number;
-}
-```
-
-Add `modelUsage?: ProviderModelUsage[]` to `ProviderResult` in Task 1 before this task.
-
-Then in `prometheus.ts` under `buildProviderSpecificMetrics`:
-
-```ts
-if (result.modelUsage) {
-  for (const m of result.modelUsage) {
-    const modelAttr = [attr("model", m.model)];
-    if (m.inputTokens !== undefined) metrics.push(gaugeMetric(`${p}_input_tokens`, modelAttr, m.inputTokens, nowUnixNano));
-    if (m.outputTokens !== undefined) metrics.push(gaugeMetric(`${p}_output_tokens`, modelAttr, m.outputTokens, nowUnixNano));
-    if (m.cachedTokens !== undefined) metrics.push(gaugeMetric(`${p}_cached_tokens`, modelAttr, m.cachedTokens, nowUnixNano));
-    if (m.requests !== undefined) metrics.push(gaugeMetric(`${p}_requests`, modelAttr, m.requests, nowUnixNano));
-  }
-}
-```
-
-For OpenAI HTTP errors, return:
-
-```ts
-{
-  status: "failed",
-  error: {
-    kind: response.status === 401 ? "auth" : response.status === 429 ? "rate_limit" : "upstream_5xx",
-    provider: "openai_api",
-    sourceId: "openai-organization-api",
-    statusCode: response.status,
-  },
-}
-```
-
-- [ ] **Step 3: Run the tests**
-
-Run: `npx vitest run tests/provider-metrics/openai-api.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
+**RED command:**
 
 ```bash
-git add workers/src/provider-metrics/openai-api.ts workers/src/provider-metrics/types.ts workers/src/provider-metrics/prometheus.ts workers/tests/provider-metrics/openai-api.test.ts
-git commit -m "refactor(provider-metrics): OpenAI adapter を ProviderResult に移行"
+npx vitest run tests/provider-metrics/openai-api.test.ts tests/provider-metrics/prometheus.test.ts
 ```
 
----
+**Expected RED result:** The adapter still returns `OpenAIFetchResult`, while the new builder requires the OpenAI union member.
 
-## Task 12: Refactor orchestrator in `provider-metrics.ts`
+### GREEN
+
+Keep the existing page, pagination, and aggregation logic. Construct:
+
+```text
+ProviderResult.provider = "openai_api"
+ProviderResult.costs = aggregated OpenAIMetric[]
+ProviderResult.modelUsage = aggregated OpenAITokenMetric[]
+ProviderResult.windows = []
+```
+
+Do not populate generic `usage.costUSD` for OpenAI. Map all typed transport, HTTP, schema, and parse errors to the fixed source ID. Preserve zero-valued token fields as metrics because the existing contract emits them.
+
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/openai-api.test.ts tests/provider-metrics/prometheus.test.ts
+```
+
+**Expected GREEN result:** Existing OpenAI metric names/labels and line-item/model values remain unchanged.
+
+### Commit
+
+```bash
+git add workers/src/provider-metrics/openai-api.ts workers/tests/provider-metrics/openai-api.test.ts
+git commit -m "refactor(provider-metrics): OpenAIをProviderResultへ移行"
+```
+
+## Task 12: Refactor orchestrator and verify health-only push
 
 **Files:**
+
 - Modify: `workers/src/provider-metrics.ts`
 - Modify: `workers/tests/provider-metrics/scheduled.test.ts`
 
-**Interfaces:**
-- Consumes: `runAdapters` from Task 4, `buildHealthMetrics` from Task 2, `buildProviderMetrics` + `pushProviderMetrics` from Task 3, all adapters from Tasks 5–11.
-- Produces: `ProviderDiagnosticReport` and OTLP push.
+**Consumes:** Registry from Task 4, all adapters from Tasks 5–11, metric builders from Tasks 2–3.
 
-- [ ] **Step 1: Rewrite `provider-metrics.ts`**
+**Dependency:** Tasks 2–11.
 
-Replace the contents of `workers/src/provider-metrics.ts` with:
+**Produces:** Complete diagnostic report and one data-plus-health OTLP push path.
 
-```ts
-import { runAdapters } from "./provider-metrics/adapters";
-import { commandCodeAdapter } from "./provider-metrics/commandcode";
-import { fetchCodexMetrics } from "./provider-metrics/codex";
-import { buildHealthMetrics } from "./provider-metrics/health";
-import { ollamaAdapter } from "./provider-metrics/ollama";
-import { openCodeGoAdapter } from "./provider-metrics/opencodego";
-import { fetchOpenAIMetrics } from "./provider-metrics/openai-api";
-import { pushProviderMetrics } from "./provider-metrics/prometheus";
-import type { AdapterOutcome, ProviderContext, ProviderMetricsEnv, ProviderResult } from "./provider-metrics/types";
+### RED
 
-export interface ProviderMetricsWorker {
-  scheduled(event: ScheduledEvent, env: ProviderMetricsEnv, ctx: ExecutionContext): Promise<void>;
-  fetch?(request: Request, env: ProviderMetricsEnv, ctx: ExecutionContext): Promise<Response>;
-}
+Rewrite scheduled tests with wire-level assertions on the POST body. Add these scenarios:
 
-export interface ProviderDiagnosticReport {
-  timestamp: string;
-  providers: Record<string, { status: "skipped" | "success" | "failed"; error?: string }>;
-  prometheusPush: { status: "skipped" | "success" | "failed"; statusCode?: number };
-}
+1. One success, one empty, one failure, and one skipped provider. Assert report status for every provider and health status/timestamp semantics.
+2. All configured providers fail. Assert one POST occurs and its metrics include `provider_metrics_scrape_success` and `provider_metrics_scrape_duration_seconds` for every attempted provider.
+3. All providers are skipped. Assert no POST occurs.
+4. Successful data plus health metrics. Assert both are present in the same OTLP payload.
+5. Ollama API failure plus HTML fallback success. Assert only fallback provenance.
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function adapterOutcomeToReport(
-  provider: string,
-  outcome: AdapterOutcome,
-): { status: "success" | "failed"; error?: string } {
-  if (outcome.status === "success" || outcome.status === "empty") {
-    return { status: "success" };
-  }
-  return { status: "failed", error: `${outcome.error.kind}:${outcome.error.sourceId}` };
-}
-
-const registry = [
-  { provider: "openai_api" as const, credentialKey: "OPENAI_ADMIN_API_KEY" as const, adapter: openAiAdapter },
-  { provider: "codex" as const, credentialKey: "CODEX_ACCESS_TOKEN" as const, adapter: codexAdapter },
-  { provider: "opencodego" as const, credentialKey: "OPENCODEGO_API_KEY" as const, adapter: openCodeGoAdapter },
-  { provider: "ollama_cloud" as const, credentialKey: "OLLAMA_API_KEY" as const, adapter: ollamaAdapter },
-  { provider: "commandcode" as const, credentialKey: "COMMAND_CODE_API_KEY" as const, adapter: commandCodeAdapter },
-];
-
-function openAiAdapter(env: ProviderMetricsEnv, ctx: ProviderContext): ReturnType<typeof fetchOpenAIMetrics> {
-  const rawHistoryDays = env.OPENAI_API_HISTORY_DAYS;
-  const candidateHistoryDays = rawHistoryDays === undefined ? 1 : Number(rawHistoryDays);
-  const historyDays =
-    Number.isInteger(candidateHistoryDays) && candidateHistoryDays >= 1 && candidateHistoryDays <= 31
-      ? candidateHistoryDays
-      : undefined;
-
-  if (rawHistoryDays !== undefined && historyDays === undefined) {
-    console.error(
-      `Provider metrics: OPENAI_API_HISTORY_DAYS="${rawHistoryDays}" は無効です。1 から 31 の整数が必要です。OpenAI fetch をスキップします。`,
-    );
-  }
-
-  if (historyDays === undefined) {
-    return Promise.resolve({
-      status: "failed",
-      error: { kind: "schema", provider: "openai_api", sourceId: "openai-organization-api" },
-    });
-  }
-
-  return fetchOpenAIMetrics(env.OPENAI_ADMIN_API_KEY!, historyDays, ctx.fetchFn, ctx.scheduledTimeSeconds * 1000);
-}
-
-function codexAdapter(env: ProviderMetricsEnv, ctx: ProviderContext): ReturnType<typeof fetchCodexMetrics> {
-  return fetchCodexMetrics(
-    env.CODEX_ACCESS_TOKEN!,
-    env.CODEX_ACCOUNT_ID,
-    ctx.fetchFn,
-    env.CODEX_PROXY_URL || env.CODEX_API_BASE_URL,
-    ctx.browserBinding,
-    new Date(ctx.scheduledTimeSeconds * 1000),
-    env.CODEX_PROXY_SECRET,
-  );
-}
-
-export async function collectAndPushProviderMetrics(
-  env: ProviderMetricsEnv,
-  scheduledTime: number = Date.now(),
-): Promise<ProviderDiagnosticReport> {
-  const report: ProviderDiagnosticReport = {
-    timestamp: new Date(scheduledTime).toISOString(),
-    providers: {},
-    prometheusPush: { status: "skipped" },
-  };
-
-  const ctx: ProviderContext = {
-    fetchFn: fetch,
-    scheduledTimeSeconds: Math.floor(scheduledTime / 1000),
-    nowSeconds: () => Math.floor(Date.now() / 1000),
-    browserBinding: env.MYBROWSER,
-  };
-
-  const { outcomes, health, attempted } = await runAdapters(env, ctx, registry);
-
-  for (const provider of registry) {
-    const outcome = outcomes.find((o) =>
-      o.status === "failed" ? o.error.provider === provider.provider : false,
-    );
-    if (outcome) {
-      report.providers[provider.provider] = adapterOutcomeToReport(provider.provider, outcome);
-    } else {
-      report.providers[provider.provider] = { status: "skipped" };
-    }
-  }
-
-  if (!attempted) {
-    console.error("Provider metrics: No providers attempted (all skipped)");
-    return report;
-  }
-
-  const successfulResults: ProviderResult[] = outcomes
-    .filter((o): o is { status: "success"; result: ProviderResult } => o.status === "success")
-    .map((o) => o.result);
-
-  const nowUnixNano = `${Date.now()}000000`;
-  const metrics = [
-    ...buildProviderMetrics(successfulResults, nowUnixNano),
-    ...buildHealthMetrics(health, nowUnixNano),
-  ];
-
-  const pushResult = await pushProviderMetrics(env, successfulResults);
-
-  if (pushResult.ok) {
-    report.prometheusPush = { status: "success", statusCode: pushResult.status };
-  } else {
-    console.error(`Provider metrics: Prometheus push failed: status=${pushResult.status}`);
-    report.prometheusPush = { status: "failed", statusCode: pushResult.status };
-  }
-
-  return report;
-}
-
-const worker: ProviderMetricsWorker = {
-  async scheduled(event, env, _ctx) {
-    await collectAndPushProviderMetrics(env, event.scheduledTime);
-  },
-  async fetch(_request, env, _ctx) {
-    const report = await collectAndPushProviderMetrics(env, Date.now());
-    return new Response(JSON.stringify(report, null, 2), {
-      headers: { "Content-Type": "application/json" },
-    });
-  },
-};
-
-export default worker;
-```
-
-Note: `pushProviderMetrics` currently only accepts `ProviderResult[]`; the health metrics must also be included. Update `pushProviderMetrics` in Task 3 to accept an optional second `healthMetrics` array, or merge health metrics into the OTLP payload in the orchestrator by calling `buildOtlpPayload` directly. Prefer updating `pushProviderMetrics` signature to:
-
-```ts
-export async function pushProviderMetrics(
-  env: PrometheusEnv,
-  results: ProviderResult[],
-  healthMetrics?: Record<string, unknown>[],
-  fetchFn?: typeof fetch,
-): Promise<{ ok: boolean; status: number }>
-```
-
-- [ ] **Step 2: Update `pushProviderMetrics` to include health metrics**
-
-Modify `workers/src/provider-metrics/prometheus.ts` so `buildOtlpPayload` receives both data and health metrics:
-
-```ts
-function buildOtlpPayload(
-  results: ProviderResult[],
-  healthMetrics: Record<string, unknown>[],
-  nowUnixNano: string,
-): Record<string, unknown> {
-  // ... merge buildProviderMetrics(results, nowUnixNano) and healthMetrics
-}
-
-export async function pushProviderMetrics(
-  env: PrometheusEnv,
-  results: ProviderResult[],
-  healthMetrics: Record<string, unknown>[] = [],
-  fetchFn: typeof fetch = fetch,
-): Promise<{ ok: boolean; status: number }> {
-  // ...
-  const body = JSON.stringify(buildOtlpPayload(results, healthMetrics, nowUnixNano));
-  // ...
-}
-```
-
-- [ ] **Step 3: Update scheduled tests**
-
-Rewrite `workers/tests/provider-metrics/scheduled.test.ts` to:
-- Use `OPENCODEGO_API_KEY` and `OLLAMA_API_KEY` instead of session cookies where primary credentials are required.
-- Keep `OPENCODEGO_SESSION_COOKIE` and `OLLAMA_SESSION_COOKIE` for fallback/enrichment tests.
-- Add new provider response fixtures for `/zen/go/v1/usage`, `/api/usage`, and CommandCode endpoints.
-- Assert that health metrics appear in the pushed payload.
-- Assert that a health-only push occurs when all providers fail.
-
-- [ ] **Step 4: Run the tests**
-
-Run: `npx vitest run tests/provider-metrics/scheduled.test.ts`
-Expected: PASS.
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+**RED command:**
 
 ```bash
-git add workers/src/provider-metrics.ts workers/src/provider-metrics/prometheus.ts workers/tests/provider-metrics/scheduled.test.ts
-git commit -m "refactor(provider-metrics): orchestrator を adapter registry + health metric push に移行"
+npx vitest run tests/provider-metrics/scheduled.test.ts
 ```
 
----
+**Expected RED result:** The legacy orchestrator has no registry, no health payload, no health-only push, and no complete status mapping.
 
-## Task 13: Final verification and documentation
+### GREEN
+
+Define the registry with one fixed credential key and adapter per provider. Build `ProviderContext` with `nowSeconds` and `monotonicNowMs` seams. Call `runAdapters()` once.
+
+Build the report by iterating the registry and joining each provider with its execution record. Map adapter statuses exactly:
+
+```text
+skipped -> skipped
+success -> success
+empty   -> empty
+failed  -> failed with kind:sourceId diagnostic
+```
+
+When `attempted` is false, return without POST. When `attempted` is true, build data metrics from successful results, build health metrics from all health outcomes, and call:
+
+```ts
+pushProviderMetrics(env, {
+  results: successfulResults,
+  healthMetrics,
+  nowUnixNano,
+  nowSeconds,
+});
+```
+
+The push function must receive health metrics even when `successfulResults` is empty. Do not create and discard an intermediate metrics array. Use the same timestamps for the entire payload.
+
+**GREEN command:**
+
+```bash
+npx vitest run tests/provider-metrics/scheduled.test.ts
+npm run typecheck
+```
+
+**Expected GREEN result:** Scheduled integration tests and the first global typecheck pass. No known consumer compile failure remains.
+
+### Commit
+
+```bash
+git add workers/src/provider-metrics.ts workers/tests/provider-metrics/scheduled.test.ts
+git commit -m "refactor(provider-metrics): orchestratorをhealth push対応へ移行"
+```
+
+## Task 13: Update operator documentation and run final gates
 
 **Files:**
+
 - Modify: `docs/provider-metrics.md`
-- Modify: `workers/src/provider-metrics/types.ts` (add `modelUsage` if not done in Task 11)
 
-- [ ] **Step 1: Add `modelUsage` to `ProviderResult`**
+**Consumes:** The final contracts implemented by Tasks 1–12.
 
-In `workers/src/provider-metrics/types.ts`, add:
+**Dependency:** Tasks 1–12.
 
-```ts
-export interface ProviderModelUsage {
-  model: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cachedTokens?: number;
-  requests?: number;
-}
-```
+**Produces:** Operator documentation for credentials, source support, exact metrics, health semantics, and fallback ownership.
 
-And add `modelUsage?: ProviderModelUsage[];` to `ProviderResult`.
+### RED
 
-- [ ] **Step 2: Update documentation**
-
-In `docs/provider-metrics.md`, add a section listing:
-- New primary credentials: `OPENCODEGO_API_KEY`, `OLLAMA_API_KEY`, `COMMAND_CODE_API_KEY`.
-- Fallback/enrichment credentials: `OPENCODEGO_SESSION_COOKIE`, `OLLAMA_SESSION_COOKIE`.
-- Source support levels table matching §8.7 of the spec.
-- New metric names for CommandCode and scrape health.
-
-- [ ] **Step 3: Run full CI gates**
-
-Run:
+From the repository root, run the documentation contract check below before editing `docs/provider-metrics.md`:
 
 ```bash
-cd workers
+required='OPENCODEGO_API_KEY OLLAMA_API_KEY COMMAND_CODE_API_KEY opencodego_zen_balance_usd opencodego_reset_seconds_remaining ollama_cloud_model_requests ollama_cloud_activity_cost_usd provider_metrics_scrape_success'
+for word in $required; do grep -F "$word" docs/provider-metrics.md >/dev/null || exit 1; done
+```
+
+**Expected RED result:** At least one new credential, metric, or health contract is absent from the operator document.
+
+### GREEN
+
+Add sections for:
+
+- primary credentials and fallback/enrichment credentials;
+- source IDs and support levels;
+- exact OpenAI, OpenCode Go, Ollama, CommandCode, and health metric names;
+- empty versus failed health semantics;
+- health-only push and all-skipped no-push behavior;
+- Ollama API success enrichment versus API request-failure fallback;
+- Codex Browser Rendering ownership.
+
+Run the same contract check after the edit.
+
+**GREEN command:** From `workers/`, run:
+
+```bash
 npm run typecheck
-npm run test
+npm test
 npm run fmt:check
 ```
 
-Expected: all pass.
-
-Run from repo root:
+From the repository root, run:
 
 ```bash
 make validate
 ```
 
-Expected: PASS (or equivalent non-zero exit on failure; fix any issues).
+**Expected GREEN result:** The documentation contract check, Worker typecheck, Worker test suite, formatter check, and repository validation all pass.
 
-- [ ] **Step 4: Commit**
+### Commit
 
 ```bash
-git add docs/provider-metrics.md workers/src/provider-metrics/types.ts
-git commit -m "docs(provider-metrics): 新 credential、metric、source support level を記載"
+git add docs/provider-metrics.md
+git commit -m "docs(provider-metrics): 新しいcredentialとmetric契約を記載"
 ```
 
----
+## Traceability
 
-## Self-Review
+| Contract                                | Design location        | Implementing task        | Required test evidence                                                |
+| --------------------------------------- | ---------------------- | ------------------------ | --------------------------------------------------------------------- |
+| OpenAI existing metric compatibility    | `§6.4`, `§7.2`, `§9.3` | Tasks 3, 11, 12          | line-item and model-label assertions                                  |
+| OpenCode Go Zen balance                 | `§6.1`, `§7.2`         | Task 6                   | `zenBalanceUSD` source/metric assertion                               |
+| OpenCode Go reset-seconds compatibility | `§7.2`, `§9.3`         | Task 3                   | injected `nowSeconds` formula assertion                               |
+| Ollama model requests                   | `§6.2`, `§7.2`, `§9.3` | Tasks 3, 7               | session/weekly period and model-label assertions                      |
+| Ollama activity cost                    | `§6.2`, `§7.2`         | Tasks 3, 7               | exact `ollama_cloud_activity_cost_usd` assertion                      |
+| Ollama fallback/enrichment precedence   | `§6.2`, `§8.1`         | Task 8                   | API 200 fatal, API success enrichment, request-failure fallback tests |
+| CommandCode endpoint error ownership    | `§6.3`, `§8.7`         | Task 9                   | endpoint table-driven source assertions                               |
+| Codex browser fallback ownership        | `§6.5`, `§8.7`         | Task 10                  | browser success/failure/binding-unavailable tests                     |
+| Timeout/network distinction             | `§4.3`, `§8.2`, `§8.3` | Tasks 1, 5, 7, 9, 10, 11 | typed transport and adapter category assertions                       |
+| Scrape duration completion semantics    | `§4.4`, `§7.5`         | Tasks 2, 4, 12           | fast/slow deferred adapter test                                       |
+| Scrape timestamp completion semantics   | `§4.4`, `§7.5`         | Tasks 2, 4, 12           | immediate completion timestamp assertion                              |
+| Health-only push                        | `§4.4`, `§7.6`, `§8.1` | Tasks 3, 12              | all-failed payload contains health metrics                            |
+| All-skipped no-push                     | `§4.4`, `§8.1`         | Task 12                  | POST count remains zero                                               |
 
-### 1. Spec coverage
+## Final Self-Review
 
-| Spec section | Implementing task |
-|---|---|
-| §4.1 common adapter pattern | Tasks 1, 4 |
-| §4.2 internal representation (`ProviderResult`, etc.) | Task 1 |
-| §4.3 adapter outcome / precedence / schema ownership | Tasks 5, 7, 8, 9, 10, 11 |
-| §4.4 orchestrator flow / health-only push | Tasks 4, 12 |
-| §5 file structure | All tasks |
-| §6.1 OpenCode Go API-key + Zen enrichment | Tasks 5, 6 |
-| §6.2 Ollama API-key + HTML fallback/enrichment | Tasks 7, 8 |
-| §6.3 CommandCode | Task 9 |
-| §6.4 OpenAI | Task 11 |
-| §6.5 Codex + Browser Rendering fallback | Task 10 |
-| §7 metric design | Tasks 2, 3, 12 |
-| §8 error handling / security / label cardinality | Enforced in all adapter tasks |
-| §9 config migration | Task 13 |
-| §10 testing | Each task |
-| §11 acceptance criteria | Verified by CI gates in Task 13 |
+### Type and interface checklist
 
-### 2. Placeholder scan
+- `ProviderResult` is a provider-discriminated union.
+- OpenAI line items and model usage are retained until the builder.
+- OpenCode Go Zen balance cannot become a generic credits metric.
+- Ollama model requests include `period` and `model`; activity cost has its exact field.
+- `ProviderContext` has both injectable clocks.
+- `ProviderErrorKind` includes network, timeout, HTTP 4xx/5xx, schema, and parse.
+- Fixed source IDs are endpoint-specific and not inferred from error strings.
+- `pushProviderMetrics` requires data and health input together.
+- Diagnostic status preserves skipped, success, empty, and failed.
 
-No placeholders remain. Every task includes concrete file paths, code blocks, test commands, and expected results.
+### Plan consistency checklist
 
-### 3. Type consistency
+- Every task has Files, Consumes, Produces, Dependency context, RED test, RED command, expected RED result, minimum GREEN implementation, GREEN command, expected GREEN result, and commit boundary.
+- No task claims global typecheck success while a known consumer remains broken.
+- No task contains an unresolved implementation choice.
+- No task contains a placeholder implementation block.
+- The metric test asserts the shape produced by the builder.
+- The traceability table covers all listed metric, error, ownership, timing, and push contracts.
+- Only the source files listed in the task being executed may be changed during implementation.
 
-- `ProviderContext.nowSeconds` is `() => number`.
-- `AdapterOutcome` is a closed union.
-- `QuotaWindow.period` is the closed `QuotaPeriod` set.
-- `ProviderResult.sources` uses `ProviderSource` with `SourceRole`.
-- `pushProviderMetrics` accepts both data and health metrics in Task 12.
+### Final verification commands
 
----
+```bash
+git diff --check
+git status --short
+```
 
-## Execution Handoff
+From `workers/`:
 
-**Plan complete and saved to `docs/superpowers/plans/2026-09-20-provider-usage-metrics-extension.md`.**
+```bash
+npm run typecheck
+npm test
+npm run fmt:check
+```
 
-Two execution options:
+From the repository root:
 
-1. **Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration.
-2. **Inline Execution** — Execute tasks in this session using `executing-plans`, batch execution with checkpoints.
+```bash
+make validate
+```
 
-**Which approach?**
+The implementation is not ready for handoff until all commands pass and the working tree contains only the intended task changes.

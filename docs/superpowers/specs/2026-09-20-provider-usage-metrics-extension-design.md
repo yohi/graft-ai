@@ -74,17 +74,10 @@ CommandCode ─────┘
 
 ```ts
 export type ProviderId =
-  | "openai_api"
-  | "codex"
-  | "opencodego"
-  | "ollama_cloud"
-  | "commandcode";
+  "openai_api" | "codex" | "opencodego" | "ollama_cloud" | "commandcode";
 
 export type SupportLevel =
-  | "official-public"
-  | "official-internal"
-  | "web-internal"
-  | "scraping";
+  "official-public" | "official-internal" | "web-internal" | "scraping";
 
 export type SourceRole = "primary" | "enrichment" | "fallback";
 
@@ -129,19 +122,60 @@ export interface ProviderUsageSummary {
   tokens?: number;
 }
 
-export interface ProviderResult {
-  provider: ProviderId;
+export interface OpenAICostMetric {
+  lineItem: string;
+  costUSD: number;
+}
+
+export interface ProviderModelUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  requests: number;
+}
+
+export interface ProviderModelRequest {
+  period: "session" | "weekly";
+  model: string;
+  requestCount: number;
+}
+
+export interface ProviderResultBase<P extends ProviderId> {
+  provider: P;
   /** Sources that actually contributed to this result, not supported sources. */
   sources: ProviderSource[];
   windows: QuotaWindow[];
-  plan?: string;
-  subscription?: ProviderSubscription;
-  credits?: ProviderCredits;
-  usage?: ProviderUsageSummary;
 }
+
+export type ProviderResult =
+  | (ProviderResultBase<"openai_api"> & {
+      costs: OpenAICostMetric[];
+      modelUsage: ProviderModelUsage[];
+    })
+  | (ProviderResultBase<"codex"> & {
+      plan?: string;
+      credits?: ProviderCredits;
+    })
+  | (ProviderResultBase<"opencodego"> & {
+      zenBalanceUSD?: number;
+    })
+  | (ProviderResultBase<"ollama_cloud"> & {
+      plan?: string;
+      modelRequests: ProviderModelRequest[];
+      activityCostUSD?: number;
+    })
+  | (ProviderResultBase<"commandcode"> & {
+      plan?: string;
+      subscription?: ProviderSubscription;
+      credits?: ProviderCredits;
+      usage?: ProviderUsageSummary;
+    });
 ```
 
 `rawPeriod` は診断用の値であり、任意の文字列を Prometheus label に流用しない。未知の source period はその window を emit せず、必要な場合だけ安全な diagnostic report に記録する。
+
+`ProviderResult` は `provider` を discriminator とする closed union である。provider 固有 metric の payload は対応する union member に必ず保持し、共通 `usage` へ異なる意味の値を畳み込まない。OpenAI の `costs` と `modelUsage`、OpenCode Go の `zenBalanceUSD`、Ollama の `modelRequests` と `activityCostUSD` はそれぞれ専用 field を使用する。builder は `provider` の exhaustive dispatch で exact metric name と label を選択する。
 
 `sources` は adapter が実際に result の生成へ寄与した取得経路だけを含む。registry が提供する静的な supported-source metadata は runtime provenance と別の metadata として扱い、`ProviderResult` の `sources` には含めない。
 
@@ -156,13 +190,14 @@ export type ProviderAdapter = (
 ) => Promise<AdapterOutcome>;
 ```
 
-`ProviderContext` は次の interface を使用する。`ScheduledEvent.scheduledTime` は milliseconds であるため、orchestrator が一度だけ `Math.floor(event.scheduledTime / 1000)` へ変換して渡す。`nowSeconds` は health timestamp と enrichment の判定時刻に使い、テストでは固定値を注入する。
+`ProviderContext` は次の interface を使用する。`ScheduledEvent.scheduledTime` は milliseconds であるため、orchestrator が一度だけ `Math.floor(event.scheduledTime / 1000)` へ変換して渡す。`nowSeconds` は health timestamp と enrichment の判定時刻に使い、`monotonicNowMs` は adapter invocation の duration 計測だけに使う。いずれもテストでは固定値を注入する。
 
 ```ts
 export interface ProviderContext {
   fetchFn: typeof fetch;
   scheduledTimeSeconds: number;
   nowSeconds: () => number;
+  monotonicNowMs: () => number;
   browserBinding?: Fetcher;
 }
 ```
@@ -173,6 +208,7 @@ adapter の return type は次の closed outcome とする。credential がな�
 export type ProviderErrorKind =
   | "auth"
   | "forbidden"
+  | "upstream_4xx"
   | "rate_limit"
   | "upstream_5xx"
   | "network"
@@ -193,7 +229,7 @@ export type AdapterOutcome =
   | { status: "failed"; error: ProviderError };
 ```
 
-`empty` は response を正常に取得・検証したが、出力対象の data point がない状態であり、health 上は scrape success とする。`failed` は primary request の中間状態ではなく、Provider-specific recovery / status interpretation を適用した後の最終 outcome である。required primary result を recovery 後も成立させられない request failure（auth、forbidden、rate limit、upstream 5xx、network、timeout を含む）、または required primary contract を満たせない fatal な schema/parse failure に限る。
+`empty` は response を正常に取得・検証したが、出力対象の data point がない状態であり、health 上は scrape success とする。`failed` は primary request の中間状態ではなく、Provider-specific recovery / status interpretation を適用した後の最終 outcome である。required primary result を recovery 後も成立させられない request failure（auth、forbidden、upstream 4xx、rate limit、upstream 5xx、network、timeout を含む）、または required primary contract を満たせない fatal な schema/parse failure に限る。
 
 required primary source の transport、HTTP status、fallback / recovery に関する最終 outcome は、次の precedence で一意に決定する。
 
@@ -205,6 +241,8 @@ required primary source の transport、HTTP status、fallback / recovery に関
 6. recovery が存在しない、利用不能、または失敗し、success / empty の contract を満たせない場合だけ `AdapterOutcome.failed` とする。
 
 この precedence では、transport / HTTP status / fallback に関する Provider-specific contract を generic failure rule より優先する。recovery で result が成立した場合は、失敗した primary source を success result の provenance に含めない。response が正常に取得された後の schema / parse failure、optional field failure、optional enrichment-source failure の ownership は、以下の三分類と §6.x の Provider-specific rule に従い、この precedence によって変更しない。
+
+`getWithRetry()` は retry exhausted の transport failure を typed `HttpTransportError` として返し、`kind` に `network` または `timeout` を保持する。raw exception message、response body、credential は `HttpTransportError` の公開情報に含めない。HTTP response を取得できた場合は adapter が status を endpoint 固有の `ProviderError.sourceId` と結び付ける。adapter wrapper の予期しない rejection は contract-violation isolation としてのみ扱い、通常の transport / HTTP / schema / parse 分類には使用しない。
 
 schema / parse failure の ownership は次の順序で決定する。
 
@@ -219,10 +257,12 @@ schema / parse failure の ownership は次の順序で決定する。
 1. orchestrator が Provider ごとの credential の有無を判定する。credential がない Provider は `skipped` とし、adapter を呼び出さない。
 2. credential がある Provider の adapter を `Promise.allSettled` で並列実行する。
 3. adapter は `AdapterOutcome` を返し、orchestrator は result、failure、empty を分離する。
-4. adapter invocation の開始から最終 outcome まで（retry と enrichment を含む）を計測し、scrape health metric を生成する。
+4. 各 adapter invocation の直前に monotonic start を取得し、adapter promise が settle した直後に monotonic end と success/empty timestamp を取得する。retry と enrichment は同じ計測区間に含める。
 5. 成功した Provider の data metric と、試行した全 Provider の health metric を共通 OTLP builder で生成する。
 6. 少なくとも1 Provider が試行された場合は、data metric が0件でも health-only payload を Grafana Cloud へ push する。
 7. 全 Provider が credential 不足で skipped の場合だけ push を省略する。
+
+diagnostic report の provider status は `skipped`、`success`、`empty`、`failed` の4値とする。`empty` は health metric では `scrape_success=1` として扱うが、report では `empty` を保持する。registry の provider 順序で全 status を生成し、success/empty/failed の outcome を skipped に変換しない。
 
 ## 5. ファイル構成
 
@@ -248,6 +288,8 @@ workers/src/provider-metrics/
 ```
 
 runtime schema validation は新規 validation library を追加せず、各 Provider module の `unknown` 入力に対する type guard と numeric/date validator で実装する。`workers/package.json` の依存関係は変更しない。JSON Schema library を導入する設計は採用しない。
+
+共有 retry helper の typed transport error seam と、その unit test のため `workers/src/http-retry.ts` は変更対象に含める。provider adapter はこの seam を介して network/timeout を source-local な `ProviderError` へ変換する。
 
 ## 6. Provider 別設計
 
@@ -297,6 +339,7 @@ expected response は次の JSON shape とする。`usage` と3 window は必須
 - `rolling`、`weekly`、`monthly` をそれぞれ canonical period の `rolling`、`weekly`、`monthly` へ変換する。`usage` または各 required window の欠落、`status` / `percent` の型・範囲不正は required primary contract の fatal `schema` failure とする。`resetsAt` は optional field とし、欠落は正常として扱い、存在しても ISO 8601 として parse できない場合は reset metric だけを omit して quota result を `success` とする。この場合は `ProviderError` を返さない。
 - Zen balance は Go usage endpoint が返さない場合のみ、既存 cookie/RPC adapter を `enrichment` として実行する。
 - Zen balance 取得失敗は Go quota の失敗にせず、`opencodego_zen_balance_usd` を emit しない。
+- Zen balance が取得できた場合は `ProviderResult.zenBalanceUSD` へ格納する。`ProviderCredits.remaining` は使用せず、共通 credits builder から `opencodego_credits_remaining` を生成してはならない。
 - Cookie/RPC 経路を primary にしない。
 
 **Support level:** `official-internal`
@@ -362,13 +405,15 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 
 `ollama_cloud_model_requests{period,model}` の source-to-label mapping は次のとおり固定する。
 
-| wire source                  | public metric                         | `period` value | handling                                      |
-| ---------------------------- | ------------------------------------- | -------------- | --------------------------------------------- |
-| `limits.session.models[]`    | `ollama_cloud_model_requests`         | `session`      | `request_count` を model ごとに emit          |
-| `limits.weekly.models[]`     | `ollama_cloud_model_requests`         | `weekly`       | `request_count` を model ごとに emit          |
-| `activity.models[]`          | なし                                  | なし           | `model_requests` には使用しない               |
+| wire source               | public metric                 | `period` value | handling                             |
+| ------------------------- | ----------------------------- | -------------- | ------------------------------------ |
+| `limits.session.models[]` | `ollama_cloud_model_requests` | `session`      | `request_count` を model ごとに emit |
+| `limits.weekly.models[]`  | `ollama_cloud_model_requests` | `weekly`       | `request_count` を model ごとに emit |
+| `activity.models[]`       | なし                          | なし           | `model_requests` には使用しない      |
 
 同じ `model` が session と weekly の双方に存在する場合は、別の `period` series として独立して emit し、合算・dedupe しない。同一 window の同一 model が複数 entry に分かれている場合は、その window 内で `request_count` を合算して1 seriesにする。不正な model entry は該当 entry だけを omit する。`activity.period.type` の値から `monthly` などの label を合成しない。
+
+API adapter は validated な model entry を `ProviderResult.modelRequests` へ保持し、`activity.cost` は `ProviderResult.activityCostUSD` へ保持する。これらを `ProviderResult.usage` の `requests` / `costUSD` に変換しない。builder は `modelRequests` から `ollama_cloud_model_requests{period,model}` を、`activityCostUSD` から `ollama_cloud_activity_cost_usd` を生成する。
 
 **Support level:** `official-internal`（`/api/usage`）、`scraping`（`/settings` HTML）。`ollama-api-usage` は `primary` とし、`ollama-settings-html` は JSON API 成功時の不足 field 補完では `enrichment`、API 失敗時の ProviderResult 代替では `fallback` とする。
 
@@ -384,12 +429,12 @@ Command Code CLI の convention に合わせ、project-local alias `COMMANDCODE_
 
 使用する endpoint は次の4つに限定する。
 
-| endpoint path                         | method | query parameters                                      | body | required headers                                  | input dependency                                      | success status |
-| ------------------------------------- | ------ | ----------------------------------------------------- | ---- | ------------------------------------------------- | ----------------------------------------------------- | -------------- |
-| `/alpha/whoami`                       | GET    | `limits=1`                                            | none | `Authorization`, `Content-Type: application/json` | none                                                  | `200`          |
-| `/alpha/billing/credits`              | GET    | `orgId=<whoami.org.id>`                               | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`                                       | `200`          |
-| `/alpha/billing/subscriptions`        | GET    | `orgId=<whoami.org.id>`                               | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`                                       | `200`          |
-| `/alpha/usage/summary`                | GET    | `orgId=<whoami.org.id>`; `since=<currentPeriodStart>`（存在時） | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`; subscription `data.currentPeriodStart` | `200`          |
+| endpoint path                  | method | query parameters                                                | body | required headers                                  | input dependency                                        | success status |
+| ------------------------------ | ------ | --------------------------------------------------------------- | ---- | ------------------------------------------------- | ------------------------------------------------------- | -------------- |
+| `/alpha/whoami`                | GET    | `limits=1`                                                      | none | `Authorization`, `Content-Type: application/json` | none                                                    | `200`          |
+| `/alpha/billing/credits`       | GET    | `orgId=<whoami.org.id>`                                         | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`                                         | `200`          |
+| `/alpha/billing/subscriptions` | GET    | `orgId=<whoami.org.id>`                                         | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`                                         | `200`          |
+| `/alpha/usage/summary`         | GET    | `orgId=<whoami.org.id>`; `since=<currentPeriodStart>`（存在時） | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`; subscription `data.currentPeriodStart` | `200`          |
 
 全 endpoint の URL は `https://api.commandcode.ai` と path を連結し、query parameter は URL encoding する。`since` は subscription response に有効な `data.currentPeriodStart` がある場合だけ付け、ない場合は `orgId` だけを送る。4 endpoint とも request body は持たない。
 
@@ -482,7 +527,7 @@ failure ownership は次のとおり固定する。
 - `whoami` failure、`org.id` 欠落、または `billing/credits` failure → CommandCode provider failure。plan/credits/quota を push payload に含めない。
 - `billing/subscriptions` failure → credits/quota は success のまま、plan/status/billing period end を omit。
 - `usage/summary` failure → credits/quota は success のまま、usage summary metric を omit。
-- 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、5xx は `upstream_5xx`、network error は `network`、timeout は `timeout` とする。required primary endpoint の JSON shape 不一致、wire contract 上 required な numeric field の型・範囲不正、required な timestamp string の parse 不能は、それぞれ required primary contract の `schema` / `parse` failure として `ProviderError` を生成する。ただし、optional な `resetAt`、`currentPeriodStart`、`currentPeriodEnd` の扱いは上記の field-level omission を優先し、CommandCode provider failure や `ProviderError` にはしない。subscription / summary の optional enrichment-source failure も同様に partial success として扱う。
+- 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、500 以上は `upstream_5xx`、その他の non-2xx は `upstream_4xx`、network error は `network`、timeout は `timeout` とする。required primary endpoint の JSON shape 不一致、wire contract 上 required な numeric field の型・範囲不正、required な timestamp string の parse 不能は、それぞれ required primary contract の `schema` / `parse` failure として `ProviderError` を生成する。ただし、optional な `resetAt`、`currentPeriodStart`、`currentPeriodEnd` の扱いは上記の field-level omission を優先し、CommandCode provider failure や `ProviderError` にはしない。subscription / summary の optional enrichment-source failure も同様に partial success として扱う。
 - undocumented API の依存は `commandcode/` ディレクトリ内に閉じ、response body、Authorization header、API key は error、log、diagnostic report、metric label のいずれにも出力しない。
 
 `ProviderError.sourceId` は endpoint ごとに `whoami` → `commandcode-whoami`、`billing/credits` → `commandcode-billing-credits`、`billing/subscriptions` → `commandcode-billing-subscriptions`、`usage/summary` → `commandcode-usage-summary` と固定する。
@@ -530,6 +575,8 @@ failure ownership は次のとおり固定する。
 
 `usageRatio` の public range は全 Provider で `0..1` とする。wire の使用量と上限を持つ Provider は、raw value と public ratio の normalization を Provider 別設計で固定し、共通 builder は既に検証済みの `QuotaWindow` を再解釈しない。
 
+builder の時間引数は `buildProviderMetrics(results, nowUnixNano, nowSeconds)` とする。`opencodego_reset_seconds_remaining{period}` は各 window の `resetTimestampSeconds` から `Math.max(resetTimestampSeconds - nowSeconds, 0)` で算出する。`nowSeconds` は呼び出し元から注入し、builder 内で wall clock を直接読まない。
+
 ### 7.2 Provider 固有 metric
 
 ```text
@@ -547,6 +594,7 @@ codex_reset_credits_available_count
 codex_plan_info{plan}
 
 # OpenCodeGo
+opencodego_reset_seconds_remaining{period}
 opencodego_zen_balance_usd
 
 # Ollama Cloud
@@ -570,6 +618,16 @@ commandcode_usage_tokens
 ```
 
 `ollama_cloud_model_requests{period,model}` は §6.2 の mapping と model-label policy に従い、validated model identifier だけを `model` label に使用する。`limits.session.models[]` だけを `period="session"`、`limits.weekly.models[]` だけを `period="weekly"` として emit し、invalid / oversized / unsupported な model string は data point を emit しない。`activity.models[]` はこの metric に使用しない。同じ model の session/weekly request は別 series であり、`monthly` series は生成しない。不正な model entry は該当 entry だけを omit し、同一 window 内の同じ `period` と exact model identifier は request count を合算する。
+
+Provider 固有 field と metric の対応は次のとおり固定する。
+
+| ProviderResult field                     | metric                                                                                                   | labels / value                       |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `openai_api.costs[].lineItem`, `costUSD` | `openai_api_cost_usd`                                                                                    | `line_item`, cost USD                |
+| `openai_api.modelUsage[]`                | `openai_api_input_tokens`, `openai_api_output_tokens`, `openai_api_cached_tokens`, `openai_api_requests` | `model`, corresponding numeric field |
+| `opencodego.zenBalanceUSD`               | `opencodego_zen_balance_usd`                                                                             | no label, balance USD                |
+| `ollama_cloud.modelRequests[]`           | `ollama_cloud_model_requests`                                                                            | `period`, `model`, request count     |
+| `ollama_cloud.activityCostUSD`           | `ollama_cloud_activity_cost_usd`                                                                         | no label, activity cost USD          |
 
 ### 7.3 存在しない値の扱い
 
@@ -603,8 +661,8 @@ provider_metrics_scrape_duration_seconds{provider}
 
 - `provider` は `ProviderId` の closed set だけを使用する。
 - `scrape_success`: adapter を試行し、response を正常に処理できた場合は `1`（data が空の `empty` を含む）、failure は `0`、credential 不足の skipped は emit しない。
-- `scrape_timestamp_seconds`: success または empty の outcome 完了時に `ProviderContext.nowSeconds()` の値を emit する。failure 時はこの series を更新しないため、Grafana 側に保存された最新値が last successful scrape time になる。Worker は値を永続保持しない。
-- `scrape_duration_seconds`: adapter invocation の開始直前から最終 outcome までの秒数。retry、timeout、optional enrichment を含み、success/failure/empty の全試行で emit する。
+- `scrape_timestamp_seconds`: success または empty の outcome が settle した直後に取得した `ProviderContext.nowSeconds()` の値を emit する。failure 時はこの series を更新しないため、Grafana 側に保存された最新値が last successful scrape time になる。Worker は値を永続保持しない。
+- `scrape_duration_seconds`: adapter invocation の開始直前に取得した `ProviderContext.monotonicNowMs()` から、同じ adapter promise が settle した直後に取得した値までの秒数。retry、timeout、optional enrichment を含み、success/failure/empty の全試行で emit する。他 provider の settle 待機時間は含めない。
 - last success query は `last_over_time(provider_metrics_scrape_timestamp_seconds{provider="..."}[2h])` とし、`time() - last_over_time(...)` で経過秒を求める。2時間以内に成功値がなければ stale と判定する。
 
 ### 7.6 Stale data 防止
@@ -639,6 +697,8 @@ provider_metrics_scrape_duration_seconds{provider}
 | schema / parse error | なし     |
 
 bounded exponential backoff を使用する。
+
+retry exhausted の network/timeout は `HttpTransportError.kind` を保持して adapter へ渡す。HTTP response が存在する 401/403/429/5xx とその他の non-2xx は response status を失わず、adapter がそれぞれ `auth` / `forbidden` / `rate_limit` / `upstream_5xx` / `upstream_4xx` へ変換する。schema / parse error は response status と混同しない。
 
 ### 8.3 Timeout
 
@@ -688,19 +748,19 @@ Ollama の `ollama_cloud_model_requests{period,model}` における `model` labe
 
 各取得経路は source ID、`supportLevel`、`SourceRole` をコードとドキュメントで明示する。ただし、adapter 内部 prerequisite は `ProviderResult.sources` の provenance source ではないため、`SourceRole` を割り当てず、source ID を error ownership 用にだけ使用する。
 
-| source ID                         | provider       | support level       | role / `ProviderResult.sources` handling             |
-| --------------------------------- | -------------- | ------------------- | ---------------------------------------------------- |
-| `openai-organization-api`         | `openai_api`   | `official-public`   | primary                                              |
-| `codex-wham-usage`                | `codex`        | `official-internal` | primary                                              |
-| `codex-browser-rendering`         | `codex`        | `web-internal`      | fallback                                             |
-| `opencodego-usage-api`            | `opencodego`   | `official-internal` | primary                                              |
-| `opencodego-zen-rpc`              | `opencodego`   | `web-internal`      | enrichment                                          |
-| `ollama-api-usage`                | `ollama_cloud` | `official-internal` | primary                                              |
-| `ollama-settings-html`            | `ollama_cloud` | `scraping`          | runtime: enrichment/fallback                         |
-| `commandcode-whoami`              | `commandcode`  | `official-internal` | internal prerequisite; never included in `sources`  |
-| `commandcode-billing-credits`     | `commandcode`  | `official-internal` | primary                                              |
-| `commandcode-billing-subscriptions` | `commandcode` | `official-internal` | enrichment                                          |
-| `commandcode-usage-summary`       | `commandcode`  | `official-internal` | enrichment                                          |
+| source ID                           | provider       | support level       | role / `ProviderResult.sources` handling           |
+| ----------------------------------- | -------------- | ------------------- | -------------------------------------------------- |
+| `openai-organization-api`           | `openai_api`   | `official-public`   | primary                                            |
+| `codex-wham-usage`                  | `codex`        | `official-internal` | primary                                            |
+| `codex-browser-rendering`           | `codex`        | `web-internal`      | fallback                                           |
+| `opencodego-usage-api`              | `opencodego`   | `official-internal` | primary                                            |
+| `opencodego-zen-rpc`                | `opencodego`   | `web-internal`      | enrichment                                         |
+| `ollama-api-usage`                  | `ollama_cloud` | `official-internal` | primary                                            |
+| `ollama-settings-html`              | `ollama_cloud` | `scraping`          | runtime: enrichment/fallback                       |
+| `commandcode-whoami`                | `commandcode`  | `official-internal` | internal prerequisite; never included in `sources` |
+| `commandcode-billing-credits`       | `commandcode`  | `official-internal` | primary                                            |
+| `commandcode-billing-subscriptions` | `commandcode`  | `official-internal` | enrichment                                         |
+| `commandcode-usage-summary`         | `commandcode`  | `official-internal` | enrichment                                         |
 
 Ollama の `ProviderResult.sources` は実際に result へ寄与した runtime path で role を決定する。JSON API が quota/activity を生成し、HTML が plan/reset の不足分を補った場合は `ollama-api-usage` を `primary`、`ollama-settings-html` を `enrichment` として追加する。JSON API が失敗し、HTML が ProviderResult 全体を代替して成功した場合は `ollama-settings-html` だけを `fallback` として追加し、失敗した API を `primary` として追加しない。HTML を呼ばなかった場合、または呼んでも result に有効な field を寄与しなかった場合は `ollama-settings-html` を追加しない。同一 adapter 実行の `ProviderResult.sources` に同じ source ID を複数 role で重複追加せず、実際の path に対応する role を1つだけ選択する。API failure が回復せず ProviderResult を生成しない場合の final `ProviderError.sourceId` は常に `ollama-api-usage` とし、元の API failure の `kind` / `statusCode` を保持する。HTML fallback の failure でこの ownership を置換しない。
 
@@ -759,20 +819,20 @@ MYBROWSER
 
 ### 9.3 Existing metric compatibility
 
-| Provider / metric                                                                                                  | 方針                                                                                                                            |
-| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `openai_api_*`                                                                                                     | unchanged。既存 name/label を維持                                                                                               |
-| `codex_usage_ratio{period}`                                                                                        | unchanged。`session` / `weekly` のみ維持                                                                                        |
-| `codex_reset_timestamp_seconds{period}`                                                                            | unchanged                                                                                                                       |
-| `codex_credits_remaining`、`codex_reset_credits`、`codex_reset_credits_available_count`、`codex_plan_info{plan}`   | unchanged。値が取得できない場合だけ data point を omit                                                                          |
-| `opencodego_usage_ratio{period}`                                                                                   | unchanged。`rolling` / `weekly` / `monthly` の label value を維持                                                               |
-| `opencodego_reset_timestamp_seconds{period}`                                                                       | unchanged                                                                                                                       |
-| `opencodego_reset_seconds_remaining{period}`                                                                       | retained compatibility metric。reset timestamp から `max(timestamp - now, 0)` を算出し、dashboard migration が完了するまで emit |
-| `opencodego_zen_balance_usd`                                                                                       | unchanged。取得不能時は omit                                                                                                    |
-| `ollama_cloud_usage_ratio{period}`、`ollama_cloud_reset_timestamp_seconds{period}`、`ollama_cloud_plan_info{plan}` | unchanged。存在しない window は emit しない                                                                                     |
-| `ollama_cloud_model_requests{period,model}`                                                                     | `limits.session.models[]` は `session`、`limits.weekly.models[]` は `weekly`。`activity.models[]` は使用せず、`monthly` label を生成しない |
-| `workers/src/ollama-cloud/prometheus.ts` の `ollama_cloud_reset_*`                                                 | provider-metrics Worker の変更対象外であり、既存 dashboard/alert contract を維持                                                |
-| `commandcode_*`                                                                                                    | 新規 metric。既存 compatibility はなし                                                                                          |
+| Provider / metric                                                                                                  | 方針                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `openai_api_*`                                                                                                     | unchanged。既存 name/label を維持                                                                                                          |
+| `codex_usage_ratio{period}`                                                                                        | unchanged。`session` / `weekly` のみ維持                                                                                                   |
+| `codex_reset_timestamp_seconds{period}`                                                                            | unchanged                                                                                                                                  |
+| `codex_credits_remaining`、`codex_reset_credits`、`codex_reset_credits_available_count`、`codex_plan_info{plan}`   | unchanged。値が取得できない場合だけ data point を omit                                                                                     |
+| `opencodego_usage_ratio{period}`                                                                                   | unchanged。`rolling` / `weekly` / `monthly` の label value を維持                                                                          |
+| `opencodego_reset_timestamp_seconds{period}`                                                                       | unchanged                                                                                                                                  |
+| `opencodego_reset_seconds_remaining{period}`                                                                       | retained compatibility metric。reset timestamp から `max(timestamp - now, 0)` を算出し、dashboard migration が完了するまで emit            |
+| `opencodego_zen_balance_usd`                                                                                       | unchanged。取得不能時は omit                                                                                                               |
+| `ollama_cloud_usage_ratio{period}`、`ollama_cloud_reset_timestamp_seconds{period}`、`ollama_cloud_plan_info{plan}` | unchanged。存在しない window は emit しない                                                                                                |
+| `ollama_cloud_model_requests{period,model}`                                                                        | `limits.session.models[]` は `session`、`limits.weekly.models[]` は `weekly`。`activity.models[]` は使用せず、`monthly` label を生成しない |
+| `workers/src/ollama-cloud/prometheus.ts` の `ollama_cloud_reset_*`                                                 | provider-metrics Worker の変更対象外であり、既存 dashboard/alert contract を維持                                                           |
+| `commandcode_*`                                                                                                    | 新規 metric。既存 compatibility はなし                                                                                                     |
 
 metric name または既存 label value の削除・rename は本改修では行わない。削除が必要になった場合は、replacement query と dashboard/alert migration を別設計で定義する。
 
@@ -790,7 +850,7 @@ metric name または既存 label value の削除・rename は本改修では行
 - quota exhausted
 - reset timestamp
 - multiple windows
-- HTTP 401 / 403 / 429 / 500
+- HTTP 400 / 401 / 403 / 429 / 500
 - timeout
 - invalid JSON
 - unexpected HTML
@@ -801,6 +861,9 @@ metric name または既存 label value の削除・rename は本改修では行
 - missing required field
 - unknown period/key が arbitrary metric label にならず omit されること
 - credentials、Authorization、cookie、response body が error text/log に含まれないこと
+- OpenAI の line item cost と model usage、OpenCode Go の Zen balance、Ollama の model request/activity cost が provider-specific field から exact metric name/label へ生成されること
+- `opencodego_reset_seconds_remaining` が注入された `nowSeconds` に対する残秒数であり、wall clock に依存しないこと
+- network / timeout / HTTP status / schema / parse の各 failure が固定 source ID と組み合わされ、raw error message を公開しないこと
 
 Provider-specific fixture は次を必須とする。
 
@@ -855,6 +918,7 @@ Provider-specific fixture は次を必須とする。
 - success / failed / empty / skipped の health semantics が正しく生成されることを確認
 - `scrape_success=0` の場合に timestamp を更新せず、backend の last-success query semantics を維持することを確認
 - retry と optional enrichment を含めた duration が計測されることを確認
+- 完了時間の異なる2つの adapter を使い、速い adapter の duration/timestamp が遅い adapter の settle 待ちで変化しないことを確認
 - optional enrichment failure で primary quota result が残り、`scrape_success=1` になることを確認
 - fatal required-contract schema failure で `scrape_success=0` になり、Provider data metric が送信されないことを確認
 - source provenance が primary / fallback / enrichment を実際に寄与した経路として返すことを確認

@@ -190,19 +190,21 @@ export type ProviderAdapter = (
 ) => Promise<AdapterOutcome>;
 ```
 
-`ProviderContext` は次の interface を使用する。`ScheduledEvent.scheduledTime` は milliseconds であるため、orchestrator が一度だけ `Math.floor(event.scheduledTime / 1000)` へ変換して渡す。`nowSeconds` は health timestamp と enrichment の判定時刻に使い、`monotonicNowMs` は adapter invocation の duration 計測だけに使う。いずれもテストでは固定値を注入する。
+`ProviderContext` は次の interface を使用する。`ScheduledEvent.scheduledTime` は milliseconds であるため、orchestrator が一度だけ `Math.floor(event.scheduledTime / 1000)` へ変換して渡す。`openaiHistoryDays` は OpenAI preflight で検証済みの値であり、OpenAI adapterだけが使用する。`nowSeconds` は health timestamp と enrichment の判定時刻に使い、`monotonicNowMs` は adapter invocation の duration 計測だけに使う。いずれもテストでは固定値を注入する。
 
 ```ts
 export interface ProviderContext {
   fetchFn: typeof fetch;
   scheduledTimeSeconds: number;
+  /** OpenAI preflightで正規化した履歴日数。OpenAI adapterだけが使用する。 */
+  openaiHistoryDays: number;
   nowSeconds: () => number;
   monotonicNowMs: () => number;
   browserBinding?: Fetcher;
 }
 ```
 
-adapter の return type は次の closed outcome とする。credential がない場合の `skipped` は orchestrator が作り、adapter は呼び出さない。
+adapter の return type は次の closed outcome とする。credential がない場合、または OpenAI preflight configuration が invalid な場合の `skipped` は orchestrator が作り、adapter は呼び出さない。preflight skip は `ProviderError` ではない。
 
 ```ts
 export type ProviderErrorKind =
@@ -214,7 +216,8 @@ export type ProviderErrorKind =
   | "network"
   | "timeout"
   | "schema"
-  | "parse";
+  | "parse"
+  | "internal";
 
 export interface ProviderError {
   kind: ProviderErrorKind;
@@ -242,7 +245,7 @@ required primary source の transport、HTTP status、fallback / recovery に関
 
 この precedence では、transport / HTTP status / fallback に関する Provider-specific contract を generic failure rule より優先する。recovery で result が成立した場合は、失敗した primary source を success result の provenance に含めない。response が正常に取得された後の schema / parse failure、optional field failure、optional enrichment-source failure の ownership は、以下の三分類と §6.x の Provider-specific rule に従い、この precedence によって変更しない。
 
-`getWithRetry()` は retry exhausted の transport failure を typed `HttpTransportError` として返し、`kind` に `network` または `timeout` を保持する。raw exception message、response body、credential は `HttpTransportError` の公開情報に含めない。HTTP response を取得できた場合は adapter が status を endpoint 固有の `ProviderError.sourceId` と結び付ける。adapter wrapper の予期しない rejection は contract-violation isolation としてのみ扱い、通常の transport / HTTP / schema / parse 分類には使用しない。
+`getWithRetry()` は retry exhausted の transport failure を typed `HttpTransportError` として返し、`kind` に `network` または `timeout` を保持する。raw exception message、response body、credential は `HttpTransportError` の公開情報に含めない。HTTP response を取得できた場合は adapter が status を endpoint 固有の `ProviderError.sourceId` と結び付ける。adapter wrapper が予期しない rejection を受け取った場合は、registry の固定 `primarySourceId` を使用し、`statusCode` を持たない `ProviderError.kind = "internal"` の `failed` outcomeへ変換する。`internal` は adapter が `AdapterOutcome` contract に反して reject した場合だけに使用し、raw exception message、response body、credential は公開しない。既知の transport / HTTP / schema / parse failure を `internal` に変換してはならない。
 
 schema / parse failure の ownership は次の順序で決定する。
 
@@ -254,13 +257,13 @@ schema / parse failure の ownership は次の順序で決定する。
 
 ### 4.4 Orchestrator の流れ
 
-1. orchestrator が Provider ごとの credential の有無を判定する。credential がない Provider は `skipped` とし、adapter を呼び出さない。
-2. credential がある Provider の adapter を `Promise.allSettled` で並列実行する。
+1. orchestrator が Provider ごとの primary credential と preflight configuration の有効性を判定する。credential がない Provider、または OpenAI の `OPENAI_API_HISTORY_DAYS` が無効な Provider は `skipped` とし、adapter を呼び出さない。
+2. credential と preflight configuration が有効な Provider の adapter を `Promise.allSettled` で並列実行する。
 3. adapter は `AdapterOutcome` を返し、orchestrator は result、failure、empty を分離する。
 4. 各 adapter invocation の直前に monotonic start を取得し、adapter promise が settle した直後に monotonic end と success/empty timestamp を取得する。retry と enrichment は同じ計測区間に含める。
 5. 成功した Provider の data metric と、試行した全 Provider の health metric を共通 OTLP builder で生成する。
 6. 少なくとも1 Provider が試行された場合は、data metric が0件でも health-only payload を Grafana Cloud へ push する。
-7. 全 Provider が credential 不足で skipped の場合だけ push を省略する。
+7. 全 Provider が credential 不足または invalid preflight configuration で skipped の場合だけ push を省略する。
 
 diagnostic report の provider status は `skipped`、`success`、`empty`、`failed` の4値とする。`empty` は health metric では `scrape_success=1` として扱うが、report では `empty` を保持する。registry の provider 順序で全 status を生成し、success/empty/failed の outcome を skipped に変換しない。
 
@@ -286,6 +289,8 @@ workers/src/provider-metrics/
     ├── index.ts          # adapter エントリ
     └── billing.ts        # alpha billing/usage endpoints
 ```
+
+既存の `workers/src/provider-metrics/opencodego.ts` は、Cookie/RPC の必要な処理を `opencodego/zen-balance.ts` へ移行した後に削除する。既存の `workers/src/provider-metrics/opencodego-parser.ts` は legacy HTML/RPC parser helper の owner として残し、無関係な parser refactor は行わない。
 
 runtime schema validation は新規 validation library を追加せず、各 Provider module の `unknown` 入力に対する type guard と numeric/date validator で実装する。`workers/package.json` の依存関係は変更しない。JSON Schema library を導入する設計は採用しない。
 
@@ -354,7 +359,7 @@ Authorization: Bearer <Ollama API key>
 Accept: application/json
 ```
 
-request body と query は持たず、成功 status は `200` とする。`OLLAMA_API_KEY` がない場合は adapter を起動せず orchestrator が skip する。401/403 は `auth`/`forbidden`、429 は `rate_limit`、5xx は `upstream_5xx` とする。これらの primary API request failure は、`OLLAMA_SESSION_COOKIE` がある場合に限り、§4.3 の precedence に従って HTML fallback の判定対象となる。HTTP `200` response の required primary schema / parse failure は HTML fallback に変換せず、fatal schema / parse ownership を維持する。
+request body と query は持たず、成功 status は `200` とする。`OLLAMA_API_KEY` がない場合は adapter を起動せず orchestrator が skip する。401/403 は `auth`/`forbidden`、429 は `rate_limit`、500 以上は `upstream_5xx`、その他の non-2xx（HTTP 400 を含む）は `upstream_4xx` とする。HTTP 400 は `ProviderError.kind = "upstream_4xx"`、`ProviderError.sourceId = "ollama-api-usage"`、`statusCode = 400` として保持する。これらの primary API request failure（`network`、`timeout`、`auth`、`forbidden`、`upstream_4xx`、`rate_limit`、`upstream_5xx`）は、`OLLAMA_SESSION_COOKIE` がある場合に限り、§4.3 の precedence に従って HTML fallback の判定対象となる。HTTP `200` response の required primary schema / parse failure は HTML fallback に変換せず、fatal schema / parse ownership を維持する。
 
 API の観測済み envelope は次のとおりである。`limits` と `activity` はそれぞれ optional contribution であり、少なくともどちらか一方の認識可能な primary content があれば `success` とする。片方の optional field、model entry、または activity cost の schema / parse failure は該当 contribution だけを omit し、もう片方の認識可能な primary content による result を維持する。両方が欠落、または両方が認識不能な場合だけ required primary content の fatal `schema` failure とする。
 
@@ -389,7 +394,7 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - `activity.cost` は非負の decimal string とし、number へ変換できない場合は activity cost だけを omit する。limits が有効なら Provider success を維持する。
 - legacy と monthly の fields が同時に存在する場合、session/weekly limits と activity cost を独立に採用する。monthly plan の存在を理由に legacy limits を上書きしない。
 - JSON に plan や exact reset timestamp は存在しないため、API response だけでは plan/reset metric を生成しない。
-- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API の primary request が transport、HTTP status、network、timeout のいずれかで失敗した場合は、HTML が少なくとも1つの valid な quota window、plan、または reset timestamp を寄与できたときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
+- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API の primary request が `network`、`timeout`、`auth`、`forbidden`、`upstream_4xx`、`rate_limit`、`upstream_5xx` のいずれかで失敗した場合は、HTML が少なくとも1つの valid な quota window、plan、または reset timestamp を寄与できたときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTTP 400 もこの fallback candidate に含め、valid HTML なら `success`、HTML が失敗または有効な contribution を返さなければ元の `upstream_4xx`、`statusCode = 400`、`sourceId = "ollama-api-usage"` を保持する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
 - API が quota/activity を返した場合に HTML から valid な plan または reset timestamp を少なくとも1つ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。plan と各 reset timestamp は独立した optional field とし、invalid / missing な field はその field だけを omit する。HTML が有効な field を1つも寄与できない場合も HTML enrichment-only failure とし、API の primary failure にはしない。API request が失敗した場合は、HTML が valid な quota window、plan、または reset timestamp を1つも返さなければ fallback failure とし、`AdapterOutcome.failed`、`scrape_success=0`、scrape timestamp 未更新、`ProviderError.sourceId = "ollama-api-usage"` とする。final `ProviderError.kind` と `statusCode` は元の API failure を保持し、fallback 側の error で置換しない。fallback が成功した場合は `AdapterOutcome.success`、`scrape_success=1`、scrape timestamp 更新、`ollama-settings-html` を `fallback` として追加する。
 - API と HTML の両方が同じ field を返した場合は API の quota/activity を優先し、HTML は plan/reset の不足分だけを補う。
 - 認識できない top-level period や limit key は arbitrary label として emit しない。
@@ -540,6 +545,8 @@ failure ownership は次のとおり固定する。
 
 - Organization Costs API / Organization Usage API は現行通り
 - metric 名・label は維持
+- `OPENAI_API_HISTORY_DAYS` は §9.1 の preflight contract に従い、normalized `1..31` を `ProviderContext.openaiHistoryDays` から adapter へ渡す。history window は `ProviderContext.scheduledTimeSeconds` を UTC anchor とする。
+- invalid な `OPENAI_API_HISTORY_DAYS` は OpenAI adapter を呼ばず `skipped` とし、`ProviderError` / failure health / timestamp を生成しない。valid preflight の他 Provider は継続する。
 - request-time rate-limit header 観測は P2 で追加
 
 **Support level:** `official-public`
@@ -660,7 +667,7 @@ provider_metrics_scrape_duration_seconds{provider}
 ```
 
 - `provider` は `ProviderId` の closed set だけを使用する。
-- `scrape_success`: adapter を試行し、response を正常に処理できた場合は `1`（data が空の `empty` を含む）、failure は `0`、credential 不足の skipped は emit しない。
+- `scrape_success`: adapter を試行し、response を正常に処理できた場合は `1`（data が空の `empty` を含む）、failure は `0`、credential 不足または invalid preflight configuration の skipped は emit しない。
 - `scrape_timestamp_seconds`: success または empty の outcome が settle した直後に取得した `ProviderContext.nowSeconds()` の値を emit する。failure 時はこの series を更新しないため、Grafana 側に保存された最新値が last successful scrape time になる。Worker は値を永続保持しない。
 - `scrape_duration_seconds`: adapter invocation の開始直前に取得した `ProviderContext.monotonicNowMs()` から、同じ adapter promise が settle した直後に取得した値までの秒数。retry、timeout、optional enrichment を含み、success/failure/empty の全試行で emit する。他 provider の settle 待機時間は含めない。
 - last success query は `last_over_time(provider_metrics_scrape_timestamp_seconds{provider="..."}[2h])` とし、`time() - last_over_time(...)` で経過秒を求める。2時間以内に成功値がなければ stale と判定する。
@@ -677,13 +684,14 @@ provider_metrics_scrape_duration_seconds{provider}
 
 - 各 adapter は `Promise.allSettled` で並列実行
 - 1 Provider の失敗は他 Provider の取得・送信を妨げない
-- credential がある Provider の `success` / `empty` / `failed` は health outcome として記録する
+- credential と preflight configuration が有効な Provider の `success` / `empty` / `failed` は health outcome として記録する
 - 1 つ以上の Provider が試行された場合、data payload が0件でも health-only payload を push する
-- 全 Provider が credential 不足等で skipped の場合だけ push を省略する
+- 全 Provider が credential 不足または invalid preflight configuration で skipped の場合だけ push を省略する
 - `success` は required primary result が成立していれば、optional field の omission または optional enrichment source failure を含んでも維持する
 - §4.3 の recovery / status precedence に従い、required primary request failure を検知しただけでは `failed` を確定しない。Provider-specific fallback が成功した場合は `success`、contract-defined status interpretation が empty を返す場合は `empty` とする。
 - `failed` は recovery / status interpretation の適用後も required primary result を成立させられない request failure、または required primary contract の fatal schema/parse failure に限定する。optional field validation failure、optional enrichment source failure、Provider-specific contract で omission が定義された parse failure は `failed` にしない。
 - Ollama の API failure を HTML fallback が回復した場合、Codex の primary 403 を Browser Rendering fallback が回復した場合、OpenCode Go の `EntitlementError` 403 は、それぞれ `failed` ではない。fallback failure、または recovery / empty rule が適用されない primary failure は `failed` とする。
+- adapter wrapper の予期しない rejection は `ProviderError.kind = "internal"`、registry 固定の primary `sourceId`、`statusCode` なしの `failed` とし、既知の transport / HTTP / schema / parse failureには使用しない。他 Provider の実行は継続する。
 
 ### 8.2 Retry policy
 
@@ -805,11 +813,20 @@ GRAFANA_CLOUD_ACCESS_POLICY_TOKEN
 MYBROWSER
 ```
 
+`OPENAI_API_HISTORY_DAYS` の configuration contract は次のとおり固定する。
+
+- 未指定時の default は `1`。
+- configured value は `Number(rawValue)` で数値化し、`Number.isInteger(value)` かつ `1..31` の場合だけ valid とする。
+- `ProviderContext.openaiHistoryDays` には、orchestrator の preflight で検証した normalized integer を渡す。OpenAI adapter はこの値を使い、raw environment value を再解釈しない。
+- OpenAI の history window は `ProviderContext.scheduledTimeSeconds` を UTC anchor とする。`endTime = floor(scheduledTimeSeconds / 86400) * 86400`、`startTime = endTime - openaiHistoryDays * 86400` とする。
+- configured value が invalid（`0`、`32`、non-integer、non-numeric を含む）な場合は OpenAI adapter を実行せず、OpenAI の diagnostic status を `skipped` とする。この preflight skip は `ProviderError`、failure health、timestamp を生成しない。
+- invalid OpenAI configuration でも他 Provider の adapter は実行する。他に1つでも attempted Provider があれば、その Provider の health/data を通常どおり push し、OpenAI の health は含めない。全 Provider が skipped の場合は no-push とする。
+
 ### 9.2 移行方針
 
 | Provider     | 移行内容                                                                                                                                     |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| OpenAI       | 現行維持、破壊的変更なし                                                                                                                     |
+| OpenAI       | 現行 metric と `OPENAI_API_HISTORY_DAYS` の default `1`、valid range `1..31`、invalid value の fetch skip、scheduled-time anchor を維持し、破壊的変更なし |
 | Codex        | 現行 `/wham/usage` と session/weekly metric を維持。共通 `QuotaWindow[]` への最小変換のみ追加し、未知 limit の一般化は行わない               |
 | OpenCodeGo   | Primary を API key 経由 `/zen/go/v1/usage` へ。Cookie/RPC は Zen balance enrichment                                                          |
 | Ollama Cloud | Primary を API key 経由 `/api/usage` へ。Cookie/HTML は runtime の enrichment/fallback。JSON の monthly activity に quota ratio を推測しない |
@@ -864,12 +881,14 @@ metric name または既存 label value の削除・rename は本改修では行
 - OpenAI の line item cost と model usage、OpenCode Go の Zen balance、Ollama の model request/activity cost が provider-specific field から exact metric name/label へ生成されること
 - `opencodego_reset_seconds_remaining` が注入された `nowSeconds` に対する残秒数であり、wall clock に依存しないこと
 - network / timeout / HTTP status / schema / parse の各 failure が固定 source ID と組み合わされ、raw error message を公開しないこと
+- adapter の unexpected rejection が `internal`、registry 固定の primary source、`statusCode` なしの failure になり、既知の failure categoryへ誤分類されないこと
 
 Provider-specific fixture は次を必須とする。
 
 - OpenCode Go: `usage.rolling/weekly/monthly` の percent scale、ISO `resetsAt`、status non-ok、window 欠落、invalid percent/timestamp
 - Ollama legacy: `limits.session/weekly` の 0..1 ratio、session/weekly `models[]` の `period` mapping、同一 window 内の重複 model の合算、同一 model の別 window series、activity models の未使用、activity cost/period
 - Ollama monthly: `limits` 欠落または session/weekly 欠落、activity-only success、activity models を model metric にしないこと、`last_4_weeks` を `monthly` にしないこと、plan/reset の HTML enrichment、API と HTML の同時存在
+- Ollama API status: HTTP 400 は `upstream_4xx`、`sourceId = "ollama-api-usage"`、`statusCode = 400` とし、valid HTML があれば fallback success、HTML failure 時は元の error を保持すること
 - Ollama HTML ownership: API success + HTML の有効 contribution なしは primary success のまま enrichment field を omit、API failure + HTML の valid な quota/plan/reset ありは fallback success、両方なしは元の API failure
 - Ollama model label: valid identifier、empty model、whitespace-only model、先頭/末尾 whitespace、128 characters 超過、許可文字外、invalid model entry だけの omit、同一 window 内の同じ valid model の aggregation、rejected string が `model` label に流入しないこと
 - Command Code request: `whoami?limits=1`、`orgId` の credits/subscriptions への伝播、subscription `currentPeriodStart` の summary `since` への伝播、body なし、required headers、query encoding
@@ -883,6 +902,13 @@ Provider-specific fixture は次を必須とする。
 - CommandCode quota boundary: `limited=false` が quota window を生成せず、`limited=true` の `cap=0` が `schema` failure になること
 - Command Code partial failure: credits success + subscription failure、credits success + summary failure、required endpoint failure
 - CommandCode `windowLimits`: absent / invalid `limited` の optional omission、`limited=false` の unlimited semantics、`limited=true` の fiveHour/weekly 欠落・型不正・`cap=0` の fatal schema failure
+
+OpenAI の既存 configuration compatibility は次を必須とする。
+
+- `OPENAI_API_HISTORY_DAYS` 未指定は normalized `historyDays=1`
+- configured `"1"` と `"31"` は valid、`"0"`、`"32"`、non-integer、non-numeric は invalid
+- valid value は `ProviderContext.openaiHistoryDays` として OpenAI adapter に渡し、`ProviderContext.scheduledTimeSeconds` を UTC history window の anchor にする
+- invalid value は OpenAI adapter を呼ばず、OpenAI status を `skipped`、OpenAI health を未生成、他 Provider を継続、all-skipped 時を no-push とする
 
 #### Global recovery / status precedence
 
@@ -915,6 +941,8 @@ Provider-specific fixture は次を必須とする。
 - 複数 Provider を同時実行し、1 Provider 失敗時に他 Provider の metric が送信されることを確認
 - 全 Provider が failed でも health-only push が行われることを確認
 - 全 Provider が skipped の場合は push されないことを確認
+- `OPENAI_API_HISTORY_DAYS` の invalid preflight で OpenAI だけが skipped となり、他 Provider の実行・health・push が継続することを確認する。OpenAI だけが invalid preflight の場合は no-push とする。
+- OpenAI の valid history window が `scheduledTimeSeconds` を anchor とし、normalized `historyDays` が adapter request の start/end に反映されることを確認する。
 - success / failed / empty / skipped の health semantics が正しく生成されることを確認
 - `scrape_success=0` の場合に timestamp を更新せず、backend の last-success query semantics を維持することを確認
 - retry と optional enrichment を含めた duration が計測されることを確認
@@ -941,6 +969,7 @@ Provider-specific fixture は次を必須とする。
 本改修は以下をすべて満たした時点で完了とする。
 
 - OpenAI API costs / usage の既存 metric が維持されている
+- `OPENAI_API_HISTORY_DAYS` が default `1`、valid range `1..31`、invalid configured value の fetch skip、`scheduledTimeSeconds` anchor を維持し、invalid preflight は `skipped` として health failure / ProviderError を生成しない
 - OpenCode Go quota を API key のみで取得できる
 - OpenCode Go quota 取得に browser cookie を必要としない
 - OpenCode Go rolling / weekly / monthly を扱える
@@ -977,6 +1006,7 @@ Provider-specific fixture は次を必須とする。
 - `opencodego_reset_seconds_remaining` を含む existing metric compatibility が維持されている
 - undocumented API の required primary contract に対する fatal schema mismatch を安全に検知し、optional field / enrichment failure は設計された scope だけを omit できる
 - schema / parse failure の error ownership が Provider-specific contract と global policy で一致している
+- adapter の unexpected rejection が `ProviderError.kind = "internal"`、registry 固定の primary source、`statusCode` なしで isolation され、他 Provider が継続する
 - required primary contract の fatal schema / parse failure だけが `AdapterOutcome.failed` と `ProviderError.kind = schema | parse` を生成し、optional field / optional enrichment failure は primary `ProviderResult` と `scrape_success=1` を維持する
 - Credential が log / metric へ露出しない
 - Provider ごとの最終成功時刻を監視可能である

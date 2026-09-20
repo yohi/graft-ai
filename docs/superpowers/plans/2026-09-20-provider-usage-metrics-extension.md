@@ -75,7 +75,16 @@ The common quota fields remain `windows`, `plan`, `subscription`, `credits`, and
 
 ```text
 auth | forbidden | upstream_4xx | rate_limit | upstream_5xx |
-network | timeout | schema | parse
+network | timeout | schema | parse | internal
+```
+
+```ts
+export interface ProviderError {
+  kind: ProviderErrorKind;
+  provider: ProviderId;
+  sourceId: string;
+  statusCode?: number;
+}
 ```
 
 `getWithRetry()` retains `network` and `timeout` in a typed `HttpTransportError` after retries are exhausted. It does not expose raw exception messages, response bodies, credentials, or headers. HTTP responses remain available to adapters so each endpoint can attach its fixed `sourceId`.
@@ -92,7 +101,7 @@ The adapter owns the final conversion:
 | Typed transport network failure    | `network`            |
 | Typed transport timeout failure    | `timeout`            |
 | Required JSON shape/type failure   | `schema`             |
-| Required JSON/date parsing failure | `parse`              |
+| Required timestamp parsing failure  | `parse`              |
 
 Fixed source ownership is endpoint-specific:
 
@@ -110,7 +119,20 @@ Fixed source ownership is endpoint-specific:
 | CommandCode subscriptions | `commandcode-billing-subscriptions` |
 | CommandCode summary       | `commandcode-usage-summary`         |
 
-The adapter execution wrapper has a last-resort contract-violation boundary for an unexpected adapter rejection. That boundary is not used to classify known transport, HTTP, schema, or parse failures; those failures must be returned by the provider adapter with the source ID above.
+The adapter execution wrapper has a last-resort contract-violation boundary for an unexpected adapter rejection. It returns:
+
+```ts
+{
+  status: "failed",
+  error: {
+    kind: "internal",
+    provider: registryEntry.provider,
+    sourceId: registryEntry.primarySourceId,
+  },
+}
+```
+
+The wrapper does not set `statusCode` and does not expose the rejected value, raw exception message, response body, credential, or header. `internal` is used only for an adapter rejection that violates the `AdapterOutcome` contract. Known transport, HTTP, schema, and parse failures must be returned by the provider adapter with the source ID above and must never be reclassified as `internal`.
 
 ### 3. Health timing seam
 
@@ -120,15 +142,55 @@ The adapter execution wrapper has a last-resort contract-violation boundary for 
 export interface ProviderContext {
   fetchFn: typeof fetch;
   scheduledTimeSeconds: number;
+  /** Normalized by the orchestrator; consumed only by the OpenAI adapter. */
+  openaiHistoryDays: number;
   nowSeconds: () => number;
   monotonicNowMs: () => number;
   browserBinding?: Fetcher;
 }
 ```
 
-The wrapper captures `monotonicNowMs()` immediately before invoking an adapter and immediately after that adapter promise settles. It captures `nowSeconds()` at the same completion point only for success and empty outcomes. `Promise.allSettled()` receives already wrapped promises, so a slow provider cannot inflate another provider's duration or timestamp.
+The orchestrator validates `OPENAI_API_HISTORY_DAYS` before creating the context. It passes the normalized integer in `openaiHistoryDays` to the OpenAI adapter and uses `1` as the context value when OpenAI is preflight-skipped. The skipped OpenAI registry entry is not invoked in that case. The wrapper captures `monotonicNowMs()` immediately before invoking an adapter and immediately after that adapter promise settles. It captures `nowSeconds()` at the same completion point only for success and empty outcomes. `Promise.allSettled()` receives already wrapped promises, so a slow provider cannot inflate another provider's duration or timestamp.
 
 The diagnostic report preserves `skipped`, `success`, `empty`, and `failed`. Health maps success and empty to `scrape_success=1`; the report does not relabel empty as skipped.
+
+The adapter registry and execution record types are fixed as follows:
+
+```ts
+export type ProviderCredentialKey =
+  | "OPENAI_ADMIN_API_KEY"
+  | "CODEX_ACCESS_TOKEN"
+  | "OPENCODEGO_API_KEY"
+  | "OLLAMA_API_KEY"
+  | "COMMAND_CODE_API_KEY";
+
+export interface RegisteredProvider {
+  provider: ProviderId;
+  credentialKey: ProviderCredentialKey;
+  primarySourceId: string;
+  adapter: ProviderAdapter;
+}
+
+export type ProviderExecutionRecord =
+  | {
+      provider: ProviderId;
+      status: "skipped";
+    }
+  | {
+      provider: ProviderId;
+      status: "attempted";
+      outcome: AdapterOutcome;
+      health: ScrapeHealthOutcome;
+    };
+
+export function runAdapters(
+  env: ProviderMetricsEnv,
+  ctx: ProviderContext,
+  registry: readonly RegisteredProvider[],
+): Promise<ProviderExecutionRecord[]>;
+```
+
+`runAdapters()` returns one record per registry entry in registry order. It skips entries whose `credentialKey` is absent or blank, invokes every other adapter through the completion-time wrapper, and continues after an unexpected rejection. Task 12 supplies a copy of `env` with only `OPENAI_ADMIN_API_KEY` omitted when OpenAI preflight configuration is invalid; this preserves the same exact `skipped` record and no-health/no-push semantics without adding a provider-specific branch to `runAdapters()`.
 
 ### 4. Metric builder and push input
 
@@ -171,7 +233,6 @@ An attempted run always passes the health array to the push function, including 
 - `workers/src/provider-metrics.ts` — run the registry, build data/health payloads, and produce complete diagnostics.
 - `workers/src/provider-metrics/codex.ts` — return `AdapterOutcome` and classify primary/browser failures.
 - `workers/src/provider-metrics/openai-api.ts` — return the OpenAI union member with cost line items and model usage.
-- `workers/src/provider-metrics/ollama.ts` — remove after its parser is moved to the new Ollama module.
 - `workers/tests/provider-metrics/scheduled.test.ts` — verify orchestration and observable push payloads.
 - `workers/tests/provider-metrics/prometheus.test.ts` — verify exact metric names, labels, and values.
 - `docs/provider-metrics.md` — document credentials, source support levels, and new metrics.
@@ -192,11 +253,23 @@ An attempted run always passes the health array to the push function, including 
 - `workers/tests/http-retry.test.ts`
 - `workers/tests/provider-metrics/health.test.ts`
 - `workers/tests/provider-metrics/adapters.test.ts`
-- `workers/tests/provider-metrics/opencodego-api-key.test.ts`
-- `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
 - `workers/tests/provider-metrics/ollama-api-usage.test.ts`
 - `workers/tests/provider-metrics/ollama-settings-html.test.ts`
 - `workers/tests/provider-metrics/commandcode.test.ts`
+
+### Removed files
+
+- `workers/src/provider-metrics/opencodego.ts` — remove after Cookie/RPC Zen-balance helpers are moved to `opencodego/zen-balance.ts` and all imports use `opencodego/index.ts`.
+- `workers/src/provider-metrics/ollama.ts` — remove after its parser is moved to the new Ollama module.
+
+### Preserved files
+
+- `workers/src/provider-metrics/opencodego-parser.ts` — retain as the legacy HTML/RPC parser helper owned by `opencodego/zen-balance.ts`; do not perform an unrelated parser refactor.
+
+### Renamed test files
+
+- `workers/tests/provider-metrics/opencodego-validation.test.ts` → `workers/tests/provider-metrics/opencodego-api-key.test.ts`
+- `workers/tests/provider-metrics/opencodego.test.ts` → `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
 
 ## Task 1: Define types and typed transport errors
 
@@ -211,7 +284,7 @@ An attempted run always passes the health array to the push function, including 
 
 **Dependency:** None. This task establishes the shared types and transport seam.
 
-**Produces:** `ProviderResult` closed union, `ProviderModelUsage`, `ProviderModelRequest`, `OpenAICostMetric`, `ProviderContext.monotonicNowMs`, `ProviderErrorKind`, `HttpTransportError`, and new credential keys.
+**Produces:** `ProviderResult` closed union, `ProviderModelUsage`, `ProviderModelRequest`, `OpenAICostMetric`, `ProviderContext.openaiHistoryDays`, `ProviderContext.monotonicNowMs`, `ProviderErrorKind` including `internal`, `ProviderError`, `HttpTransportError`, and new credential keys.
 
 ### RED
 
@@ -264,7 +337,7 @@ npx vitest run tests/provider-metrics/types-smoke.test.ts tests/http-retry.test.
 
 ### GREEN
 
-Implement the exact union and error types from the Binding Contracts. Update `getWithRetry()` so timeout detection produces `HttpTransportError("timeout")`, other exhausted fetch exceptions produce `HttpTransportError("network")`, and the existing retry/status behavior is unchanged. Do not include the caught exception message in the public error or log output.
+Implement the exact union and error types from the Binding Contracts. Include `internal` in the closed `ProviderErrorKind` set, but do not emit it from `getWithRetry()` or any normal adapter failure path. Update `getWithRetry()` so timeout detection produces `HttpTransportError("timeout")`, other exhausted fetch exceptions produce `HttpTransportError("network")`, and the existing retry/status behavior is unchanged. Do not include the caught exception message in the public error or log output.
 
 Add `OPENCODEGO_API_KEY`, `OPENCODEGO_SESSION_COOKIE`, `OPENCODEGO_WORKSPACE_ID`, `OLLAMA_API_KEY`, `OLLAMA_SESSION_COOKIE`, and `COMMAND_CODE_API_KEY` to `ProviderMetricsEnv`.
 
@@ -417,11 +490,11 @@ git commit -m "feat(provider-metrics): exact metric builderとhealth payloadを�
 
 **Dependency:** Tasks 1 and 2.
 
-**Produces:** `RegisteredProvider[]` and `runAdapters(env, ctx, registry)`.
+**Produces:** The exact `RegisteredProvider`, `ProviderExecutionRecord`, and `runAdapters(env, ctx, registry)` interfaces from Binding Contracts. `runAdapters()` returns one ordered record per registry entry, including `skipped` records.
 
 ### RED
 
-Add tests for credential skipping, parallel execution, success/empty/failed health mapping, and completion-time measurement. The timing test uses two deferred adapters. The fast adapter settles while the slow adapter remains pending, and the injected monotonic clock returns `0` at both starts, `100` at the fast completion, and `10_000` at the slow completion. Assert durations of `0.1` and `10` seconds and distinct completion timestamps.
+Add tests for credential skipping, parallel execution, success/empty/failed health mapping, and completion-time measurement. The timing test uses two deferred adapters. The fast adapter settles while the slow adapter remains pending, and the injected monotonic clock returns `0` at both starts, `100` at the fast completion, and `10_000` at the slow completion. Assert durations of `0.1` and `10` seconds and distinct completion timestamps. Add a test where one adapter rejects unexpectedly: its record is `status = "attempted"`, `outcome.status = "failed"`, `outcome.error.kind = "internal"`, `outcome.error.sourceId` equals that registry entry's fixed `primarySourceId`, `statusCode` is absent, and the other adapter still completes.
 
 **RED command:**
 
@@ -433,20 +506,27 @@ npx vitest run tests/provider-metrics/adapters.test.ts
 
 ### GREEN
 
-Filter registry entries by non-empty credential. For each selected entry, execute this wrapper:
+Define the exact `RegisteredProvider` and `ProviderExecutionRecord` types from Binding Contracts. Filter registry entries by non-empty credential. For each selected entry, execute this wrapper:
 
 ```text
 startMs = ctx.monotonicNowMs()
 try:
   outcome = await adapter(env, ctx)
 catch unexpected rejection:
-  outcome = contract-violation failure using the registry's fixed primary source ID
+  outcome = {
+    status: "failed",
+    error: {
+      kind: "internal",
+      provider: registryEntry.provider,
+      sourceId: registryEntry.primarySourceId,
+    },
+  }
 endMs = ctx.monotonicNowMs()
 timestamp = ctx.nowSeconds() when outcome is success or empty
 return outcome and health computed from these immediate completion values
 ```
 
-Pass the wrapped promises to `Promise.allSettled()`. Preserve the registry order in returned outcomes and health records. Known provider failures must be classified inside their adapters; the wrapper's contract-violation path is not the normal transport/error path.
+Create a `skipped` record for every registry entry whose credential is absent or blank. For every invoked entry, create an `attempted` record with the adapter outcome and `ScrapeHealthOutcome`. Pass the wrapped promises to `Promise.allSettled()`. Preserve the registry order in returned outcomes and health records. Known provider failures must be classified inside their adapters; the wrapper's `internal` contract-violation path is not the normal transport/error path, and it must not expose the rejected value.
 
 **GREEN command:**
 
@@ -454,7 +534,7 @@ Pass the wrapped promises to `Promise.allSettled()`. Preserve the registry order
 npx vitest run tests/provider-metrics/adapters.test.ts
 ```
 
-**Expected GREEN result:** Fast-provider duration/timestamp values are independent of slow-provider settlement, and skipped providers never invoke their adapter.
+**Expected GREEN result:** Fast-provider duration/timestamp values are independent of slow-provider settlement, skipped providers never invoke their adapter, unexpected rejection is isolated as `internal` with the registry primary source, and other providers continue.
 
 ### Commit
 
@@ -469,7 +549,7 @@ git commit -m "feat(provider-metrics): adapter completion wrapperを追加"
 
 - Create: `workers/src/provider-metrics/opencodego/api-key.ts`
 - Create: `workers/src/provider-metrics/opencodego/index.ts`
-- Create: `workers/tests/provider-metrics/opencodego-api-key.test.ts`
+- Rename/update: `workers/tests/provider-metrics/opencodego-validation.test.ts` to `workers/tests/provider-metrics/opencodego-api-key.test.ts`
 
 **Consumes:** OpenCode Go API key and `ProviderContext` from Task 1.
 
@@ -482,7 +562,7 @@ git commit -m "feat(provider-metrics): adapter completion wrapperを追加"
 Add fixtures for the valid rolling/weekly/monthly response, missing required window, invalid percent, invalid optional `resetsAt`, invalid JSON, 401, 403 `EntitlementError`, other 403, 429, 500, network, and timeout. Assert:
 
 - success contains three `QuotaWindow` entries and source `opencodego-usage-api`;
-- invalid optional `resetsAt` omits only that reset metric;
+- invalid optional `resetsAt` keeps `success`, omits only that window's `resetTimestampSeconds`, and returns no `ProviderError`;
 - `403 + EntitlementError` is empty;
 - all other failures retain `opencodego-usage-api`;
 - network and timeout retain distinct `ProviderError.kind` values.
@@ -497,7 +577,7 @@ npx vitest run tests/provider-metrics/opencodego-api-key.test.ts
 
 ### GREEN
 
-Use `getWithRetry()` with the specified timeout and headers. Convert status and typed transport errors using the fixed source ID. Parse the required three windows into `QuotaWindow[]`. Return `schema` for required shape/range failures and `parse` for invalid required date parsing. Treat only safe `EntitlementError` 403 as empty.
+Use `getWithRetry()` with the specified timeout and headers. Convert status and typed transport errors using the fixed source ID. Parse the required three windows into `QuotaWindow[]`. Return `schema` for required `usage` / window / `status` / `percent` shape or range failures. Map invalid JSON to `parse`. `resetsAt` is optional: missing or invalid `resetsAt` omits only that window's `resetTimestampSeconds`, returns quota `success`, and does not create a `ProviderError`. Treat only safe `EntitlementError` 403 as empty.
 
 The adapter entry reads `OPENCODEGO_API_KEY` only. Missing credentials are handled by the registry and never produce an adapter call.
 
@@ -512,6 +592,7 @@ npx vitest run tests/provider-metrics/opencodego-api-key.test.ts
 ### Commit
 
 ```bash
+git mv workers/tests/provider-metrics/opencodego-validation.test.ts workers/tests/provider-metrics/opencodego-api-key.test.ts
 git add workers/src/provider-metrics/opencodego workers/tests/provider-metrics/opencodego-api-key.test.ts
 git commit -m "feat(provider-metrics): OpenCode Go API key adapterを追加"
 ```
@@ -522,17 +603,20 @@ git commit -m "feat(provider-metrics): OpenCode Go API key adapterを追加"
 
 - Create: `workers/src/provider-metrics/opencodego/zen-balance.ts`
 - Modify: `workers/src/provider-metrics/opencodego/index.ts`
-- Create: `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
+- Modify: `workers/src/provider-metrics.ts` — update the legacy OpenCode Go import/call site to the new `opencodego/index.ts` entry; Task 12 consumes this entry from the registry.
+- Rename/update: `workers/tests/provider-metrics/opencodego.test.ts` to `workers/tests/provider-metrics/opencodego-zen-balance.test.ts`
+- Remove: `workers/src/provider-metrics/opencodego.ts`
+- Preserve: `workers/src/provider-metrics/opencodego-parser.ts` as the legacy HTML/RPC parser helper owned by `zen-balance.ts`.
 
 **Consumes:** The successful OpenCode Go result from Task 5 and existing cookie/RPC helpers.
 
 **Dependency:** Task 5.
 
-**Produces:** Optional `zenBalanceUSD` enrichment with `opencodego-zen-rpc` provenance.
+**Produces:** Optional `zenBalanceUSD` enrichment with `opencodego-zen-rpc` provenance, a single `opencodego/index.ts` entry point, migrated imports, and no legacy `workers/src/provider-metrics/opencodego.ts` implementation.
 
 ### RED
 
-Add tests for configured cookie with a balance, missing cookie, and RPC failure. Assert that a successful enrichment sets `result.zenBalanceUSD`, adds source role `enrichment`, and does not set `result.credits`. Assert that enrichment failure preserves quota success and emits no Zen balance.
+Add tests for configured cookie with a balance, missing cookie, and RPC failure. Assert that a successful enrichment sets `result.zenBalanceUSD`, adds source role `enrichment`, and does not set `result.credits`. Assert that enrichment failure preserves quota success and emits no Zen balance. The migrated test must import the new `../../src/provider-metrics/opencodego/index` entry, and no test or source import may reference the deleted `opencodego.ts` file.
 
 **RED command:**
 
@@ -544,7 +628,7 @@ npx vitest run tests/provider-metrics/opencodego-zen-balance.test.ts
 
 ### GREEN
 
-Move the existing cookie/RPC extraction into `fetchZenBalanceEnrichment()`. After API success, call it only when the session cookie is configured. Store the numeric value in `zenBalanceUSD`; never store it in `credits.remaining`. Append `opencodego-zen-rpc` only when the value contributed to the result.
+Move the required existing cookie/RPC extraction into `workers/src/provider-metrics/opencodego/zen-balance.ts` and expose it through `fetchZenBalanceEnrichment()`. The helper may continue to use the preserved `opencodego-parser.ts`; do not refactor unrelated parser code. After API success, call it only when the session cookie is configured. Store the numeric value in `zenBalanceUSD`; never store it in `credits.remaining`. Append `opencodego-zen-rpc` only when the value contributed to the result. Update `workers/src/provider-metrics.ts` and every migrated test import to `opencodego/index.ts`, then delete the legacy `workers/src/provider-metrics/opencodego.ts`.
 
 **GREEN command:**
 
@@ -557,7 +641,10 @@ npx vitest run tests/provider-metrics/opencodego-zen-balance.test.ts tests/provi
 ### Commit
 
 ```bash
+git mv workers/tests/provider-metrics/opencodego.test.ts workers/tests/provider-metrics/opencodego-zen-balance.test.ts
+git rm workers/src/provider-metrics/opencodego.ts
 git add workers/src/provider-metrics/opencodego workers/tests/provider-metrics/opencodego-zen-balance.test.ts
+git add workers/src/provider-metrics.ts
 git commit -m "feat(provider-metrics): OpenCode Go Zen balance enrichmentを追加"
 ```
 
@@ -585,9 +672,9 @@ Add fixtures for:
 - invalid activity cost with valid limits;
 - empty or unrecognized top-level content;
 - invalid JSON;
-- 401, 403, 429, 500, network, and timeout.
+- 400, 401, 403, 429, 500, network, and timeout.
 
-Assert that success stores `modelRequests` with session/weekly periods, stores cost in `activityCostUSD`, ignores `activity.models[]`, and never creates a monthly quota window. Assert that empty primary content is a fatal `schema` failure, invalid JSON is `parse`, and API 200 failures never return `null` for fallback interpretation.
+Assert that success stores `modelRequests` with session/weekly periods, stores cost in `activityCostUSD`, ignores `activity.models[]`, and never creates a monthly quota window. Assert that HTTP 400 returns `failed` with `ProviderError.kind = "upstream_4xx"`, `ProviderError.sourceId = "ollama-api-usage"`, and `statusCode = 400`. Assert that empty primary content is a fatal `schema` failure, invalid JSON is `parse`, and API 200 failures never return `null` for fallback interpretation.
 
 **RED command:**
 
@@ -641,6 +728,8 @@ Add tests for all ownership boundaries:
 - API 200 success plus HTML quota usage does not add HTML quota values to the primary result.
 - API 200 fatal schema failure does not call HTML and remains failed with `schema` or `parse`.
 - API HTTP 500 plus valid HTML quota/plan/reset returns fallback success with only `ollama-settings-html` as a source.
+- API HTTP 400 plus valid HTML quota/plan/reset returns fallback success with `ollama-settings-html` as the `fallback` source.
+- API HTTP 400 plus HTML failure preserves `ProviderError.kind = "upstream_4xx"`, `statusCode = 400`, and `sourceId = "ollama-api-usage"`.
 - API network or timeout plus unavailable HTML preserves the original `network` or `timeout` and `ollama-api-usage`.
 - API failure plus HTML failure preserves the original API kind, status code, and source.
 - API success with no valid HTML contribution remains success without the HTML source.
@@ -662,7 +751,7 @@ Implement the adapter state machine in this order:
 
 1. Call the API adapter.
 2. On API success, call HTML only when the cookie exists, and merge plan plus missing reset timestamps. Do not merge HTML usage ratios or add HTML quota windows to the API result.
-3. On API `network`, `timeout`, `auth`, `forbidden`, `rate_limit`, or `upstream_5xx` failure, call HTML only when the cookie exists. Replace the complete result only when HTML contributes at least one valid quota window, plan, or reset timestamp.
+3. On API `network`, `timeout`, `auth`, `forbidden`, `upstream_4xx`, `rate_limit`, or `upstream_5xx` failure, call HTML only when the cookie exists. Replace the complete result only when HTML contributes at least one valid quota window, plan, or reset timestamp.
 4. On API `schema` or `parse` failure after HTTP 200, do not call HTML.
 5. On fallback failure, return the original API `ProviderError` unchanged.
 6. Assign `ollama-settings-html` the runtime role `enrichment` only for API success contribution and `fallback` only for complete fallback success.
@@ -805,7 +894,7 @@ git commit -m "refactor(provider-metrics): CodexをProviderResultへ移行"
 - Modify: `workers/src/provider-metrics/openai-api.ts`
 - Modify: `workers/tests/provider-metrics/openai-api.test.ts`
 
-**Consumes:** Existing organization costs/completions aggregation and typed transport errors.
+**Consumes:** Existing organization costs/completions aggregation, typed transport errors, and the normalized `ProviderContext.openaiHistoryDays` / `ProviderContext.scheduledTimeSeconds` values from Task 1 and Task 12.
 
 **Dependency:** Task 1.
 
@@ -813,7 +902,7 @@ git commit -m "refactor(provider-metrics): CodexをProviderResultへ移行"
 
 ### RED
 
-Update adapter tests to expect `AdapterOutcome`. Add a fixture with two cost line items and two models, then assert the result retains every `lineItem` and every model's input/output/cached/request values. Add HTTP 401, 403, 429, 5xx, network, timeout, invalid JSON, and required schema/parse cases with source `openai-organization-api`.
+Update adapter tests to expect `AdapterOutcome`. Add a fixture with two cost line items and two models, then assert the result retains every `lineItem` and every model's input/output/cached/request values. Add HTTP 401, 403, 429, 5xx, network, timeout, invalid JSON, and required schema/parse cases with source `openai-organization-api`. Invoke the adapter with normalized `openaiHistoryDays = 1` and `31` and a fixed `scheduledTimeSeconds`; assert the generated `start_time` and `end_time` use that context value rather than wall clock time.
 
 Add a builder-level assertion that these values become the existing metric names and labels without collapsing cost line items into `usage.costUSD`.
 
@@ -836,7 +925,7 @@ ProviderResult.modelUsage = aggregated OpenAITokenMetric[]
 ProviderResult.windows = []
 ```
 
-Do not populate generic `usage.costUSD` for OpenAI. Map all typed transport, HTTP, schema, and parse errors to the fixed source ID. Preserve zero-valued token fields as metrics because the existing contract emits them.
+Do not populate generic `usage.costUSD` for OpenAI. Read the validated `ctx.openaiHistoryDays` and use `ctx.scheduledTimeSeconds` as the UTC day anchor for both API requests; the adapter must not parse `OPENAI_API_HISTORY_DAYS` or read wall clock time. Map all typed transport, HTTP, schema, and parse errors to the fixed source ID. Preserve zero-valued token fields as metrics because the existing contract emits them.
 
 **GREEN command:**
 
@@ -860,7 +949,7 @@ git commit -m "refactor(provider-metrics): OpenAIをProviderResultへ移行"
 - Modify: `workers/src/provider-metrics.ts`
 - Modify: `workers/tests/provider-metrics/scheduled.test.ts`
 
-**Consumes:** Registry from Task 4, all adapters from Tasks 5–11, metric builders from Tasks 2–3.
+**Consumes:** `RegisteredProvider[]`, `ProviderExecutionRecord[]`, and `runAdapters()` from Task 4; all adapters from Tasks 5–11; metric builders from Tasks 2–3.
 
 **Dependency:** Tasks 2–11.
 
@@ -875,6 +964,10 @@ Rewrite scheduled tests with wire-level assertions on the POST body. Add these s
 3. All providers are skipped. Assert no POST occurs.
 4. Successful data plus health metrics. Assert both are present in the same OTLP payload.
 5. Ollama API failure plus HTML fallback success. Assert only fallback provenance.
+6. `OPENAI_API_HISTORY_DAYS` is unset. Assert the OpenAI adapter receives `openaiHistoryDays = 1`.
+7. Configured values `"1"` and `"31"` are accepted; `"0"`, `"32"`, a non-integer, and a non-numeric value preflight-skip OpenAI without invoking its adapter.
+8. Invalid OpenAI history configuration with another attempted provider continues that provider, emits no OpenAI health outcome, and pushes the attempted provider's data/health. With no other attempted provider, assert no POST.
+9. A fixed scheduled event time is converted once to `scheduledTimeSeconds`, and the OpenAI request window uses that value as its UTC anchor.
 
 **RED command:**
 
@@ -886,18 +979,30 @@ npx vitest run tests/provider-metrics/scheduled.test.ts
 
 ### GREEN
 
-Define the registry with one fixed credential key and adapter per provider. Build `ProviderContext` with `nowSeconds` and `monotonicNowMs` seams. Call `runAdapters()` once.
+Task 12 owns OpenAI configuration preflight. Parse `OPENAI_API_HISTORY_DAYS` exactly once as `raw === undefined ? 1 : Number(raw)`, accepting only `Number.isInteger(value)` in `1..31`. Build `ProviderContext` with the normalized `openaiHistoryDays`, `scheduledTimeSeconds = Math.floor(scheduledTimeMs / 1000)`, and the `nowSeconds` / `monotonicNowMs` seams. If the configured value is invalid, use context value `1` but pass a copy of `env` with only `OPENAI_ADMIN_API_KEY` omitted to `runAdapters()`; this creates the OpenAI `skipped` record without invoking the adapter. This preflight result is not a `ProviderError`, does not create OpenAI health, and does not block other providers.
 
-Build the report by iterating the registry and joining each provider with its execution record. Map adapter statuses exactly:
+Define the registry with exactly these entries, one fixed credential key, fixed `primarySourceId`, and adapter per provider:
+
+```text
+openai_api   -> OPENAI_ADMIN_API_KEY   -> openai-organization-api
+codex        -> CODEX_ACCESS_TOKEN     -> codex-wham-usage
+opencodego   -> OPENCODEGO_API_KEY     -> opencodego-usage-api
+ollama_cloud -> OLLAMA_API_KEY         -> ollama-api-usage
+commandcode  -> COMMAND_CODE_API_KEY   -> commandcode-billing-credits
+```
+
+Use the new `./provider-metrics/opencodego/index` entry and never import the deleted legacy `opencodego.ts`. Call `runAdapters()` once and consume its `ProviderExecutionRecord[]` directly.
+
+Build the report by iterating the registry and joining each provider with its `ProviderExecutionRecord`. Map adapter statuses exactly:
 
 ```text
 skipped -> skipped
 success -> success
 empty   -> empty
-failed  -> failed with kind:sourceId diagnostic
+failed  -> failed with kind:sourceId diagnostic, including `internal` for wrapper contract violations
 ```
 
-When `attempted` is false, return without POST. When `attempted` is true, build data metrics from successful results, build health metrics from all health outcomes, and call:
+Set `attempted = true` when at least one execution record has `status = "attempted"`; skipped records, including invalid OpenAI preflight, do not set it. When `attempted` is false, return without POST. When `attempted` is true, build data metrics from successful `record.outcome` results, build health metrics from all `record.health` values, and call:
 
 ```ts
 pushProviderMetrics(env, {
@@ -917,7 +1022,7 @@ npx vitest run tests/provider-metrics/scheduled.test.ts
 npm run typecheck
 ```
 
-**Expected GREEN result:** Scheduled integration tests and the first global typecheck pass. No known consumer compile failure remains.
+**Expected GREEN result:** Scheduled integration tests prove direct execution-record joining, health-only push, all-skipped no-push, Ollama fallback provenance, OpenAI history default/range/invalid semantics, and scheduled-time window anchoring. The first global typecheck passes with no known consumer compile failure.
 
 ### Commit
 
@@ -995,14 +1100,17 @@ git commit -m "docs(provider-metrics): 新しいcredentialとmetric契約を記�
 | OpenCode Go reset-seconds compatibility | `§7.2`, `§9.3`         | Task 3                   | injected `nowSeconds` formula assertion                               |
 | Ollama model requests                   | `§6.2`, `§7.2`, `§9.3` | Tasks 3, 7               | session/weekly period and model-label assertions                      |
 | Ollama activity cost                    | `§6.2`, `§7.2`         | Tasks 3, 7               | exact `ollama_cloud_activity_cost_usd` assertion                      |
-| Ollama fallback/enrichment precedence   | `§6.2`, `§8.1`         | Task 8                   | API 200 fatal, API success enrichment, request-failure fallback tests |
+| Ollama fallback/enrichment precedence   | `§6.2`, `§8.1`         | Tasks 7, 8               | API 200 fatal, HTTP 400 fallback success/failure, API success enrichment, request-failure fallback tests |
 | CommandCode endpoint error ownership    | `§6.3`, `§8.7`         | Task 9                   | endpoint table-driven source assertions                               |
 | Codex browser fallback ownership        | `§6.5`, `§8.7`         | Task 10                  | browser success/failure/binding-unavailable tests                     |
 | Timeout/network distinction             | `§4.3`, `§8.2`, `§8.3` | Tasks 1, 5, 7, 9, 10, 11 | typed transport and adapter category assertions                       |
+| Unexpected adapter rejection isolation  | `§4.3`, `§8.1`         | Tasks 1, 4, 12           | `internal` kind, fixed primary source, no status code, other provider continues |
+| OpenAI history-window configuration compatibility | `§6.4`, `§9.1`–`§9.3` | Tasks 1, 11, 12 | default/range/invalid preflight, normalized value, scheduled-time anchor, diagnostic/health/push assertions |
+| OpenCode Go legacy implementation migration | `§5`, `§6.1`, `§9.2` | Task 6 | helper ownership, import migration, legacy `opencodego.ts` deletion |
 | Scrape duration completion semantics    | `§4.4`, `§7.5`         | Tasks 2, 4, 12           | fast/slow deferred adapter test                                       |
 | Scrape timestamp completion semantics   | `§4.4`, `§7.5`         | Tasks 2, 4, 12           | immediate completion timestamp assertion                              |
 | Health-only push                        | `§4.4`, `§7.6`, `§8.1` | Tasks 3, 12              | all-failed payload contains health metrics                            |
-| All-skipped no-push                     | `§4.4`, `§8.1`         | Task 12                  | POST count remains zero                                               |
+| All-skipped no-push                     | `§4.4`, `§8.1`, `§9.1` | Task 12                  | credential/config skipped and POST count remains zero                  |
 
 ## Final Self-Review
 
@@ -1012,8 +1120,9 @@ git commit -m "docs(provider-metrics): 新しいcredentialとmetric契約を記�
 - OpenAI line items and model usage are retained until the builder.
 - OpenCode Go Zen balance cannot become a generic credits metric.
 - Ollama model requests include `period` and `model`; activity cost has its exact field.
-- `ProviderContext` has both injectable clocks.
-- `ProviderErrorKind` includes network, timeout, HTTP 4xx/5xx, schema, and parse.
+- `ProviderContext` has `scheduledTimeSeconds`, normalized `openaiHistoryDays`, and both injectable clocks.
+- `ProviderErrorKind` includes network, timeout, HTTP 4xx/5xx, schema, parse, and contract-only `internal`.
+- `RegisteredProvider`, `ProviderExecutionRecord`, and `runAdapters()` have exact fields, arguments, return type, and ordered-record semantics.
 - Fixed source IDs are endpoint-specific and not inferred from error strings.
 - `pushProviderMetrics` requires data and health input together.
 - Diagnostic status preserves skipped, success, empty, and failed.

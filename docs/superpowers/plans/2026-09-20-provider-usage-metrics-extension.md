@@ -707,6 +707,7 @@ Add fixtures for:
 - 400, 401, 403, 429, 500, network, and timeout.
 
 Assert that success stores `modelRequests` with session/weekly periods, stores cost in `activityCostUSD`, ignores `activity.models[]`, and never creates a monthly quota window. For `limits.*.models[].name`, assert the Design §6.2 rule exactly: accept only a string whose `trimmed = name.trim()` has ASCII length `1..128`, whose original value equals `trimmed`, and whose full value matches `^[A-Za-z0-9._:/-]+$`; do not coerce, normalize, case-fold, or replace the label. Assert that a valid 128-character name is retained, a 129-character name is omitted, leading/trailing/internal whitespace and control-character names are omitted, and a non-string name is omitted. Assert duplicate entries with the same `(period, model)` key are emitted as one `modelRequests` entry with the summed `requestCount` (for example, `3 + 4 = 7`), while the same model in `session` and `weekly` remains two independent entries with separate counts. Assert that HTTP 400 returns `failed` with `ProviderError.kind = "upstream_4xx"`, `ProviderError.sourceId = "ollama-api-usage"`, and `statusCode = 400`. Assert that empty primary content is a fatal `schema` failure, invalid JSON is `parse`, and API 200 failures never return `null` for fallback interpretation.
+For every non-2xx fixture, include a sentinel response body and credential value. Assert that the returned `ProviderError` exposes only its fixed `kind`, `provider`, `sourceId`, and optional `statusCode`; the response body, credential, authorization header, and raw exception message must not appear.
 
 **RED command:**
 
@@ -882,7 +883,7 @@ git commit -m "feat(provider-metrics): CommandCode adapterを追加"
 
 ### RED
 
-Update existing tests to unwrap `AdapterOutcome`. Add cases for primary 403 with browser success, browser launch/navigation/response timeout, browser schema/parse failure, browser binding unavailable, primary 401, 429, 5xx, network, timeout, primary 200 schema/parse failure, and reset-credit enrichment failure.
+Update existing tests to unwrap `AdapterOutcome`. Add cases for primary 403 with browser success, browser launch/navigation/response timeout, browser schema/parse failure, browser binding unavailable, primary 401, 429, 5xx, network, timeout, primary 200 schema/parse failure, and reset-credit enrichment failure. Use sentinel response bodies and credential values for HTTP and browser failures; assert that the final typed error contains only the fixed provider/source/category/status fields and never the response body, credential, authorization header, or raw exception message.
 
 Assert:
 
@@ -993,13 +994,15 @@ Rewrite scheduled tests with wire-level assertions on the POST body. Add these s
 
 1. One success, one empty, one failure, and one skipped provider. Assert report status for every provider and health status/timestamp semantics.
 2. All configured providers fail. Assert one POST occurs and its metrics include `provider_metrics_scrape_success` and `provider_metrics_scrape_duration_seconds` for every attempted provider.
-3. All providers are skipped. Assert no POST occurs.
-4. Successful data plus health metrics. Assert both are present in the same OTLP payload.
-5. Ollama API failure plus HTML fallback success. Assert only fallback provenance.
-6. `OPENAI_API_HISTORY_DAYS` is unset. Assert the OpenAI adapter receives `openaiHistoryDays = 1`.
-7. Configured values `"1"` and `"31"` are accepted; `"0"`, `"32"`, a non-integer, and a non-numeric value preflight-skip OpenAI without invoking its adapter.
-8. Invalid OpenAI history configuration with another attempted provider continues that provider, emits no OpenAI health outcome, and pushes the attempted provider's data/health. With no other attempted provider, assert no POST.
-9. A fixed scheduled event time is converted once to `scheduledTimeSeconds`, and the OpenAI request window uses that value as its UTC anchor.
+3. Exactly one provider is attempted and returns `empty`, while every other provider is skipped. Assert one POST occurs, the report preserves that provider's `empty` status, and the payload contains that provider's `provider_metrics_scrape_success=1`, `provider_metrics_scrape_timestamp_seconds`, and `provider_metrics_scrape_duration_seconds`.
+4. All providers are skipped. Assert no POST occurs.
+5. Successful data plus health metrics. Assert both are present in the same OTLP payload.
+6. Ollama API failure plus HTML fallback success. Assert only fallback provenance.
+7. `OPENAI_API_HISTORY_DAYS` is unset. Assert the OpenAI adapter receives `openaiHistoryDays = 1`.
+8. Configured values `"1"` and `"31"` are accepted; `"0"`, `"32"`, a non-integer, and a non-numeric value preflight-skip OpenAI without invoking its adapter.
+9. Invalid OpenAI history configuration with another attempted provider continues that provider, emits no OpenAI health outcome, and pushes the attempted provider's data/health. With no other attempted provider, assert no POST.
+10. A fixed scheduled event time is converted once to `scheduledTimeSeconds`, and the OpenAI request window uses that value as its UTC anchor.
+11. Codex and Ollama HTTP failures use sentinel response bodies and credentials. Assert Worker logs and the diagnostic report contain only the fixed status/provider/source/category fields and contain neither response bodies, credentials, authorization headers, nor raw exception messages.
 
 **RED command:**
 
@@ -1031,8 +1034,10 @@ Build the report by iterating the registry and joining each provider with its `P
 skipped -> skipped
 success -> success
 empty   -> empty
-failed  -> failed with kind:sourceId diagnostic, including `internal` for wrapper contract violations
+failed  -> failed with a fixed diagnostic projection `{ statusCode?, provider, sourceId, kind }`, including `internal` for wrapper contract violations
 ```
+
+Never copy an exception message, response body, credential, or authorization header into the Worker log or diagnostic report.
 
 Set `attempted = true` when at least one execution record has `status = "attempted"`; skipped records, including invalid OpenAI preflight, do not set it. When `attempted` is false, return without POST. When `attempted` is true, build data metrics from successful `record.outcome` results, build health metrics from all `record.health` values, and call:
 
@@ -1080,7 +1085,7 @@ git commit -m "refactor(provider-metrics): orchestratorをhealth push対応へ�
 From the repository root, run the documentation contract check below before editing `docs/provider-metrics.md`:
 
 ```bash
-required='OPENCODEGO_API_KEY OLLAMA_API_KEY COMMAND_CODE_API_KEY opencodego_zen_balance_usd opencodego_reset_seconds_remaining ollama_cloud_model_requests ollama_cloud_activity_cost_usd provider_metrics_scrape_success'
+required='OPENCODEGO_API_KEY OPENCODEGO_SESSION_COOKIE OPENCODEGO_WORKSPACE_ID OLLAMA_API_KEY OLLAMA_SESSION_COOKIE COMMAND_CODE_API_KEY opencodego_zen_balance_usd opencodego_reset_seconds_remaining ollama_cloud_model_requests ollama_cloud_activity_cost_usd provider_metrics_scrape_success'
 for word in $required; do grep -F "$word" docs/provider-metrics.md >/dev/null || exit 1; done
 ```
 

@@ -267,6 +267,8 @@ schema / parse failure の ownership は次の順序で決定する。
 
 diagnostic report の provider status は `skipped`、`success`、`empty`、`failed` の4値とする。`empty` は health metric では `scrape_success=1` として扱うが、report では `empty` を保持する。registry の provider 順序で全 status を生成し、success/empty/failed の outcome を skipped に変換しない。
 
+`failed` の diagnostic は `ProviderError` から `statusCode?`、`provider`、`sourceId`、`kind` だけを投影する。例外メッセージ、response body、credential、Authorization header は Worker log と diagnostic report のどちらにも含めない。
+
 ## 5. ファイル構成
 
 ```text
@@ -735,7 +737,9 @@ retry exhausted の network/timeout は `HttpTransportError.kind` を保持し�
 ### 8.5 Credential 非露出
 
 - API key / OAuth token / session cookie / Authorization header をログ・metric label・error message に出力しない
-- HTTP response body は error/log/diagnostic に出力しない。status、provider、source、error category だけを allowlist 形式で記録する
+- HTTP response body は error/log/diagnostic に出力しない
+- HTTP failure の error/log/diagnostic は、`statusCode`（response が存在する場合）、`provider`、`sourceId`、`kind` の固定 allowlist 情報だけで構成する。任意の status text、response body、credential、Authorization header、raw exception message は公開しない
+- Worker log と diagnostic report は同じ allowlist 契約に従い、adapter の例外メッセージをそのまま転送しない
 - parser が必要とする response body は parser の scope 内だけで扱い、失敗後に保持しない
 - 環境変数は Wrangler secret として設定
 
@@ -828,11 +832,21 @@ MYBROWSER
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | OpenAI       | 現行 metric と `OPENAI_API_HISTORY_DAYS` の default `1`、valid range `1..31`、invalid value の fetch skip、scheduled-time anchor を維持し、破壊的変更なし |
 | Codex        | 現行 `/wham/usage` と session/weekly metric を維持。共通 `QuotaWindow[]` への最小変換のみ追加し、未知 limit の一般化は行わない               |
-| OpenCodeGo   | Primary を API key 経由 `/zen/go/v1/usage` へ。Cookie/RPC は Zen balance enrichment                                                          |
-| Ollama Cloud | Primary を API key 経由 `/api/usage` へ。Cookie/HTML は runtime の enrichment/fallback。JSON の monthly activity に quota ratio を推測しない |
+| OpenCodeGo   | Primary を API key 経由 `/zen/go/v1/usage` へ。Cookie/RPC は Zen balance enrichment。cookie-only 構成は breaking change として API key へ移行する |
+| Ollama Cloud | Primary を API key 経由 `/api/usage` へ。Cookie/HTML は runtime の enrichment/fallback。cookie-only 構成は breaking change として API key へ移行する。JSON の monthly activity に quota ratio を推測しない |
 | CommandCode  | 新規追加                                                                                                                                     |
 
 `OPENCODEGO_API_KEY`、`OLLAMA_API_KEY`、`COMMAND_CODE_API_KEY` が primary credential の正式名である。既存の `OPENCODEGO_SESSION_COOKIE` と `OLLAMA_SESSION_COOKIE` は fallback/enrichment 専用であり、primary の代替 credential として扱わない。
+
+この変更は、OpenCode Go と Ollama Cloud の cookie-only deployment に対する breaking change である。新規設定および既存環境の移行では、次の手順を適用する。
+
+- `OPENCODEGO_API_KEY` を設定し、OpenCode Go quota の primary request を API key で認証する
+- `OLLAMA_API_KEY` を設定し、Ollama Cloud usage の primary request を API key で認証する
+- 既存の `OPENCODEGO_SESSION_COOKIE` は、API key primary が成功した後の Zen balance enrichment にだけ使用する。`OPENCODEGO_WORKSPACE_ID` は cookie/RPC enrichment の workspace override として必要な場合だけ設定する
+- 既存の `OLLAMA_SESSION_COOKIE` は、API key primary の optional HTML enrichment または primary request failure 後の fallback にだけ使用する
+- cookie-only deployment から移行する際は、API key を Wrangler secret として登録してから scheduled run を確認し、cookie は enrichment/fallback が不要になるまで保持できる
+- API key がなく cookie だけが設定されている場合、両 provider は `skipped` とし、OpenCode Go adapter と Ollama adapter を呼び出さない。別の provider が attempted ならその health/data push は継続し、全 provider が skipped の場合だけ no-push とする
+- API key と cookie の両方が設定されている場合、primary adapter は API key で実行し、cookie は対応する enrichment/fallback 経路に限って使用する。cookie を API key の代替として使用しない
 
 ### 9.3 Existing metric compatibility
 
@@ -878,6 +892,8 @@ metric name または既存 label value の削除・rename は本改修では行
 - missing required field
 - unknown period/key が arbitrary metric label にならず omit されること
 - credentials、Authorization、cookie、response body が error text/log に含まれないこと
+- Codex と Ollama の non-2xx fixture に sentinel response body と credential を含め、`ProviderError`、Worker log、diagnostic report に `statusCode`、`provider`、`sourceId`、`kind` 以外の値が出力されないこと
+- Worker log と diagnostic report に raw exception message が転送されず、response body、credential、Authorization header も出力されないこと
 - OpenAI の line item cost と model usage、OpenCode Go の Zen balance、Ollama の model request/activity cost が provider-specific field から exact metric name/label へ生成されること
 - `opencodego_reset_seconds_remaining` が注入された `nowSeconds` に対する残秒数であり、wall clock に依存しないこと
 - network / timeout / HTTP status / schema / parse の各 failure が固定 source ID と組み合わされ、raw error message を公開しないこと
@@ -940,7 +956,9 @@ OpenAI の既存 configuration compatibility は次を必須とする。
 
 - 複数 Provider を同時実行し、1 Provider 失敗時に他 Provider の metric が送信されることを確認
 - 全 Provider が failed でも health-only push が行われることを確認
+- 唯一の attempted Provider が `empty` の場合も health-only push が行われ、`scrape_success=1`、timestamp、duration が送信されることを確認する
 - 全 Provider が skipped の場合は push されないことを確認
+- `OPENCODEGO_API_KEY` と `OLLAMA_API_KEY` がなく対応する cookie だけが設定されている場合、両 provider が `skipped` となり、両 adapter が呼び出されないことを確認する。API key と cookie の両方がある場合は API key primary と cookie enrichment/fallback の経路を維持する。
 - `OPENAI_API_HISTORY_DAYS` の invalid preflight で OpenAI だけが skipped となり、他 Provider の実行・health・push が継続することを確認する。OpenAI だけが invalid preflight の場合は no-push とする。
 - OpenAI の valid history window が `scheduledTimeSeconds` を anchor とし、normalized `historyDays` が adapter request の start/end に反映されることを確認する。
 - success / failed / empty / skipped の health semantics が正しく生成されることを確認
@@ -970,11 +988,11 @@ OpenAI の既存 configuration compatibility は次を必須とする。
 
 - OpenAI API costs / usage の既存 metric が維持されている
 - `OPENAI_API_HISTORY_DAYS` が default `1`、valid range `1..31`、invalid configured value の fetch skip、`scheduledTimeSeconds` anchor を維持し、invalid preflight は `skipped` として health failure / ProviderError を生成しない
-- OpenCode Go quota を API key のみで取得できる
+- OpenCode Go quota を API key のみで取得できる。対応する API key がなく cookie だけが設定されている場合は `skipped` とし、OpenCode Go adapter を呼び出さない
 - OpenCode Go quota 取得に browser cookie を必要としない
 - OpenCode Go rolling / weekly / monthly を扱える
 - OpenCode Go の `403 + EntitlementError` は `AdapterOutcome.empty`、`scrape_success=1`、scrape timestamp 更新となり、その他の 403 は `forbidden` failure、`scrape_success=0`、`ProviderError.sourceId = "opencodego-usage-api"` となる
-- Ollama Cloud usage を API key のみで取得できる
+- Ollama Cloud usage を API key のみで取得できる。対応する API key がなく cookie だけが設定されている場合は `skipped` とし、Ollama adapter を呼び出さない
 - Ollama legacy session / weekly を扱える
 - Ollama 新 plan monthly usage は、JSON の activity cost と optional HTML plan/reset enrichment として扱える。JSON に存在しない monthly quota ratio は合成しない
 - Ollama API success 後の HTML enrichment は valid な field がなくても primary success を維持し、API failure 後の HTML fallback は valid な quota window、plan、または reset timestamp が1つ以上ある場合だけ success とする
@@ -1009,6 +1027,7 @@ OpenAI の既存 configuration compatibility は次を必須とする。
 - adapter の unexpected rejection が `ProviderError.kind = "internal"`、registry 固定の primary source、`statusCode` なしで isolation され、他 Provider が継続する
 - required primary contract の fatal schema / parse failure だけが `AdapterOutcome.failed` と `ProviderError.kind = schema | parse` を生成し、optional field / optional enrichment failure は primary `ProviderResult` と `scrape_success=1` を維持する
 - Credential が log / metric へ露出しない
+- Codex / Ollama の HTTP failure、Worker log、diagnostic report が response body、credential、Authorization header、raw exception message を露出せず、`statusCode`、`provider`、`sourceId`、`kind` の固定 allowlist だけを扱う
 - Provider ごとの最終成功時刻を監視可能である
 - Provider adapter ごとの unit test が存在する
 - ドキュメントに各取得経路の support level が記載されている

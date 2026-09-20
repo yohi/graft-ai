@@ -320,7 +320,7 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - `limits.session.usage` と `limits.weekly.usage` は 5-hour / 7-day allowance の使用済み ratio `0..1` であり、そのまま `usageRatio` とする。percent への変換は行わない。
 - `limits.session` / `limits.weekly` が存在しない monthly plan では、quota window を合成しない。`activity.cost` があれば monthly-plan の usage cost として `ollama_cloud_activity_cost_usd` を emit する。
 - `activity.period.type` の `last_4_weeks` は activity 集計期間であり、quota の `monthly` label には変換しない。`activity.period.starting_at` / `ending_at` は diagnostic-only とする。
-- `models[].name` は non-empty string、`request_count` は finite な非負 safe integer とする。不正な model entry はその entry だけを捨て、limits 本体を failure にしない。
+- `request_count` は finite な非負 safe integer とする。不正な model entry はその entry だけを捨て、limits 本体を failure にしない。
 - `activity.cost` は非負の decimal string とし、number へ変換できない場合は activity cost だけを omit する。limits が有効なら Provider success を維持する。
 - legacy と monthly の fields が同時に存在する場合、session/weekly limits と activity cost を独立に採用する。monthly plan の存在を理由に legacy limits を上書きしない。
 - JSON に plan や exact reset timestamp は存在しないため、API response だけでは plan/reset metric を生成しない。
@@ -328,6 +328,15 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - API が quota/activity を返した場合に HTML から plan または reset だけ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。この場合の HTML failure は primary failure にしない。API request が失敗した場合は、HTML が認識可能な quota または required な plan/reset result を返したときだけ HTML fallback result で success とし、`ollama-settings-html` を `fallback` として追加する。HTML も失敗した場合は元の API failure を provider failure とする。
 - API と HTML の両方が同じ field を返した場合は API の quota/activity を優先し、HTML は plan/reset の不足分だけを補う。
 - 認識できない top-level period や limit key は arbitrary label として emit しない。
+
+`limits.session.models[]` と `limits.weekly.models[]` の `models[].name` を `model` label に使用する際の policy は次のとおり固定する。
+
+- wire value は `string` のみ受け付け、他の型から文字列へ coercion しない。
+- `trimmed = name.trim()` を検証に使用し、`trimmed` の長さは 1..128 の ASCII characters とする。`name !== trimmed` の場合は先頭または末尾の whitespace として invalid とし、trim 結果を label に使用しない。
+- `name` は `^[A-Za-z0-9._:/-]+$` に完全一致しなければならない。内部 whitespace、Unicode 文字、その他の文字は受け付けない。
+- invalid、oversized、unsupported な model name は `unknown` / `other` へ変換せず、その model entry の data point だけを omit する。ほかの valid entry と limits 本体の success は維持する。
+- valid な name は lower-case 化、alias 化、文字置換をせず、元の文字列をそのまま `model` label に使用する。したがって `Foo` と `foo` は別の identifier として扱う。
+- duplicate aggregation は model-label validation の後に行い、同じ `period` と完全一致する model identifier の `request_count` だけを同一 window 内で合算する。正規化による別名への collision は作らない。
 
 `ollama_cloud_model_requests{period,model}` の source-to-label mapping は次のとおり固定する。
 
@@ -406,7 +415,7 @@ GET /alpha/whoami?limits=1
 - `remainingCredits` は wire field として信頼せず、`monthlyCredits + purchasedCredits + freeCredits` のうち存在する値だけを合計して算出する。monthly が存在しない場合は remaining metric を omit する。
 - `windowLimits` は optional とし、存在する場合は `limited` を boolean として検証する。`limited=false` は Provider が bounded quota を適用していない明示的な unlimited semantics とし、`fiveHour` / `weekly` が存在しても quota window を生成しない。`usageRatio`、`used`、`limit`、`exceeded`、reset metric のいずれも emit しない。
 - `limited=true` の場合、`fiveHour` は canonical `session`、`weekly` は canonical `weekly` へ変換する。entry の `used`、`cap` は非負 finite number とし、`cap` は 0 より大きくなければならない。`used` または `cap` の型・範囲が不正、または `cap==0` の bounded window は `billing/credits` の `schema` failure とし、0 除算による `usageRatio=0` / `1` の補完は行わない。
-- `resetAt` の単位を桁数だけで決めず、10^12 以上を milliseconds、それ未満を seconds として扱う。負値、非有限値、parse 不可値はその window の reset だけを omit する。
+- `windowLimits.*.resetAt` の accepted wire representation は JSON number のみとする。finite な非負値について、10^12 以上は epoch milliseconds、それ未満は epoch seconds として扱い、`resetTimestampSeconds` はそれぞれ `Math.floor(resetAt / 1000)` または `Math.floor(resetAt)` で算出する。numeric string、ISO 8601 string、負値、非有限値は current contract 外の invalid optional field とし、ISO parse や数値 coercion は行わず、その window の reset timestamp だけを omit する。quota window、usage ratio、exceeded は success のまま維持する。
 
 CommandCode quota の `QuotaWindow` normalization は次の規則で固定する。
 
@@ -432,7 +441,7 @@ windowLimits.weekly.cap    → period="weekly", limit
 }
 ```
 
-`data` がない場合は subscription enrichment の schema failure とし、credits/quota result は維持する。`planId`、`status`、`currentPeriodStart`、`currentPeriodEnd` は存在時に non-empty string として検証し、`currentPeriodStart` と `currentPeriodEnd` は ISO 8601 として parse できる場合だけ採用する。`currentPeriodStart` が欠落または parse 不能なら subscription metadata の他フィールドは維持し、summary request から `since` だけを省略する。`currentPeriodEnd` は ISO 8601 から epoch seconds へ変換する。subscription endpoint の 401/403/429/5xx、network、timeout は subscription metadata のみ omit し、quota failure にはしない。
+`data` がない場合は subscription enrichment の schema failure とし、credits/quota result は維持する。`planId`、`status`、`currentPeriodStart`、`currentPeriodEnd` は存在時に non-empty string として検証する。`currentPeriodStart` と `currentPeriodEnd` は subscription 固有の ISO 8601 string contract とし、`resetAt` の numeric seconds/milliseconds rule は適用しない。ISO 8601 として parse できる場合だけ採用し、`currentPeriodStart` が欠落または parse 不能なら subscription metadata の他フィールドは維持して summary request から `since` だけを省略する。`currentPeriodEnd` が欠落または parse 不能なら `billingPeriodEndSeconds` だけを omit する。subscription endpoint の 401/403/429/5xx、network、timeout は subscription metadata のみ omit し、quota failure にはしない。
 
 `usage/summary` の expected response は次の shape とする。
 
@@ -451,7 +460,7 @@ failure ownership は次のとおり固定する。
 - `whoami` failure、`org.id` 欠落、または `billing/credits` failure → CommandCode provider failure。plan/credits/quota を push payload に含めない。
 - `billing/subscriptions` failure → credits/quota は success のまま、plan/status/billing period end を omit。
 - `usage/summary` failure → credits/quota は success のまま、usage summary metric を omit。
-- 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、5xx は `upstream_5xx`、network error は `network`、timeout は `timeout`、JSON shape 不一致は `schema`、timestamp/number の変換失敗は `parse` とする。
+- 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、5xx は `upstream_5xx`、network error は `network`、timeout は `timeout`、JSON shape 不一致は `schema` とする。wire contract 上 required な numeric field の型・範囲不正は `schema`、required な timestamp string の parse 不能は `parse` とする。ただし、optional な `resetAt`、`currentPeriodStart`、`currentPeriodEnd` の扱いは上記の field-level omission を優先し、CommandCode provider failure にはしない。
 - undocumented API の依存は `commandcode/` ディレクトリ内に閉じ、response body、Authorization header、API key は error、log、diagnostic report、metric label のいずれにも出力しない。
 
 `ProviderError.sourceId` は endpoint ごとに `whoami` → `commandcode-whoami`、`billing/credits` → `commandcode-billing-credits`、`billing/subscriptions` → `commandcode-billing-subscriptions`、`usage/summary` → `commandcode-usage-summary` と固定する。
@@ -536,7 +545,7 @@ commandcode_usage_requests
 commandcode_usage_tokens
 ```
 
-`ollama_cloud_model_requests{period,model}` は §6.2 の mapping に従い、`limits.session.models[]` だけを `period="session"`、`limits.weekly.models[]` だけを `period="weekly"` として emit する。`activity.models[]` はこの metric に使用しない。同じ model の session/weekly request は別 series であり、`monthly` series は生成しない。不正な model entry は該当 entry だけを omit し、同一 window 内の同一 model は request count を合算する。
+`ollama_cloud_model_requests{period,model}` は §6.2 の mapping と model-label policy に従い、validated model identifier だけを `model` label に使用する。`limits.session.models[]` だけを `period="session"`、`limits.weekly.models[]` だけを `period="weekly"` として emit し、invalid / oversized / unsupported な model string は data point を emit しない。`activity.models[]` はこの metric に使用しない。同じ model の session/weekly request は別 series であり、`monthly` series は生成しない。不正な model entry は該当 entry だけを omit し、同一 window 内の同じ `period` と exact model identifier は request count を合算する。
 
 ### 7.3 存在しない値の扱い
 
@@ -642,7 +651,9 @@ bounded exponential backoff を使用する。
 - session ID
 - API key ID
 - arbitrary error message
-- 正規化戦略のない model 名
+- arbitrary upstream model string
+
+Ollama の `ollama_cloud_model_requests{period,model}` における `model` label は、§6.2 の bounded validation policy（1..128 の ASCII characters、`^[A-Za-z0-9._:/-]+$`、先頭/末尾 whitespace 不受理、置換・case folding なし）を通過した identifier だけを使用する。invalid value を `unknown` / `other` に集約せず、該当 data point を omit する。
 
 ### 8.7 Undocumented API の明示
 
@@ -763,8 +774,10 @@ Provider-specific fixture は次を必須とする。
 - OpenCode Go: `usage.rolling/weekly/monthly` の percent scale、ISO `resetsAt`、status non-ok、window 欠落、invalid percent/timestamp
 - Ollama legacy: `limits.session/weekly` の 0..1 ratio、session/weekly `models[]` の `period` mapping、同一 window 内の重複 model の合算、同一 model の別 window series、activity models の未使用、activity cost/period
 - Ollama monthly: `limits` 欠落または session/weekly 欠落、activity-only success、activity models を model metric にしないこと、`last_4_weeks` を `monthly` にしないこと、plan/reset の HTML enrichment、API と HTML の同時存在
+- Ollama model label: valid identifier、empty model、whitespace-only model、先頭/末尾 whitespace、128 characters 超過、許可文字外、invalid model entry だけの omit、同一 window 内の同じ valid model の aggregation、rejected string が `model` label に流入しないこと
 - Command Code request: `whoami?limits=1`、`orgId` の credits/subscriptions への伝播、subscription `currentPeriodStart` の summary `since` への伝播、body なし、required headers、query encoding
-- Command Code response: `whoami`、`billing/credits`、`billing/subscriptions`、`usage/summary` の exact shape、`windowLimits` の top-level 所在、resetAt の seconds/milliseconds/ISO normalization
+- Command Code response: `whoami`、`billing/credits`、`billing/subscriptions`、`usage/summary` の exact shape、`windowLimits` の top-level 所在、numeric seconds `resetAt` → epoch seconds、numeric milliseconds `resetAt` → epoch seconds、invalid / negative / non-finite `resetAt` → reset timestamp だけ omit して quota success、ISO string `resetAt` を parse せず current contract 外として受け付けないこと
+- Command Code subscription: valid ISO `currentPeriodStart` の `since` 伝播、invalid `currentPeriodStart` で `since` なしの summary 実行、valid ISO `currentPeriodEnd` の epoch seconds 化、invalid `currentPeriodEnd` で billing-period-end だけ omit
 - CommandCode quota normalization: `fiveHour.used/cap` が `session` の `used/limit`、`weekly.used/cap` が `weekly` の `used/limit` へ対応すること
 - CommandCode quota boundary: `used=0, cap=14` が `usageRatio=0`、`exceeded=false` になること
 - CommandCode quota boundary: `used=13.9, cap=14` が `usageRatio=13.9/14`、`exceeded=false` になること
@@ -809,11 +822,14 @@ Provider-specific fixture は次を必須とする。
 - Ollama legacy session / weekly を扱える
 - Ollama 新 plan monthly usage は、JSON の activity cost と optional HTML plan/reset enrichment として扱える。JSON に存在しない monthly quota ratio は合成しない
 - Ollama の存在しない window を `0` として出力しない
-- Ollama `model_requests{period,model}` が session/weekly limits だけから生成され、activity models や `last_4_weeks` が public label に流入しない
+- Ollama `ollama_cloud_model_requests{period,model}` が session/weekly limits だけから生成され、activity models や `last_4_weeks` が public label に流入しない
+- Ollama `ollama_cloud_model_requests` の `model` label が §6.2 の 1..128 ASCII characters / `^[A-Za-z0-9._:/-]+$` / whitespace policy を通過した identifier だけを verbatim に使用し、invalid / oversized / unsupported model name を omit する
 - CommandCode の 5h / weekly quota を取得できる
 - CommandCode の `fiveHour` / `weekly` の wire `used` / `cap` が、それぞれ `QuotaWindow.used` / `limit` / `usageRatio` / `exceeded` へ本書の規則どおり一意に正規化される
 - CommandCode の `usageRatio` が `rawRatio=used/cap` の 0..1 clamp と `used>=cap` の `exceeded=true` semantics を維持する
 - CommandCode の `windowLimits.limited=false` は明示的 unlimited semantics として quota window を emit せず、`limited=true` の `cap==0` は `schema` failure とする
+- CommandCode の `resetAt` は numeric epoch seconds または numeric epoch milliseconds だけを受け付け、ISO string を parse せず、invalid optional value は reset timestamp のみ omit する
+- CommandCode subscription の ISO `currentPeriodStart` / `currentPeriodEnd` はそれぞれ `since` / billing-period-end の field-level omission semantics を維持する
 - CommandCode credits を取得できる
 - CommandCode の exact endpoint、auth、response shape、failure ownership が本書どおり固定されている
 - CommandCode の `org.id`、`orgId`、`currentPeriodStart` の request dependency と各 endpoint の query/body/header contract が本書どおり固定されている

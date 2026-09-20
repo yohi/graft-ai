@@ -307,6 +307,16 @@ const openai: ProviderResult = {
   ],
 };
 
+const codex: ProviderResult = {
+  provider: "codex",
+  sources: [],
+  windows: [],
+  plan: "pro",
+  credits: {
+    remaining: 10,
+  },
+};
+
 const opencodego: ProviderResult = {
   provider: "opencodego",
   sources: [],
@@ -322,6 +332,16 @@ const ollama: ProviderResult = {
     { period: "session", model: "glm-5.3-flash", requestCount: 54 },
   ],
   activityCostUSD: 12.34,
+};
+
+const commandcode: ProviderResult = {
+  provider: "commandcode",
+  sources: [],
+  windows: [],
+  plan: "pro",
+  credits: {
+    remaining: 20,
+  },
 };
 ```
 

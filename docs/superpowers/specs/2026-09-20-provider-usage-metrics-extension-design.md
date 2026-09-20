@@ -145,6 +145,8 @@ export interface ProviderResult {
 
 `sources` は adapter が実際に result の生成へ寄与した取得経路だけを含む。registry が提供する静的な supported-source metadata は runtime provenance と別の metadata として扱い、`ProviderResult` の `sources` には含めない。
 
+`SourceRole` は `ProviderResult.sources` に公開する取得経路にだけ適用する。adapter 内部で別の request の入力を準備する prerequisite は `ProviderSource` として返さず、必要な場合だけ `ProviderError.sourceId` に使用する。
+
 ### 4.3 Adapter 関数型
 
 ```ts
@@ -327,6 +329,16 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - API と HTML の両方が同じ field を返した場合は API の quota/activity を優先し、HTML は plan/reset の不足分だけを補う。
 - 認識できない top-level period や limit key は arbitrary label として emit しない。
 
+`ollama_cloud_model_requests{period,model}` の source-to-label mapping は次のとおり固定する。
+
+| wire source                  | public metric                         | `period` value | handling                                      |
+| ---------------------------- | ------------------------------------- | -------------- | --------------------------------------------- |
+| `limits.session.models[]`    | `ollama_cloud_model_requests`         | `session`      | `request_count` を model ごとに emit          |
+| `limits.weekly.models[]`     | `ollama_cloud_model_requests`         | `weekly`       | `request_count` を model ごとに emit          |
+| `activity.models[]`          | なし                                  | なし           | `model_requests` には使用しない               |
+
+同じ `model` が session と weekly の双方に存在する場合は、別の `period` series として独立して emit し、合算・dedupe しない。同一 window の同一 model が複数 entry に分かれている場合は、その window 内で `request_count` を合算して1 seriesにする。不正な model entry は該当 entry だけを omit する。`activity.period.type` の値から `monthly` などの label を合成しない。
+
 **Support level:** `official-internal`（`/api/usage`）、`scraping`（HTML fallback）。source role はそれぞれ `primary`、`fallback` とする。
 
 ### 6.3 CommandCode
@@ -337,18 +349,33 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 COMMAND_CODE_API_KEY
 ```
 
-Command Code CLI の convention に合わせ、project-local alias `COMMANDCODE_API_KEY` は追加しない。base URL は `https://api.commandcode.ai` に固定し、query/body は使用しない。すべて `Authorization: Bearer <COMMAND_CODE_API_KEY>` と `Accept: application/json` を付け、成功 status は `200` とする。
+Command Code CLI の convention に合わせ、project-local alias `COMMANDCODE_API_KEY` は追加しない。base URL は `https://api.commandcode.ai` に固定する。CLI `command-code@1.58.0` の `dist/cli.mjs` にある `buildUsageEndpoint` と `fetchUsageData` の request construction を authoritative source とし、query、body、入力依存関係を次の表で固定する。CLI の共通 client が付ける必須 header は `Authorization: Bearer <COMMAND_CODE_API_KEY>` と `Content-Type: application/json` である。`Accept` は CLI の request construction に含まれないため、存在を前提にしない。
 
 使用する endpoint は次の4つに限定する。
 
-| endpoint                                                 | method | 必須性     | 所有する情報                              |
-| -------------------------------------------------------- | ------ | ---------- | ----------------------------------------- |
-| `https://api.commandcode.ai/alpha/whoami`                | GET    | required   | account / organization identity           |
-| `https://api.commandcode.ai/alpha/billing/credits`       | GET    | required   | credits と 5-hour / weekly window         |
-| `https://api.commandcode.ai/alpha/billing/subscriptions` | GET    | enrichment | plan、subscription status、billing period |
-| `https://api.commandcode.ai/alpha/usage/summary`         | GET    | enrichment | cost、requests、tokens の集計             |
+| endpoint path                         | method | query parameters                                      | body | required headers                                  | input dependency                                      | success status |
+| ------------------------------------- | ------ | ----------------------------------------------------- | ---- | ------------------------------------------------- | ----------------------------------------------------- | -------------- |
+| `/alpha/whoami`                       | GET    | `limits=1`                                            | none | `Authorization`, `Content-Type: application/json` | none                                                  | `200`          |
+| `/alpha/billing/credits`              | GET    | `orgId=<whoami.org.id>`                               | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`                                       | `200`          |
+| `/alpha/billing/subscriptions`        | GET    | `orgId=<whoami.org.id>`                               | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`                                       | `200`          |
+| `/alpha/usage/summary`                | GET    | `orgId=<whoami.org.id>`; `since=<currentPeriodStart>`（存在時） | none | `Authorization`, `Content-Type: application/json` | `whoami.org.id`; subscription `data.currentPeriodStart` | `200`          |
 
-`whoami` の expected response は次の shape とする。`org.id` が account scope の識別に必要であり、login/name は diagnostic-only である。
+全 endpoint の URL は `https://api.commandcode.ai` と path を連結し、query parameter は URL encoding する。`since` は subscription response に有効な `data.currentPeriodStart` がある場合だけ付け、ない場合は `orgId` だけを送る。4 endpoint とも request body は持たない。
+
+request dependency は次の実行 graph に固定する。
+
+```text
+GET /alpha/whoami?limits=1
+  └─ whoami.org.id
+       ├─ GET /alpha/billing/credits?orgId=<org.id>
+       └─ GET /alpha/billing/subscriptions?orgId=<org.id>
+              └─ data.currentPeriodStart（存在時）
+                   └─ GET /alpha/usage/summary?orgId=<org.id>&since=<currentPeriodStart>
+```
+
+`whoami` の `org.id` は non-empty string として検証し、欠落または型不正なら `schema` failure として後続 endpoint は呼ばない。`credits` と `subscriptions` は `org.id` が得られた後に並列で開始し、`summary` は両方の response が確定した後に呼ぶ。subscription failure または `currentPeriodStart` 欠落時も `summary` は `orgId` だけで呼び出す。
+
+`whoami` の expected response は次の shape とする。`org.id` は後続3 endpoint の `orgId` query に使用し、login/name は diagnostic-only である。
 
 ```json
 {
@@ -392,7 +419,7 @@ Command Code CLI の convention に合わせ、project-local alias `COMMANDCODE_
 }
 ```
 
-`data` がない場合は subscription enrichment の schema failure とし、credits/quota result は維持する。`planId`、`status`、`currentPeriodEnd` は存在時に non-empty string として検証し、`currentPeriodEnd` は ISO 8601 から epoch seconds へ変換する。subscription endpoint の 401/403/429/5xx、network、timeout は subscription metadata のみ omit し、quota failure にはしない。
+`data` がない場合は subscription enrichment の schema failure とし、credits/quota result は維持する。`planId`、`status`、`currentPeriodStart`、`currentPeriodEnd` は存在時に non-empty string として検証し、`currentPeriodStart` と `currentPeriodEnd` は ISO 8601 として parse できる場合だけ採用する。`currentPeriodStart` が欠落または parse 不能なら subscription metadata の他フィールドは維持し、summary request から `since` だけを省略する。`currentPeriodEnd` は ISO 8601 から epoch seconds へ変換する。subscription endpoint の 401/403/429/5xx、network、timeout は subscription metadata のみ omit し、quota failure にはしない。
 
 `usage/summary` の expected response は次の shape とする。
 
@@ -408,11 +435,13 @@ Command Code CLI の convention に合わせ、project-local alias `COMMANDCODE_
 
 failure ownership は次のとおり固定する。
 
-- `whoami` failure、または `billing/credits` failure → CommandCode provider failure。plan/credits/quota を push payload に含めない。
+- `whoami` failure、`org.id` 欠落、または `billing/credits` failure → CommandCode provider failure。plan/credits/quota を push payload に含めない。
 - `billing/subscriptions` failure → credits/quota は success のまま、plan/status/billing period end を omit。
 - `usage/summary` failure → credits/quota は success のまま、usage summary metric を omit。
 - 401 は `auth`、403 は `forbidden`、429 は `rate_limit`、5xx は `upstream_5xx`、network error は `network`、timeout は `timeout`、JSON shape 不一致は `schema`、timestamp/number の変換失敗は `parse` とする。
 - undocumented API の依存は `commandcode/` ディレクトリ内に閉じ、response body、Authorization header、API key は error、log、diagnostic report、metric label のいずれにも出力しない。
+
+`ProviderError.sourceId` は endpoint ごとに `whoami` → `commandcode-whoami`、`billing/credits` → `commandcode-billing-credits`、`billing/subscriptions` → `commandcode-billing-subscriptions`、`usage/summary` → `commandcode-usage-summary` と固定する。
 
 **Support level:** `official-internal`
 
@@ -491,6 +520,8 @@ commandcode_usage_cost_usd
 commandcode_usage_requests
 commandcode_usage_tokens
 ```
+
+`ollama_cloud_model_requests{period,model}` は §6.2 の mapping に従い、`limits.session.models[]` だけを `period="session"`、`limits.weekly.models[]` だけを `period="weekly"` として emit する。`activity.models[]` はこの metric に使用しない。同じ model の session/weekly request は別 series であり、`monthly` series は生成しない。不正な model entry は該当 entry だけを omit し、同一 window 内の同一 model は request count を合算する。
 
 ### 7.3 存在しない値の扱い
 
@@ -600,18 +631,23 @@ bounded exponential backoff を使用する。
 
 ### 8.7 Undocumented API の明示
 
-各取得経路は source ID、`supportLevel`、`SourceRole` をコードとドキュメントで明示する。
+各取得経路は source ID、`supportLevel`、`SourceRole` をコードとドキュメントで明示する。ただし、adapter 内部 prerequisite は `ProviderResult.sources` の provenance source ではないため、`SourceRole` を割り当てず、source ID を error ownership 用にだけ使用する。
 
-| source ID                 | provider       | support level       | role       |
-| ------------------------- | -------------- | ------------------- | ---------- |
-| `openai-organization-api` | `openai_api`   | `official-public`   | primary    |
-| `codex-wham-usage`        | `codex`        | `official-internal` | primary    |
-| `codex-browser-rendering` | `codex`        | `web-internal`      | fallback   |
-| `opencodego-usage-api`    | `opencodego`   | `official-internal` | primary    |
-| `opencodego-zen-rpc`      | `opencodego`   | `web-internal`      | enrichment |
-| `ollama-api-usage`        | `ollama_cloud` | `official-internal` | primary    |
-| `ollama-settings-html`    | `ollama_cloud` | `scraping`          | fallback   |
-| `commandcode-alpha-usage` | `commandcode`  | `official-internal` | primary    |
+| source ID                         | provider       | support level       | role / `ProviderResult.sources` handling             |
+| --------------------------------- | -------------- | ------------------- | ---------------------------------------------------- |
+| `openai-organization-api`         | `openai_api`   | `official-public`   | primary                                              |
+| `codex-wham-usage`                | `codex`        | `official-internal` | primary                                              |
+| `codex-browser-rendering`         | `codex`        | `web-internal`      | fallback                                             |
+| `opencodego-usage-api`            | `opencodego`   | `official-internal` | primary                                              |
+| `opencodego-zen-rpc`              | `opencodego`   | `web-internal`      | enrichment                                          |
+| `ollama-api-usage`                | `ollama_cloud` | `official-internal` | primary                                              |
+| `ollama-settings-html`            | `ollama_cloud` | `scraping`          | fallback                                             |
+| `commandcode-whoami`              | `commandcode`  | `official-internal` | internal prerequisite; never included in `sources`  |
+| `commandcode-billing-credits`     | `commandcode`  | `official-internal` | primary                                              |
+| `commandcode-billing-subscriptions` | `commandcode` | `official-internal` | enrichment                                          |
+| `commandcode-usage-summary`       | `commandcode`  | `official-internal` | enrichment                                          |
+
+CommandCode の `ProviderResult.sources` は次の規則で生成する。`billing/credits` が成功した場合は `commandcode-billing-credits` を必ず追加する。subscription の valid field が1つ以上 result へ採用された場合だけ `commandcode-billing-subscriptions` を追加し、summary の valid field が1つ以上 result へ採用された場合だけ `commandcode-usage-summary` を追加する。配列順も `billing-credits`、`billing-subscriptions`、`usage-summary` の固定順とする。`commandcode-whoami` は `org.id` を後続 request の入力としてだけ使用し、成功時も `sources` へ追加しない。required source が失敗して `ProviderResult` を生成しない場合、`sources` も返さない。これにより credits/quota、subscription、usage summary の各 data point の寄与元が一意になる。
 
 ## 9. Configuration と移行
 
@@ -673,6 +709,7 @@ MYBROWSER
 | `opencodego_reset_seconds_remaining{period}`                                                                       | retained compatibility metric。reset timestamp から `max(timestamp - now, 0)` を算出し、dashboard migration が完了するまで emit |
 | `opencodego_zen_balance_usd`                                                                                       | unchanged。取得不能時は omit                                                                                                    |
 | `ollama_cloud_usage_ratio{period}`、`ollama_cloud_reset_timestamp_seconds{period}`、`ollama_cloud_plan_info{plan}` | unchanged。存在しない window は emit しない                                                                                     |
+| `ollama_cloud_model_requests{period,model}`                                                                     | `limits.session.models[]` は `session`、`limits.weekly.models[]` は `weekly`。`activity.models[]` は使用せず、`monthly` label を生成しない |
 | `workers/src/ollama-cloud/prometheus.ts` の `ollama_cloud_reset_*`                                                 | provider-metrics Worker の変更対象外であり、既存 dashboard/alert contract を維持                                                |
 | `commandcode_*`                                                                                                    | 新規 metric。既存 compatibility はなし                                                                                          |
 
@@ -685,7 +722,7 @@ metric name または既存 label value の削除・rename は本改修では行
 各 Provider adapter について以下をテストする。
 
 - valid response
-- exact endpoint、method、Authorization、Accept、request body/query が fixture で固定されていること
+- exact endpoint、method、required headers、request body/query が fixture で固定されていること
 - optional field 欠落
 - zero usage
 - quota near limit
@@ -707,9 +744,10 @@ metric name または既存 label value の削除・rename は本改修では行
 Provider-specific fixture は次を必須とする。
 
 - OpenCode Go: `usage.rolling/weekly/monthly` の percent scale、ISO `resetsAt`、status non-ok、window 欠落、invalid percent/timestamp
-- Ollama legacy: `limits.session/weekly` の 0..1 ratio、model request count、activity cost/period
-- Ollama monthly: `limits` 欠落または session/weekly 欠落、activity-only success、plan/reset の HTML enrichment、API と HTML の同時存在
-- Command Code: `whoami`、`billing/credits`、`billing/subscriptions`、`usage/summary` の exact shape、`windowLimits` の top-level 所在、resetAt の seconds/milliseconds/ISO normalization
+- Ollama legacy: `limits.session/weekly` の 0..1 ratio、session/weekly `models[]` の `period` mapping、同一 window 内の重複 model の合算、同一 model の別 window series、activity models の未使用、activity cost/period
+- Ollama monthly: `limits` 欠落または session/weekly 欠落、activity-only success、activity models を model metric にしないこと、`last_4_weeks` を `monthly` にしないこと、plan/reset の HTML enrichment、API と HTML の同時存在
+- Command Code request: `whoami?limits=1`、`orgId` の credits/subscriptions への伝播、subscription `currentPeriodStart` の summary `since` への伝播、body なし、required headers、query encoding
+- Command Code response: `whoami`、`billing/credits`、`billing/subscriptions`、`usage/summary` の exact shape、`windowLimits` の top-level 所在、resetAt の seconds/milliseconds/ISO normalization
 - Command Code partial failure: credits success + subscription failure、credits success + summary failure、required endpoint failure
 
 ### 10.2 Orchestrator test
@@ -722,6 +760,7 @@ Provider-specific fixture は次を必須とする。
 - retry と optional enrichment を含めた duration が計測されることを確認
 - optional enrichment failure で primary quota result が残ることを確認
 - source provenance が primary / fallback / enrichment を実際に寄与した経路として返すことを確認
+- CommandCode の `whoami` を `sources` に含めず、credits/subscription/summary の valid output ごとに固定 source ID と role が返り、endpoint failure の `ProviderError.sourceId` も固定されることを確認
 - existing metric compatibility table の name/label snapshot が維持されることを確認
 
 ### 10.3 CI gates
@@ -743,9 +782,11 @@ Provider-specific fixture は次を必須とする。
 - Ollama legacy session / weekly を扱える
 - Ollama 新 plan monthly usage は、JSON の activity cost と optional HTML plan/reset enrichment として扱える。JSON に存在しない monthly quota ratio は合成しない
 - Ollama の存在しない window を `0` として出力しない
+- Ollama `model_requests{period,model}` が session/weekly limits だけから生成され、activity models や `last_4_weeks` が public label に流入しない
 - CommandCode の 5h / weekly quota を取得できる
 - CommandCode credits を取得できる
 - CommandCode の exact endpoint、auth、response shape、failure ownership が本書どおり固定されている
+- CommandCode の `org.id`、`orgId`、`currentPeriodStart` の request dependency と各 endpoint の query/body/header contract が本書どおり固定されている
 - Codex 現行 quota 取得がデグレしていない
 - Codex adapter が現行 session / weekly contract を維持している
 - 1 Provider の failure で他 Provider の metric が失われない
@@ -753,6 +794,7 @@ Provider-specific fixture は次を必須とする。
 - last-success timestamp が Worker-side persistent state なしで Grafana query から確認できる
 - `ProviderId`、canonical period、unknown-period policy が固定されている
 - `ProviderResult.sources` が mixed-source result の実際の provenance を表現できる
+- CommandCode の `ProviderResult.sources` が `commandcode-billing-credits`、`commandcode-billing-subscriptions`、`commandcode-usage-summary` の実際の寄与だけを表し、`commandcode-whoami` を含めない
 - `opencodego_reset_seconds_remaining` を含む existing metric compatibility が維持されている
 - undocumented API の schema mismatch を安全に検知できる
 - Credential が log / metric へ露出しない

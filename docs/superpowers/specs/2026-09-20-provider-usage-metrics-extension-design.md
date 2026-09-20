@@ -193,7 +193,18 @@ export type AdapterOutcome =
   | { status: "failed"; error: ProviderError };
 ```
 
-`empty` は response を正常に取得・検証したが、出力対象の data point がない状態であり、health 上は scrape success とする。`failed` は required primary source の request failure（auth、forbidden、rate limit、upstream 5xx、network、timeout を含む）、または required primary contract を満たせない fatal な schema/parse failure に限る。
+`empty` は response を正常に取得・検証したが、出力対象の data point がない状態であり、health 上は scrape success とする。`failed` は primary request の中間状態ではなく、Provider-specific recovery / status interpretation を適用した後の最終 outcome である。required primary result を recovery 後も成立させられない request failure（auth、forbidden、rate limit、upstream 5xx、network、timeout を含む）、または required primary contract を満たせない fatal な schema/parse failure に限る。
+
+required primary source の transport、HTTP status、fallback / recovery に関する最終 outcome は、次の precedence で一意に決定する。
+
+1. primary request を実行する。
+2. response または request failure を Provider-specific contract で分類し、status interpretation または fallback / recovery の対象かを判定する。
+3. Provider-specific contract が fallback / recovery を定義している場合は、それを実行する。primary request の失敗を検知した時点では `failed` を確定しない。
+4. recovery が有効な result を生成した場合は `AdapterOutcome.success` とする。
+5. Provider-specific status interpretation が empty を定義し、recovery が不要または定義されていない場合は `AdapterOutcome.empty` とする。
+6. recovery が存在しない、利用不能、または失敗し、success / empty の contract を満たせない場合だけ `AdapterOutcome.failed` とする。
+
+この precedence では、transport / HTTP status / fallback に関する Provider-specific contract を generic failure rule より優先する。recovery で result が成立した場合は、失敗した primary source を success result の provenance に含めない。response が正常に取得された後の schema / parse failure、optional field failure、optional enrichment-source failure の ownership は、以下の三分類と §6.x の Provider-specific rule に従い、この precedence によって変更しない。
 
 schema / parse failure の ownership は次の順序で決定する。
 
@@ -250,7 +261,10 @@ Authorization: Bearer <OpenCode Go API key>
 Accept: application/json
 ```
 
-request body と query は持たず、成功 status は `200` とする。timeout は 10 秒、401 は `auth`、403 は response body の安全な error type が `EntitlementError` の場合に `empty/no-supported-window`、それ以外は `forbidden` とする。
+request body と query は持たず、成功 status は `200` とする。timeout は 10 秒である。401 は `auth` とし、403 は response body の安全な error type が `EntitlementError` の場合に `empty/no-supported-window`、それ以外は `forbidden` とする。403 の判定は §4.3 の recovery / status precedence における Provider-specific status interpretation であり、HTTP status だけで generic `failed` を先に確定しない。
+
+- `403 + EntitlementError` は `AdapterOutcome.empty`、`provider_metrics_scrape_success{provider="opencodego"}=1`、scrape timestamp 更新とする。Provider data metric は生成しない。
+- その他の 403 は `AdapterOutcome.failed`、`ProviderError.kind = "forbidden"`、`ProviderError.sourceId = "opencodego-usage-api"`、`statusCode = 403` とする。`scrape_success=0` とし、scrape timestamp は更新しない。
 
 expected response は次の JSON shape とする。`usage` と3 window は必須、`resetsAt` は upstream が省略する場合があるため optional とする。unknown field は ignore する。
 
@@ -297,7 +311,7 @@ Authorization: Bearer <Ollama API key>
 Accept: application/json
 ```
 
-request body と query は持たず、成功 status は `200` とする。`OLLAMA_API_KEY` がない場合は adapter を起動せず orchestrator が skip する。401/403 は `auth`/`forbidden`、429 は `rate_limit`、5xx は `upstream_5xx` とする。
+request body と query は持たず、成功 status は `200` とする。`OLLAMA_API_KEY` がない場合は adapter を起動せず orchestrator が skip する。401/403 は `auth`/`forbidden`、429 は `rate_limit`、5xx は `upstream_5xx` とする。これらの primary API request failure は、`OLLAMA_SESSION_COOKIE` がある場合に限り、§4.3 の precedence に従って HTML fallback の判定対象となる。HTTP `200` response の required primary schema / parse failure は HTML fallback に変換せず、fatal schema / parse ownership を維持する。
 
 API の観測済み envelope は次のとおりである。`limits` と `activity` はそれぞれ optional contribution であり、少なくともどちらか一方の認識可能な primary content があれば `success` とする。片方の optional field、model entry、または activity cost の schema / parse failure は該当 contribution だけを omit し、もう片方の認識可能な primary content による result を維持する。両方が欠落、または両方が認識不能な場合だけ required primary content の fatal `schema` failure とする。
 
@@ -332,8 +346,8 @@ API の観測済み envelope は次のとおりである。`limits` と `activit
 - `activity.cost` は非負の decimal string とし、number へ変換できない場合は activity cost だけを omit する。limits が有効なら Provider success を維持する。
 - legacy と monthly の fields が同時に存在する場合、session/weekly limits と activity cost を独立に採用する。monthly plan の存在を理由に legacy limits を上書きしない。
 - JSON に plan や exact reset timestamp は存在しないため、API response だけでは plan/reset metric を生成しない。
-- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API request が失敗した場合は、HTML が少なくとも1つの valid な quota window、plan、または reset timestamp を寄与できたときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
-- API が quota/activity を返した場合に HTML から valid な plan または reset timestamp を少なくとも1つ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。plan と各 reset timestamp は独立した optional field とし、invalid / missing な field はその field だけを omit する。HTML が有効な field を1つも寄与できない場合も HTML enrichment-only failure とし、API の primary failure にはしない。API request が失敗した場合は、HTML が valid な quota window、plan、または reset timestamp を1つも返さなければ fallback failure とし、元の API failure を provider failure とする。fallback が成功した場合は `ollama-settings-html` を `fallback` として追加する。
+- `OLLAMA_SESSION_COOKIE` があり、JSON API が成功したものの plan/reset の不足 field がある場合は、`/settings` を **HTML enrichment path** として実行する。JSON API の primary request が transport、HTTP status、network、timeout のいずれかで失敗した場合は、HTML が少なくとも1つの valid な quota window、plan、または reset timestamp を寄与できたときだけ ProviderResult 全体を代替する **HTML fallback path** として実行する。HTML の `Session usage` または `Hourly usage` は必ず canonical `session`、`Weekly usage` は `weekly`、`Monthly usage` は `monthly` に変換する。`Hourly usage` の mapping は現行 parser の contract として固定し、実装者判断にしない。
+- API が quota/activity を返した場合に HTML から valid な plan または reset timestamp を少なくとも1つ取得できれば、JSON の primary result を維持し、`ollama-settings-html` を `enrichment` として追加する。plan と各 reset timestamp は独立した optional field とし、invalid / missing な field はその field だけを omit する。HTML が有効な field を1つも寄与できない場合も HTML enrichment-only failure とし、API の primary failure にはしない。API request が失敗した場合は、HTML が valid な quota window、plan、または reset timestamp を1つも返さなければ fallback failure とし、`AdapterOutcome.failed`、`scrape_success=0`、scrape timestamp 未更新、`ProviderError.sourceId = "ollama-api-usage"` とする。final `ProviderError.kind` と `statusCode` は元の API failure を保持し、fallback 側の error で置換しない。fallback が成功した場合は `AdapterOutcome.success`、`scrape_success=1`、scrape timestamp 更新、`ollama-settings-html` を `fallback` として追加する。
 - API と HTML の両方が同じ field を返した場合は API の quota/activity を優先し、HTML は plan/reset の不足分だけを補う。
 - 認識できない top-level period や limit key は arbitrary label として emit しない。
 
@@ -494,7 +508,9 @@ failure ownership は次のとおり固定する。
 - `primary_window` は現行 classifier が session または weekly と判定した場合だけ emit する
 - `secondary_window` も同じく session または weekly の場合だけ emit する
 - 未知の limit ID、任意個数の window、`limitId` フィールドは今回追加しない。未知値は diagnostic に記録せず omit する
-- Browser Rendering は optional fallback のまま
+- primary `/wham/usage` request が HTTP 403 を返し、`browserBinding` が利用可能な場合だけ Browser Rendering fallback を試す。401、429、5xx、network、timeout、403 以外の HTTP failure、または HTTP 200 response の schema / parse failure では Browser Rendering fallback を試さず、primary failure / fatal contract failure とする。
+- Browser Rendering が valid な usage response（少なくとも1つの supported window を含む）を生成した場合は、`AdapterOutcome.success`、`scrape_success=1`、scrape timestamp 更新、`codex-browser-rendering` を `fallback` として記録する。失敗した `codex-wham-usage` は success result の `ProviderResult.sources` に含めない。
+- HTTP 403 で Browser Rendering fallback を試した後に browser launch、navigation、response、schema、parse のいずれかが失敗した場合は `AdapterOutcome.failed`、`scrape_success=0`、scrape timestamp 未更新とし、final `ProviderError.sourceId = "codex-browser-rendering"` とする。`ProviderError.kind` は Browser Rendering 側の最終 failure category を使用し、primary の 403 で置換しない。`browserBinding` がなく fallback を実行できない場合は fallback 未実行として `ProviderError.kind = "forbidden"`、`ProviderError.sourceId = "codex-wham-usage"`、`statusCode = 403` とする。
 - reset credits 補助 endpoint の失敗は Codex 全体の失敗にしない
 
 **Support level:** `official-internal`
@@ -607,7 +623,9 @@ provider_metrics_scrape_duration_seconds{provider}
 - 1 つ以上の Provider が試行された場合、data payload が0件でも health-only payload を push する
 - 全 Provider が credential 不足等で skipped の場合だけ push を省略する
 - `success` は required primary result が成立していれば、optional field の omission または optional enrichment source failure を含んでも維持する
-- `failed` は required primary source の request failure、または required primary contract の fatal schema/parse failure に限定する。optional field validation failure、optional enrichment source failure、Provider-specific contract で omission が定義された parse failure は `failed` にしない
+- §4.3 の recovery / status precedence に従い、required primary request failure を検知しただけでは `failed` を確定しない。Provider-specific fallback が成功した場合は `success`、contract-defined status interpretation が empty を返す場合は `empty` とする。
+- `failed` は recovery / status interpretation の適用後も required primary result を成立させられない request failure、または required primary contract の fatal schema/parse failure に限定する。optional field validation failure、optional enrichment source failure、Provider-specific contract で omission が定義された parse failure は `failed` にしない。
+- Ollama の API failure を HTML fallback が回復した場合、Codex の primary 403 を Browser Rendering fallback が回復した場合、OpenCode Go の `EntitlementError` 403 は、それぞれ `failed` ではない。fallback failure、または recovery / empty rule が適用されない primary failure は `failed` とする。
 
 ### 8.2 Retry policy
 
@@ -684,7 +702,11 @@ Ollama の `ollama_cloud_model_requests{period,model}` における `model` labe
 | `commandcode-billing-subscriptions` | `commandcode` | `official-internal` | enrichment                                          |
 | `commandcode-usage-summary`       | `commandcode`  | `official-internal` | enrichment                                          |
 
-Ollama の `ProviderResult.sources` は実際に result へ寄与した runtime path で role を決定する。JSON API が quota/activity を生成し、HTML が plan/reset の不足分を補った場合は `ollama-api-usage` を `primary`、`ollama-settings-html` を `enrichment` として追加する。JSON API が失敗し、HTML が ProviderResult 全体を代替して成功した場合は `ollama-settings-html` だけを `fallback` として追加し、失敗した API を `primary` として追加しない。HTML を呼ばなかった場合、または呼んでも result に有効な field を寄与しなかった場合は `ollama-settings-html` を追加しない。同一 adapter 実行の `ProviderResult.sources` に同じ source ID を複数 role で重複追加せず、実際の path に対応する role を1つだけ選択する。
+Ollama の `ProviderResult.sources` は実際に result へ寄与した runtime path で role を決定する。JSON API が quota/activity を生成し、HTML が plan/reset の不足分を補った場合は `ollama-api-usage` を `primary`、`ollama-settings-html` を `enrichment` として追加する。JSON API が失敗し、HTML が ProviderResult 全体を代替して成功した場合は `ollama-settings-html` だけを `fallback` として追加し、失敗した API を `primary` として追加しない。HTML を呼ばなかった場合、または呼んでも result に有効な field を寄与しなかった場合は `ollama-settings-html` を追加しない。同一 adapter 実行の `ProviderResult.sources` に同じ source ID を複数 role で重複追加せず、実際の path に対応する role を1つだけ選択する。API failure が回復せず ProviderResult を生成しない場合の final `ProviderError.sourceId` は常に `ollama-api-usage` とし、元の API failure の `kind` / `statusCode` を保持する。HTML fallback の failure でこの ownership を置換しない。
+
+Codex の `ProviderResult.sources` は、Browser Rendering が実際に usage result を生成した場合に `codex-browser-rendering` を `fallback` として追加する。HTTP 403 で失敗した `codex-wham-usage` は fallback success の provenance に含めない。Browser Rendering fallback を試して失敗した場合は ProviderResult を返さず、final `ProviderError.sourceId` は `codex-browser-rendering` とする。HTTP 403 でも `browserBinding` がなく fallback を実行しなかった場合は、final `ProviderError.sourceId` を `codex-wham-usage` とする。
+
+OpenCode Go の `403 + EntitlementError` は `AdapterOutcome.empty` であり、ProviderResult.sources を生成しない。その他の 403 は `ProviderError.sourceId = "opencodego-usage-api"` の `forbidden` failure とする。
 
 CommandCode の `ProviderResult.sources` は次の規則で生成する。`billing/credits` が成功した場合は `commandcode-billing-credits` を必ず追加する。subscription の valid field が1つ以上 result へ採用された場合だけ `commandcode-billing-subscriptions` を追加し、summary の valid field が1つ以上 result へ採用された場合だけ `commandcode-usage-summary` を追加する。配列順も `billing-credits`、`billing-subscriptions`、`usage-summary` の固定順とする。`commandcode-whoami` は `org.id` を後続 request の入力としてだけ使用し、成功時も `sources` へ追加しない。required source が失敗して `ProviderResult` を生成しない場合、`sources` も返さない。これにより credits/quota、subscription、usage summary の各 data point の寄与元が一意になる。
 
@@ -799,6 +821,19 @@ Provider-specific fixture は次を必須とする。
 - Command Code partial failure: credits success + subscription failure、credits success + summary failure、required endpoint failure
 - CommandCode `windowLimits`: absent / invalid `limited` の optional omission、`limited=false` の unlimited semantics、`limited=true` の fiveHour/weekly 欠落・型不正・`cap=0` の fatal schema failure
 
+#### Global recovery / status precedence
+
+- primary request failure を検知しただけでは `AdapterOutcome.failed` を確定せず、Provider-specific fallback / status rule を適用した後に final outcome を決めること
+- Ollama の API HTTP 500 + HTML fallback success → `AdapterOutcome.success`、`provider_metrics_scrape_success{provider="ollama_cloud"}=1`、scrape timestamp 更新、`ollama-settings-html=fallback` だけが `sources` に存在すること
+- Ollama の API network failure + cookie / fallback unavailable → `AdapterOutcome.failed`、`provider_metrics_scrape_success{provider="ollama_cloud"}=0`、scrape timestamp 未更新、final `ProviderError.sourceId = "ollama-api-usage"`、original `kind = "network"` となること
+- Ollama の API failure + HTML fallback failure → `AdapterOutcome.failed`、`scrape_success=0`、scrape timestamp 未更新、final `ProviderError` が original API failure の `sourceId` / `kind` / `statusCode` を保持し、HTML error で置換されないこと
+- Codex の primary `/wham/usage` HTTP 403 + Browser Rendering success → `AdapterOutcome.success`、`scrape_success=1`、scrape timestamp 更新、`codex-browser-rendering=fallback` となること
+- Codex の primary HTTP 403 + Browser Rendering failure → `AdapterOutcome.failed`、`scrape_success=0`、scrape timestamp 未更新、final `ProviderError.sourceId = "codex-browser-rendering"` となること
+- Codex の primary HTTP 403 + `browserBinding` unavailable → fallback を実行せず、`AdapterOutcome.failed`、`ProviderError.kind = "forbidden"`、`ProviderError.sourceId = "codex-wham-usage"`、`statusCode = 403` となること
+- Codex の 403 以外の primary failure では Browser Rendering fallback を実行しないこと
+- OpenCode Go の 403 + safe `EntitlementError` → `AdapterOutcome.empty`、`scrape_success=1`、scrape timestamp 更新となること
+- OpenCode Go の 403 + other response → `AdapterOutcome.failed`、`ProviderError.kind = "forbidden"`、`scrape_success=0`、scrape timestamp 未更新となること
+
 #### Error ownership / partial success
 
 次のケースでは、schema / parse failure の ownership と `AdapterOutcome`、health semantics の対応を固定する。
@@ -845,10 +880,12 @@ Provider-specific fixture は次を必須とする。
 - OpenCode Go quota を API key のみで取得できる
 - OpenCode Go quota 取得に browser cookie を必要としない
 - OpenCode Go rolling / weekly / monthly を扱える
+- OpenCode Go の `403 + EntitlementError` は `AdapterOutcome.empty`、`scrape_success=1`、scrape timestamp 更新となり、その他の 403 は `forbidden` failure、`scrape_success=0`、`ProviderError.sourceId = "opencodego-usage-api"` となる
 - Ollama Cloud usage を API key のみで取得できる
 - Ollama legacy session / weekly を扱える
 - Ollama 新 plan monthly usage は、JSON の activity cost と optional HTML plan/reset enrichment として扱える。JSON に存在しない monthly quota ratio は合成しない
 - Ollama API success 後の HTML enrichment は valid な field がなくても primary success を維持し、API failure 後の HTML fallback は valid な quota window、plan、または reset timestamp が1つ以上ある場合だけ success とする
+- Ollama API failure が HTML fallback により回復した場合は `AdapterOutcome.success` / `scrape_success=1` / scrape timestamp 更新とし、`ProviderResult.sources` は `ollama-settings-html=fallback` だけを含める。cookie / fallback unavailable または fallback failure の場合は `AdapterOutcome.failed` / `scrape_success=0` / scrape timestamp 未更新とし、final `ProviderError` は `ollama-api-usage` の original `kind` / `statusCode` を保持する
 - Ollama の存在しない window を `0` として出力しない
 - Ollama `ollama_cloud_model_requests{period,model}` が session/weekly limits だけから生成され、activity models や `last_4_weeks` が public label に流入しない
 - Ollama `ollama_cloud_model_requests` の `model` label が §6.2 の 1..128 ASCII characters / `^[A-Za-z0-9._:/-]+$` / whitespace policy を通過した identifier だけを verbatim に使用し、invalid / oversized / unsupported model name を omit する
@@ -863,6 +900,8 @@ Provider-specific fixture は次を必須とする。
 - CommandCode の `org.id`、`orgId`、`currentPeriodStart` の request dependency と各 endpoint の query/body/header contract が本書どおり固定されている
 - Codex 現行 quota 取得がデグレしていない
 - Codex adapter が現行 session / weekly contract を維持している
+- Codex の Browser Rendering fallback は primary `/wham/usage` の HTTP 403 かつ `browserBinding` が利用可能な場合だけ実行し、success 時は `scrape_success=1` / scrape timestamp 更新と `codex-browser-rendering=fallback`、fallback failure 時は `scrape_success=0` / scrape timestamp 未更新と `ProviderError.sourceId = "codex-browser-rendering"`、binding unavailable 時は `ProviderError.sourceId = "codex-wham-usage"` となる
+- required primary request failure は Provider-specific recovery / status rule の適用後に final `AdapterOutcome` を決定し、recovery success は `success`、contract-defined status exception は `empty`、回復不能時だけ `failed` とする
 - 1 Provider の failure で他 Provider の metric が失われない
 - 全 Provider failed でも health-only payload が push され、全 Provider skipped の場合だけ push が省略される
 - last-success timestamp が Worker-side persistent state なしで Grafana query から確認できる

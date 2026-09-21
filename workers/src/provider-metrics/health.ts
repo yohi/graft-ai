@@ -11,11 +11,7 @@ function providerAttribute(provider: ProviderId): Record<string, unknown> {
   return { key: "provider", value: { stringValue: provider } };
 }
 
-function gaugeMetric(
-  name: string,
-  provider: ProviderId,
-  value: number,
-): Record<string, unknown> {
+function gaugeMetric(name: string, provider: ProviderId, value: number): Record<string, unknown> {
   return {
     name,
     gauge: {

@@ -112,7 +112,9 @@ function mockAsFetch(mockFetch: FetchMock): typeof fetch {
   return (input, init) => mockFetch(input, init);
 }
 
-function successResult(outcome: AdapterOutcome): Extract<ProviderResult, { provider: "openai_api" }> {
+function successResult(
+  outcome: AdapterOutcome,
+): Extract<ProviderResult, { provider: "openai_api" }> {
   if (outcome.status !== "success" || outcome.result.provider !== "openai_api") {
     throw new Error("Expected OpenAI success result");
   }
@@ -336,8 +338,7 @@ describe("fetchOpenAIMetrics", () => {
   });
 
   it("maps a missing required page field to a schema failure", async () => {
-    const fetchFn: typeof fetch = async () =>
-      jsonResponse({ data: [], has_more: false });
+    const fetchFn: typeof fetch = async () => jsonResponse({ data: [], has_more: false });
 
     const outcome = await fetchOpenAIMetrics(env, context({ fetchFn }));
 
@@ -368,9 +369,7 @@ describe("fetchOpenAIMetrics", () => {
         return jsonResponse({
           data: [
             {
-              results: [
-                { amount: { value: 0.1, currency: "usd" }, line_item: "Chat Completions" },
-              ],
+              results: [{ amount: { value: 0.1, currency: "usd" }, line_item: "Chat Completions" }],
             },
           ],
           has_more: true,

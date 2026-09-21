@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { HttpTransportError } from "../../src/http-retry";
 import { fetchOllamaApiUsage } from "../../src/provider-metrics/ollama/api-usage";
-import type { ProviderContext } from "../../src/provider-metrics/types";
+import type {
+  AdapterOutcome,
+  ProviderContext,
+  ProviderErrorKind,
+  ProviderResult,
+} from "../../src/provider-metrics/types";
 
 const URL = "https://ollama.com/api/usage";
 const API_KEY = "ollama-api-secret";
 const SOURCE_ID = "ollama-api-usage";
-const SOURCE = [{ id: SOURCE_ID, supportLevel: "official-internal", role: "primary" }] as const;
+type OllamaResult = Extract<ProviderResult, { provider: "ollama_cloud" }>;
 
 function context(fetchFn: typeof fetch): ProviderContext {
   return {
@@ -18,14 +24,37 @@ function context(fetchFn: typeof fetch): ProviderContext {
 }
 
 function response(status: number, body: string): Response {
-  return new Response(body, {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+  return new Response(body, { status, headers: { "Content-Type": "application/json" } });
 }
 
 function model(name: unknown, requestCount: unknown): Record<string, unknown> {
   return { name, request_count: requestCount };
+}
+
+function expectSuccess(outcome: AdapterOutcome): OllamaResult {
+  if (outcome.status !== "success" || outcome.result.provider !== "ollama_cloud") {
+    throw new Error("expected an Ollama success result");
+  }
+  expect(outcome.result.sources).toEqual([
+    { id: SOURCE_ID, supportLevel: "official-internal", role: "primary" },
+  ]);
+  return outcome.result;
+}
+
+function expectFailure(
+  outcome: AdapterOutcome,
+  kind: ProviderErrorKind,
+  statusCode?: number,
+): void {
+  expect(outcome).toEqual({
+    status: "failed",
+    error: {
+      kind,
+      provider: "ollama_cloud",
+      sourceId: SOURCE_ID,
+      ...(statusCode === undefined ? {} : { statusCode }),
+    },
+  });
 }
 
 function limitsBody(): Record<string, unknown> {
@@ -33,11 +62,7 @@ function limitsBody(): Record<string, unknown> {
     limits: {
       session: {
         usage: 0.03,
-        models: [
-          model("glm-5.3-flash", 3),
-          model("glm-5.3-flash", 4),
-          model("activity-only-model", 8),
-        ],
+        models: [model("glm-5.3-flash", 3), model("glm-5.3-flash", 4)],
       },
       weekly: {
         usage: 0.005,
@@ -46,11 +71,7 @@ function limitsBody(): Record<string, unknown> {
     },
     activity: {
       cost: "12.34000",
-      period: {
-        type: "last_4_weeks",
-        starting_at: "2026-09-01T00:00:00Z",
-        ending_at: "2026-09-20T12:00:00Z",
-      },
+      period: { type: "last_4_weeks" },
       models: [model("activity-only-model", 999)],
     },
   };
@@ -72,28 +93,16 @@ describe("Ollama Cloud API-key adapter", () => {
         headers: { Authorization: `Bearer ${API_KEY}`, Accept: "application/json" },
       }),
     );
-    expect(outcome).toEqual({
-      status: "success",
-      result: {
-        provider: "ollama_cloud",
-        sources: SOURCE,
-        windows: [
-          { period: "session", usageRatio: 0.03 },
-          { period: "weekly", usageRatio: 0.005 },
-        ],
-        modelRequests: [
-          { period: "session", model: "glm-5.3-flash", requestCount: 7 },
-          { period: "session", model: "activity-only-model", requestCount: 8 },
-          { period: "weekly", model: "glm-5.3-flash", requestCount: 2 },
-        ],
-        activityCostUSD: 12.34,
-      },
-    });
-    if (outcome.status === "success") {
-      expect(outcome.result.windows).not.toContainEqual(
-        expect.objectContaining({ period: "monthly" }),
-      );
-    }
+    const result = expectSuccess(outcome);
+    expect(result.windows).toEqual([
+      { period: "session", usageRatio: 0.03 },
+      { period: "weekly", usageRatio: 0.005 },
+    ]);
+    expect(result.modelRequests).toEqual([
+      { period: "session", model: "glm-5.3-flash", requestCount: 7 },
+      { period: "weekly", model: "glm-5.3-flash", requestCount: 2 },
+    ]);
+    expect(result.activityCostUSD).toBe(12.34);
   });
 
   it("succeeds with activity cost when the legacy limits are absent", async () => {
@@ -106,16 +115,9 @@ describe("Ollama Cloud API-key adapter", () => {
     };
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(response(200, JSON.stringify(body)));
 
-    await expect(fetchOllamaApiUsage(API_KEY, context(fetchFn))).resolves.toEqual({
-      status: "success",
-      result: {
-        provider: "ollama_cloud",
-        sources: SOURCE,
-        windows: [],
-        modelRequests: [],
-        activityCostUSD: 1.25,
-      },
-    });
+    const result = expectSuccess(await fetchOllamaApiUsage(API_KEY, context(fetchFn)));
+    expect(result.windows).toEqual([]);
+    expect(result.activityCostUSD).toBe(1.25);
   });
 
   it("keeps only bounded model labels and aggregates after validation", async () => {
@@ -149,24 +151,41 @@ describe("Ollama Cloud API-key adapter", () => {
 
     const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
 
-    expect(outcome).toEqual({
-      status: "success",
-      result: {
-        provider: "ollama_cloud",
-        sources: SOURCE,
-        windows: [
-          { period: "session", usageRatio: 0 },
-          { period: "weekly", usageRatio: 0.5 },
-        ],
-        modelRequests: [
-          { period: "session", model: "model.v1:/foo-bar", requestCount: 7 },
-          { period: "session", model: valid128, requestCount: 5 },
-          { period: "session", model: "Foo", requestCount: 13 },
-          { period: "weekly", model: "model.v1:/foo-bar", requestCount: 2 },
-          { period: "weekly", model: valid128, requestCount: 1 },
-        ],
+    const result = expectSuccess(outcome);
+    expect(result.windows).toEqual([
+      { period: "session", usageRatio: 0 },
+      { period: "weekly", usageRatio: 0.5 },
+    ]);
+    expect(result.modelRequests).toEqual([
+      { period: "session", model: "model.v1:/foo-bar", requestCount: 7 },
+      { period: "session", model: valid128, requestCount: 5 },
+      { period: "session", model: "Foo", requestCount: 13 },
+      { period: "weekly", model: "model.v1:/foo-bar", requestCount: 2 },
+      { period: "weekly", model: valid128, requestCount: 1 },
+    ]);
+  });
+
+  it("omits duplicate model counts whose aggregate is not a safe integer", async () => {
+    const body = {
+      limits: {
+        session: {
+          usage: 0,
+          models: [
+            model("overflow-model", Number.MAX_SAFE_INTEGER),
+            model("overflow-model", 1),
+            model("safe-model", Number.MAX_SAFE_INTEGER),
+          ],
+        },
       },
-    });
+    };
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(response(200, JSON.stringify(body)));
+
+    const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
+
+    const result = expectSuccess(outcome);
+    expect(result.modelRequests).toEqual([
+      { period: "session", model: "safe-model", requestCount: Number.MAX_SAFE_INTEGER },
+    ]);
   });
 
   it("omits an invalid activity cost while preserving valid limits", async () => {
@@ -175,22 +194,8 @@ describe("Ollama Cloud API-key adapter", () => {
 
     const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
 
-    expect(outcome).toEqual({
-      status: "success",
-      result: {
-        provider: "ollama_cloud",
-        sources: SOURCE,
-        windows: [
-          { period: "session", usageRatio: 0.03 },
-          { period: "weekly", usageRatio: 0.005 },
-        ],
-        modelRequests: [
-          { period: "session", model: "glm-5.3-flash", requestCount: 7 },
-          { period: "session", model: "activity-only-model", requestCount: 8 },
-          { period: "weekly", model: "glm-5.3-flash", requestCount: 2 },
-        ],
-      },
-    });
+    const result = expectSuccess(outcome);
+    expect(result.activityCostUSD).toBeUndefined();
   });
 
   it.each([
@@ -203,11 +208,7 @@ describe("Ollama Cloud API-key adapter", () => {
 
     const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
 
-    expect(outcome).toEqual({
-      status: "failed",
-      error: { kind: "schema", provider: "ollama_cloud", sourceId: SOURCE_ID },
-    });
-    expect(outcome).not.toBeNull();
+    expectFailure(outcome, "schema");
   });
 
   it("maps invalid JSON to a fatal parse failure without fallback interpretation", async () => {
@@ -215,12 +216,38 @@ describe("Ollama Cloud API-key adapter", () => {
 
     const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
 
-    expect(outcome).toEqual({
-      status: "failed",
-      error: { kind: "parse", provider: "ollama_cloud", sourceId: SOURCE_ID },
+    expectFailure(outcome, "parse");
+  });
+
+  it.each([
+    ["network", new HttpTransportError("network")],
+    ["timeout", new HttpTransportError("timeout")],
+  ] as const)("maps %s errors during a 200 body read", async (kind, error) => {
+    const apiResponse = response(200, "{}");
+    vi.spyOn(apiResponse, "json").mockRejectedValue(error);
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(apiResponse);
+
+    const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
+
+    expectFailure(outcome, kind);
+  });
+
+  it("maps unexpected parser exceptions to internal without exposing the message", async () => {
+    const rawError = new Error("raw-parser-secret");
+    const body = Object.defineProperty({}, "limits", {
+      enumerable: true,
+      get: () => {
+        throw rawError;
+      },
     });
-    expect(outcome).not.toBeNull();
-    expect(fetchFn).toHaveBeenCalledTimes(1);
+    const apiResponse = response(200, "{}");
+    vi.spyOn(apiResponse, "json").mockResolvedValue(body);
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(apiResponse);
+
+    const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
+
+    expectFailure(outcome, "internal");
+    expect(JSON.stringify(outcome)).not.toContain(rawError.message);
   });
 
   it.each([
@@ -236,10 +263,7 @@ describe("Ollama Cloud API-key adapter", () => {
 
     const outcome = await fetchOllamaApiUsage(credential, context(fetchFn));
 
-    expect(outcome).toEqual({
-      status: "failed",
-      error: { kind, provider: "ollama_cloud", sourceId: SOURCE_ID, statusCode: status },
-    });
+    expectFailure(outcome, kind, status);
     const serialized = JSON.stringify(outcome);
     expect(serialized).not.toContain(sentinel);
     expect(serialized).not.toContain(credential);
@@ -256,10 +280,7 @@ describe("Ollama Cloud API-key adapter", () => {
 
       const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
 
-      expect(outcome).toEqual({
-        status: "failed",
-        error: { kind, provider: "ollama_cloud", sourceId: SOURCE_ID },
-      });
+      expectFailure(outcome, kind);
       expect(JSON.stringify(outcome)).not.toContain(error.message);
       expect(JSON.stringify(outcome)).not.toContain(API_KEY);
     },

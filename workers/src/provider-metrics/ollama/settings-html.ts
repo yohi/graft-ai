@@ -149,13 +149,6 @@ function looksSignedOut(html: string): boolean {
 }
 
 export function parseOllamaUsageHtml(html: string): OllamaSettingsHtmlContribution {
-  if (looksSignedOut(html)) {
-    throw new OllamaFetchError(
-      "Ollama session cookie is invalid or expired (signed out page returned)",
-      401,
-    );
-  }
-
   const windows = [
     parseUsageBlockWithLabels(PRIMARY_USAGE_LABELS, "session", html),
     parseUsageBlock("Weekly usage", "weekly", html),
@@ -163,6 +156,13 @@ export function parseOllamaUsageHtml(html: string): OllamaSettingsHtmlContributi
   ].filter((window): window is QuotaWindow => window !== null);
   const plan = parsePlanName(html);
   const email = parseAccountEmail(html);
+
+  if (windows.length === 0 && plan === undefined && email === undefined && looksSignedOut(html)) {
+    throw new OllamaFetchError(
+      "Ollama session cookie is invalid or expired (signed out page returned)",
+      401,
+    );
+  }
 
   return {
     windows,

@@ -10,8 +10,14 @@ function metricNames(metrics: readonly Record<string, unknown>[]): string[] {
   return metrics.map((metric) => metric.name as string);
 }
 
+function metricTimeUnixNano(metric: Record<string, unknown>): string | undefined {
+  const gauge = metric.gauge as { dataPoints: Array<{ timeUnixNano?: string }> };
+  return gauge.dataPoints[0]?.timeUnixNano;
+}
+
 describe("buildHealthMetrics", () => {
   it("emits success, duration, and timestamp metrics for a successful scrape", () => {
+    const nowUnixNano = "1700000000000000000";
     const outcome: ScrapeHealthOutcome = {
       provider: "openai_api",
       status: "success",
@@ -19,7 +25,7 @@ describe("buildHealthMetrics", () => {
       timestampSeconds: 1_700_000_000,
     };
 
-    const metrics = buildHealthMetrics([outcome]);
+    const metrics = buildHealthMetrics([outcome], nowUnixNano);
 
     expect(metricNames(metrics)).toEqual([
       "provider_metrics_scrape_success",
@@ -29,6 +35,7 @@ describe("buildHealthMetrics", () => {
     expect(metricValue(metrics[0] ?? {})).toBe(1);
     expect(metricValue(metrics[1] ?? {})).toBe(1.25);
     expect(metricValue(metrics[2] ?? {})).toBe(1_700_000_000);
+    expect(metrics.map(metricTimeUnixNano)).toEqual([nowUnixNano, nowUnixNano, nowUnixNano]);
   });
 
   it("emits success, duration, and timestamp for an empty scrape", () => {
@@ -39,7 +46,7 @@ describe("buildHealthMetrics", () => {
       timestampSeconds: 1_700_000_001,
     };
 
-    const metrics = buildHealthMetrics([outcome]);
+    const metrics = buildHealthMetrics([outcome], "1700000000000000000");
 
     expect(metricNames(metrics)).toEqual([
       "provider_metrics_scrape_success",
@@ -59,7 +66,7 @@ describe("buildHealthMetrics", () => {
       timestampSeconds: 1_700_000_002,
     };
 
-    const metrics = buildHealthMetrics([outcome]);
+    const metrics = buildHealthMetrics([outcome], "1700000000000000000");
 
     expect(metricNames(metrics)).toEqual([
       "provider_metrics_scrape_success",

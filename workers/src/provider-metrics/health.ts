@@ -15,17 +15,21 @@ function gaugeMetric(
   name: string,
   provider: ProviderId,
   value: number,
+  nowUnixNano: string,
 ): Record<string, unknown> {
   return {
     name,
     gauge: {
-      dataPoints: [{ attributes: [providerAttribute(provider)], asDouble: value }],
+      dataPoints: [
+        { attributes: [providerAttribute(provider)], asDouble: value, timeUnixNano: nowUnixNano },
+      ],
     },
   };
 }
 
 export function buildHealthMetrics(
   outcomes: readonly ScrapeHealthOutcome[],
+  nowUnixNano: string,
 ): Record<string, unknown>[] {
   const metrics: Record<string, unknown>[] = [];
 
@@ -35,11 +39,13 @@ export function buildHealthMetrics(
         "provider_metrics_scrape_success",
         outcome.provider,
         outcome.status === "failed" ? 0 : 1,
+        nowUnixNano,
       ),
       gaugeMetric(
         "provider_metrics_scrape_duration_seconds",
         outcome.provider,
         outcome.durationSeconds,
+        nowUnixNano,
       ),
     );
 
@@ -49,6 +55,7 @@ export function buildHealthMetrics(
           "provider_metrics_scrape_timestamp_seconds",
           outcome.provider,
           outcome.timestampSeconds,
+          nowUnixNano,
         ),
       );
     }

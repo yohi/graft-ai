@@ -2,6 +2,18 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_INITIAL_BACKOFF_MS = 500;
 const DEFAULT_PER_ATTEMPT_TIMEOUT_MS = 15000;
 
+export type HttpTransportErrorKind = "network" | "timeout";
+
+export class HttpTransportError extends Error {
+  readonly kind: HttpTransportErrorKind;
+
+  constructor(kind: HttpTransportErrorKind) {
+    super(`HTTP transport failed (${kind})`);
+    this.name = "HttpTransportError";
+    this.kind = kind;
+  }
+}
+
 export function validatePrometheusConfig(
   endpoint: string,
   username: string,
@@ -56,11 +68,6 @@ export interface GetWithRetryOptions {
   redirect?: "error" | "follow" | "manual";
 }
 
-function formatRetryError(logLabel: string, maxRetries: number, lastError?: Error): string {
-  const detail = lastError ? ` (${lastError.message})` : "";
-  return `${logLabel} failed after ${maxRetries + 1} attempts${detail}`;
-}
-
 export async function getWithRetry({
   url,
   headers,
@@ -73,7 +80,7 @@ export async function getWithRetry({
   redirect,
 }: GetWithRetryOptions): Promise<Response> {
   let lastResponse: Response | undefined;
-  let lastError: Error | undefined;
+  let lastErrorKind: HttpTransportErrorKind = "network";
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
@@ -96,13 +103,16 @@ export async function getWithRetry({
         await response.body?.cancel().catch(() => undefined);
       }
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      console.error(`${logLabel} attempt ${attempt + 1} failed: ${lastError.message}`);
+      lastErrorKind =
+        err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")
+          ? "timeout"
+          : "network";
+      console.error(`${logLabel} attempt ${attempt + 1} failed (${lastErrorKind})`);
     }
   }
 
   if (lastResponse !== undefined) return lastResponse;
-  throw new Error(formatRetryError(logLabel, maxRetries, lastError));
+  throw new HttpTransportError(lastErrorKind);
 }
 
 /**

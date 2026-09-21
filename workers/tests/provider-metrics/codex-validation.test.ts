@@ -1,40 +1,74 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchCodexMetrics } from "../../src/provider-metrics/codex";
+import { codexAdapter } from "../../src/provider-metrics/codex";
+import type {
+  AdapterOutcome,
+  ProviderContext,
+  ProviderMetricsEnv,
+  ProviderResult,
+} from "../../src/provider-metrics/types";
+
+const ACCESS_TOKEN = "codex-access-token-secret";
+const RESPONSE_BODY = "sentinel-codex-response-body";
+const SOURCE_ID = "codex-wham-usage";
 
 const MOCK_USAGE_RESPONSE = {
   plan_type: "pro",
   rate_limit: {
-    primary_window: {
-      used_percent: 45,
-      reset_at: 1786161204,
-      limit_window_seconds: 18000,
-    },
-    secondary_window: {
-      used_percent: 20,
-      reset_at: 1786247604,
-      limit_window_seconds: 604800,
-    },
+    primary_window: { used_percent: 45, reset_at: 1786161204, limit_window_seconds: 18000 },
+    secondary_window: { used_percent: 20, reset_at: 1786247604, limit_window_seconds: 604800 },
   },
-  credits: {
-    has_credits: true,
-    unlimited: false,
-    balance: 3.5,
-  },
+  credits: { balance: 3.5 },
 };
 
-describe("fetchCodexMetrics usage response validation", () => {
-  it("throws when both primary_window and secondary_window are missing", async () => {
-    const incompleteResponse = {
+type CodexResult = Extract<ProviderResult, { provider: "codex" }>;
+
+function env(): ProviderMetricsEnv {
+  return {
+    GRAFANA_CLOUD_PROMETHEUS_URL: "https://prometheus.example",
+    GRAFANA_CLOUD_PROMETHEUS_USERNAME: "user",
+    GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "token",
+    CODEX_ACCESS_TOKEN: ACCESS_TOKEN,
+  };
+}
+
+function context(fetchFn: typeof fetch): ProviderContext {
+  return {
+    fetchFn,
+    scheduledTimeSeconds: 1_000,
+    openaiHistoryDays: 1,
+    nowSeconds: () => 1_000,
+    monotonicNowMs: () => 0,
+  };
+}
+
+function successfulCodex(outcome: AdapterOutcome): CodexResult {
+  expect(outcome.status).toBe("success");
+  if (outcome.status !== "success" || outcome.result.provider !== "codex") {
+    throw new Error("expected a successful Codex result");
+  }
+  return outcome.result;
+}
+
+function expectSchemaFailure(outcome: AdapterOutcome): void {
+  expect(outcome).toEqual({
+    status: "failed",
+    error: { kind: "schema", provider: "codex", sourceId: SOURCE_ID },
+  });
+  expect(JSON.stringify(outcome)).not.toContain(RESPONSE_BODY);
+  expect(JSON.stringify(outcome)).not.toContain(ACCESS_TOKEN);
+}
+
+describe("Codex adapter usage response validation", () => {
+  it("returns a schema failure when both usage windows are missing", async () => {
+    const body = {
       ...MOCK_USAGE_RESPONSE,
       rate_limit: { primary_window: undefined, secondary_window: undefined },
     };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(incompleteResponse), { status: 200 }));
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /at least one valid window/,
-    );
+    expectSchemaFailure(await codexAdapter(env(), context(fetchFn)));
   });
 
   it.each([
@@ -48,102 +82,83 @@ describe("fetchCodexMetrics usage response validation", () => {
         rate_limit: { ...MOCK_USAGE_RESPONSE.rate_limit, primary_window: [] },
       },
     ],
-  ])("rejects malformed usage object: %s", async (_case, malformedResponse) => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(malformedResponse), { status: 200 }));
+  ])("returns a schema failure for malformed usage object: %s", async (_name, body) => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /invalid Codex API response/i,
-    );
+    expectSchemaFailure(await codexAdapter(env(), context(fetchFn)));
   });
 
-  it.each([-1, 101, null, "45"])("rejects invalid used_percent value %s", async (usedPercent) => {
-    const invalidResponse = {
-      ...MOCK_USAGE_RESPONSE,
-      rate_limit: {
-        ...MOCK_USAGE_RESPONSE.rate_limit,
-        primary_window: {
-          ...MOCK_USAGE_RESPONSE.rate_limit.primary_window,
-          used_percent: usedPercent,
+  it.each([-1, 101, null, "45"])(
+    "returns a schema failure for used_percent=%s",
+    async (usedPercent) => {
+      const body = {
+        ...MOCK_USAGE_RESPONSE,
+        rate_limit: {
+          ...MOCK_USAGE_RESPONSE.rate_limit,
+          primary_window: {
+            ...MOCK_USAGE_RESPONSE.rate_limit.primary_window,
+            used_percent: usedPercent,
+          },
         },
-      },
-    };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(invalidResponse), { status: 200 }));
+      };
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /invalid Codex API response/i,
-    );
-  });
+      expectSchemaFailure(await codexAdapter(env(), context(fetchFn)));
+    },
+  );
 
-  it("rejects non-finite used_percent", async () => {
-    const body = JSON.stringify(MOCK_USAGE_RESPONSE).replace(
-      '"used_percent":45',
-      '"used_percent":1e400',
-    );
-    const mockFetch = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
-
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /invalid Codex API response/i,
-    );
-  });
-
-  it.each([-1, 1.5, null, "1786161204"])("rejects invalid reset_at value %s", async (resetAt) => {
-    const invalidResponse = {
-      ...MOCK_USAGE_RESPONSE,
-      rate_limit: {
-        ...MOCK_USAGE_RESPONSE.rate_limit,
-        primary_window: {
-          ...MOCK_USAGE_RESPONSE.rate_limit.primary_window,
-          reset_at: resetAt,
+  it.each([-1, 1.5, null, "1786161204"])(
+    "returns a schema failure for reset_at=%s",
+    async (resetAt) => {
+      const body = {
+        ...MOCK_USAGE_RESPONSE,
+        rate_limit: {
+          ...MOCK_USAGE_RESPONSE.rate_limit,
+          primary_window: { ...MOCK_USAGE_RESPONSE.rate_limit.primary_window, reset_at: resetAt },
         },
-      },
-    };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(invalidResponse), { status: 200 }));
+      };
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /invalid Codex API response/i,
-    );
-  });
+      expectSchemaFailure(await codexAdapter(env(), context(fetchFn)));
+    },
+  );
 
   it.each([
     ["numeric plan", { ...MOCK_USAGE_RESPONSE, plan_type: 1 }],
     ["null plan", { ...MOCK_USAGE_RESPONSE, plan_type: null }],
     ["boolean balance", { ...MOCK_USAGE_RESPONSE, credits: { balance: true } }],
     ["object balance", { ...MOCK_USAGE_RESPONSE, credits: { balance: {} } }],
-  ])("rejects wrong plan or balance type: %s", async (_case, invalidResponse) => {
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(invalidResponse), { status: 200 }));
+  ])("returns a schema failure for %s", async (_name, body) => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    await expect(fetchCodexMetrics("token", undefined, mockFetch)).rejects.toThrow(
-      /invalid Codex API response/i,
-    );
+    expectSchemaFailure(await codexAdapter(env(), context(fetchFn)));
   });
 
-  it("preserves null credits as an unavailable balance", async () => {
-    const nullCredits = { ...MOCK_USAGE_RESPONSE, credits: null };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(nullCredits), { status: 200 }));
+  it("omits credits when the upstream credits value is null", async () => {
+    const body = { ...MOCK_USAGE_RESPONSE, credits: null };
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    const result = await fetchCodexMetrics("token", undefined, mockFetch);
-
-    expect(result.creditsRemaining).toBeNull();
+    expect(successfulCodex(await codexAdapter(env(), context(fetchFn))).credits).toBeUndefined();
   });
 
-  it("parses a finite numeric string credit balance", async () => {
-    const stringBalance = { ...MOCK_USAGE_RESPONSE, credits: { balance: "3.5" } };
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify(stringBalance), { status: 200 }));
+  it("parses a finite numeric-string credit balance", async () => {
+    const body = { ...MOCK_USAGE_RESPONSE, credits: { balance: "3.5" } };
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }));
 
-    const result = await fetchCodexMetrics("token", undefined, mockFetch);
-
-    expect(result.creditsRemaining).toBe(3.5);
+    expect(successfulCodex(await codexAdapter(env(), context(fetchFn))).credits).toEqual({
+      remaining: 3.5,
+    });
   });
 });

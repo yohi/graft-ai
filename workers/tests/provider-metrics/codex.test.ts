@@ -194,6 +194,52 @@ describe("Codex adapter", () => {
     expect(browser.close).toHaveBeenCalledOnce();
   });
 
+  it("forwards proxy-secret authentication through Browser Rendering fallback", async () => {
+    type InterceptedRequest = {
+      readonly url: () => string;
+      readonly headers: () => Record<string, string>;
+      readonly continue: ReturnType<typeof vi.fn>;
+    };
+
+    const page = browserPage(JSON.stringify(MOCK_USAGE_RESPONSE));
+    const targetUrl = "https://proxy.example.com/backend-api/wham/usage";
+    const interceptedRequest: InterceptedRequest = {
+      url: () => targetUrl,
+      headers: () => ({}),
+      continue: vi.fn(),
+    };
+    let requestHandler: ((request: InterceptedRequest) => void) | undefined;
+    page.on.mockImplementation((event: string, handler: (request: InterceptedRequest) => void) => {
+      if (event === "request") requestHandler = handler;
+    });
+    page.goto.mockImplementation(async () => {
+      requestHandler?.(interceptedRequest);
+      return { text: vi.fn().mockResolvedValue(JSON.stringify(MOCK_USAGE_RESPONSE)) };
+    });
+    installBrowser(page);
+
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async (input) =>
+        String(input).endsWith("rate-limit-reset-credits")
+          ? response(200, JSON.stringify(MOCK_RESET_CREDITS_RESPONSE))
+          : response(403, RESPONSE_BODY),
+      );
+    const binding = browserBinding();
+
+    await codexAdapter(
+      env({
+        CODEX_PROXY_URL: "https://proxy.example.com",
+        CODEX_PROXY_SECRET: "proxy-secret",
+      }),
+      context(fetchFn, binding),
+    );
+
+    expect(interceptedRequest.continue).toHaveBeenCalledWith({
+      headers: expect.objectContaining({ "X-Proxy-Secret": "proxy-secret" }),
+    });
+  });
+
   it("does not invoke Browser Rendering when the primary binding is unavailable", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(response(403, RESPONSE_BODY));
 

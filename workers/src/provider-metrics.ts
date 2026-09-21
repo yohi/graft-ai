@@ -1,178 +1,188 @@
-import { fetchCodexMetrics } from "./provider-metrics/codex";
-import { fetchOllamaMetrics } from "./provider-metrics/ollama/index";
-import { fetchOpenAIMetrics } from "./provider-metrics/openai-api";
-import { fetchOpenCodeGoMetrics } from "./provider-metrics/opencodego/index";
+import { commandcodeAdapter } from "./provider-metrics/commandcode";
+import {
+  runAdapters,
+  type ProviderExecutionRecord,
+  type RegisteredProvider,
+} from "./provider-metrics/adapters";
+import { codexAdapter } from "./provider-metrics/codex";
+import { buildHealthMetrics } from "./provider-metrics/health";
+import { ollamaAdapter } from "./provider-metrics/ollama/index";
+import { openaiAdapter } from "./provider-metrics/openai-api";
+import { openCodeGoAdapter } from "./provider-metrics/opencodego/index";
 import { pushProviderMetrics } from "./provider-metrics/prometheus";
-import type { ProviderMetricsEnv } from "./provider-metrics/types";
+import type {
+  ProviderContext,
+  ProviderError,
+  ProviderId,
+  ProviderMetricsEnv,
+  ProviderResult,
+} from "./provider-metrics/types";
 
 export interface ProviderMetricsWorker {
   scheduled(event: ScheduledEvent, env: ProviderMetricsEnv, ctx: ExecutionContext): Promise<void>;
   fetch?(request: Request, env: ProviderMetricsEnv, ctx: ExecutionContext): Promise<Response>;
 }
 
+type ProviderDiagnosticError = Pick<ProviderError, "statusCode" | "provider" | "sourceId" | "kind">;
+type ProviderDiagnostic = {
+  readonly status: "skipped" | "success" | "empty" | "failed";
+  readonly error?: ProviderDiagnosticError;
+};
+
 export interface ProviderDiagnosticReport {
-  timestamp: string;
-  providers: {
-    openai: {
-      status: "skipped" | "success" | "failed";
-      error?: string;
-      count?: { costs: number; tokens: number };
-    };
-    codex: { status: "skipped" | "success" | "failed"; error?: string; plan?: string };
-    openCodeGo: {
-      status: "skipped" | "success" | "failed";
-      error?: string;
-      rollingUsageRatio?: number;
-      zenBalanceUSD?: number | null;
-    };
-    ollama?: {
-      status: "skipped" | "success" | "failed";
-      error?: string;
-      sessionUsageRatio?: number;
-      weeklyUsageRatio?: number;
-      plan?: string;
-    };
-  };
+  readonly timestamp: string;
+  readonly providers: Readonly<Record<ProviderId, ProviderDiagnostic>>;
   prometheusPush: { status: "skipped" | "success" | "failed"; statusCode?: number };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+const PROVIDER_REGISTRY = [
+  {
+    provider: "openai_api",
+    credentialKey: "OPENAI_ADMIN_API_KEY",
+    primarySourceId: "openai-organization-api",
+    adapter: openaiAdapter,
+  },
+  {
+    provider: "codex",
+    credentialKey: "CODEX_ACCESS_TOKEN",
+    primarySourceId: "codex-wham-usage",
+    adapter: codexAdapter,
+  },
+  {
+    provider: "opencodego",
+    credentialKey: "OPENCODEGO_API_KEY",
+    primarySourceId: "opencodego-usage-api",
+    adapter: openCodeGoAdapter,
+  },
+  {
+    provider: "ollama_cloud",
+    credentialKey: "OLLAMA_API_KEY",
+    primarySourceId: "ollama-api-usage",
+    adapter: ollamaAdapter,
+  },
+  {
+    provider: "commandcode",
+    credentialKey: "COMMAND_CODE_API_KEY",
+    primarySourceId: "commandcode-billing-credits",
+    adapter: commandcodeAdapter,
+  },
+] as const satisfies readonly RegisteredProvider[];
+
+function assertNever(value: never): never {
+  throw new Error(`Unexpected provider execution state: ${String(value)}`);
+}
+
+function projectProviderError(error: ProviderError): ProviderDiagnosticError {
+  return {
+    ...(error.statusCode === undefined ? {} : { statusCode: error.statusCode }),
+    provider: error.provider,
+    sourceId: error.sourceId,
+    kind: error.kind,
+  };
+}
+
+function diagnosticFor(record: ProviderExecutionRecord): ProviderDiagnostic {
+  switch (record.status) {
+    case "skipped":
+      return { status: "skipped" };
+    case "attempted":
+      switch (record.outcome.status) {
+        case "success":
+          return { status: "success" };
+        case "empty":
+          return { status: "empty" };
+        case "failed": {
+          const error = projectProviderError(record.outcome.error);
+          console.error("Provider metrics: provider failed", error);
+          return { status: "failed", error };
+        }
+        default:
+          return assertNever(record.outcome);
+      }
+    default:
+      return assertNever(record);
+  }
+}
+
+function initialProviderDiagnostics(): Record<ProviderId, ProviderDiagnostic> {
+  return {
+    openai_api: { status: "skipped" },
+    codex: { status: "skipped" },
+    opencodego: { status: "skipped" },
+    ollama_cloud: { status: "skipped" },
+    commandcode: { status: "skipped" },
+  };
+}
+
+function isValidHistoryDays(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= 31;
 }
 
 export async function collectAndPushProviderMetrics(
   env: ProviderMetricsEnv,
-  scheduledTime: number = Date.now(),
+  scheduledTimeMs: number = Date.now(),
 ): Promise<ProviderDiagnosticReport> {
+  const rawHistoryDays = env.OPENAI_API_HISTORY_DAYS;
+  const parsedHistoryDays = rawHistoryDays === undefined ? 1 : Number(rawHistoryDays);
+  const historyDaysAreValid = isValidHistoryDays(parsedHistoryDays);
+  const openaiHistoryDays = historyDaysAreValid ? parsedHistoryDays : 1;
+  let adapterEnv = env;
+
+  if (!historyDaysAreValid) {
+    console.error("Provider metrics: invalid OpenAI history configuration; OpenAI skipped");
+    adapterEnv = { ...env };
+    delete adapterEnv.OPENAI_ADMIN_API_KEY;
+  }
+
+  const context: ProviderContext = {
+    fetchFn: fetch,
+    scheduledTimeSeconds: Math.floor(scheduledTimeMs / 1_000),
+    openaiHistoryDays,
+    nowSeconds: () => Math.floor(Date.now() / 1_000),
+    monotonicNowMs: () => performance.now(),
+    ...(env.MYBROWSER === undefined ? {} : { browserBinding: env.MYBROWSER }),
+  };
+  const records = await runAdapters(adapterEnv, context, PROVIDER_REGISTRY);
+  const providers = initialProviderDiagnostics();
+  const recordsByProvider = new Map(records.map((record) => [record.provider, record] as const));
+
+  for (const entry of PROVIDER_REGISTRY) {
+    const record = recordsByProvider.get(entry.provider);
+    if (record === undefined) {
+      const error: ProviderDiagnosticError = {
+        provider: entry.provider,
+        sourceId: entry.primarySourceId,
+        kind: "internal",
+      };
+      console.error("Provider metrics: provider execution record missing", error);
+      providers[entry.provider] = { status: "failed", error };
+      continue;
+    }
+    providers[entry.provider] = diagnosticFor(record);
+  }
+
   const report: ProviderDiagnosticReport = {
-    timestamp: new Date(scheduledTime).toISOString(),
-    providers: {
-      openai: { status: "skipped" },
-      codex: { status: "skipped" },
-      openCodeGo: { status: "skipped" },
-      ollama: { status: "skipped" },
-    },
+    timestamp: new Date(scheduledTimeMs).toISOString(),
+    providers,
     prometheusPush: { status: "skipped" },
   };
+  const attemptedRecords = records.filter(
+    (record): record is Extract<ProviderExecutionRecord, { status: "attempted" }> =>
+      record.status === "attempted",
+  );
 
-  const rawHistoryDays = env.OPENAI_API_HISTORY_DAYS;
-  const candidateHistoryDays = rawHistoryDays === undefined ? 1 : Number(rawHistoryDays);
-  const historyDays =
-    Number.isInteger(candidateHistoryDays) &&
-    candidateHistoryDays >= 1 &&
-    candidateHistoryDays <= 31
-      ? candidateHistoryDays
-      : undefined;
+  if (attemptedRecords.length === 0) return report;
 
-  if (rawHistoryDays !== undefined && historyDays === undefined) {
-    console.error(
-      `Provider metrics: OPENAI_API_HISTORY_DAYS="${rawHistoryDays}" は無効です。1 から 31 の整数が必要です。OpenAI fetch をスキップします。`,
-    );
-  }
-
-  const openAiApiKey = env.OPENAI_ADMIN_API_KEY?.trim();
-  const codexAccessToken = env.CODEX_ACCESS_TOKEN?.trim();
-  const openCodeGoSessionCookie = env.OPENCODEGO_SESSION_COOKIE?.trim();
-  const ollamaSessionCookie = env.OLLAMA_SESSION_COOKIE?.trim();
-
-  const [openai, codex, openCodeGo, ollama] = await Promise.allSettled([
-    openAiApiKey !== undefined && openAiApiKey !== "" && historyDays !== undefined
-      ? fetchOpenAIMetrics(openAiApiKey, historyDays, fetch, scheduledTime)
-      : Promise.resolve(null),
-    codexAccessToken !== undefined && codexAccessToken !== ""
-      ? fetchCodexMetrics(
-          codexAccessToken,
-          env.CODEX_ACCOUNT_ID,
-          fetch,
-          env.CODEX_PROXY_URL || env.CODEX_API_BASE_URL,
-          env.MYBROWSER,
-          new Date(scheduledTime),
-          env.CODEX_PROXY_SECRET,
-        )
-      : Promise.resolve(null),
-    openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""
-      ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID, fetch)
-      : Promise.resolve(null),
-    ollamaSessionCookie !== undefined && ollamaSessionCookie !== ""
-      ? fetchOllamaMetrics(ollamaSessionCookie, fetch)
-      : Promise.resolve(null),
-  ] as const);
-
-  let openaiResult = null;
-  if (openai.status === "fulfilled") {
-    openaiResult = openai.value;
-    if (openaiResult !== null) {
-      report.providers.openai = {
-        status: "success",
-        count: { costs: openaiResult.costs.length, tokens: openaiResult.tokens.length },
-      };
-    }
-  } else {
-    const err = errorMessage(openai.reason);
-    console.error(`Provider metrics: OpenAI API fetch failed: ${err}`);
-    report.providers.openai = { status: "failed", error: err };
-  }
-
-  let codexResult = null;
-  if (codex.status === "fulfilled") {
-    codexResult = codex.value;
-    if (codexResult !== null) {
-      report.providers.codex = { status: "success", plan: codexResult.plan };
-    }
-  } else {
-    const err = errorMessage(codex.reason);
-    console.error(`Provider metrics: Codex fetch failed: ${err}`);
-    report.providers.codex = { status: "failed", error: err };
-  }
-
-  let openCodeGoResult = null;
-  if (openCodeGo.status === "fulfilled") {
-    openCodeGoResult = openCodeGo.value;
-    if (openCodeGoResult !== null) {
-      report.providers.openCodeGo = {
-        status: "success",
-        rollingUsageRatio: openCodeGoResult.rollingUsageRatio,
-        zenBalanceUSD: openCodeGoResult.zenBalanceUSD,
-      };
-    }
-  } else {
-    const err = errorMessage(openCodeGo.reason);
-    console.error(`Provider metrics: OpenCodeGo fetch failed: ${err}`);
-    report.providers.openCodeGo = { status: "failed", error: err };
-  }
-
-  let ollamaResult = null;
-  if (ollama.status === "fulfilled") {
-    ollamaResult = ollama.value;
-    if (ollamaResult !== null) {
-      report.providers.ollama = {
-        status: "success",
-        sessionUsageRatio: ollamaResult.sessionUsageRatio,
-        weeklyUsageRatio: ollamaResult.weeklyUsageRatio,
-        plan: ollamaResult.plan,
-      };
-    }
-  } else {
-    const err = errorMessage(ollama.reason);
-    console.error(`Provider metrics: Ollama fetch failed: ${err}`);
-    report.providers.ollama = { status: "failed", error: err };
-  }
-
-  const hasOpenAIMetrics =
-    openaiResult !== null && (openaiResult.costs.length > 0 || openaiResult.tokens.length > 0);
-  const hasMetrics =
-    hasOpenAIMetrics || codexResult !== null || openCodeGoResult !== null || ollamaResult !== null;
-
-  if (!hasMetrics) {
-    console.error("Provider metrics: No metrics to push (all providers skipped, failed, or empty)");
-    return report;
-  }
-
+  const successfulResults: ProviderResult[] = attemptedRecords.flatMap((record) =>
+    record.outcome.status === "success" ? [record.outcome.result] : [],
+  );
+  const healthMetrics = buildHealthMetrics(attemptedRecords.map((record) => record.health));
+  const pushNowMs = Date.now();
   const pushResult = await pushProviderMetrics(env, {
-    ...(hasOpenAIMetrics && openaiResult !== null ? { openai: openaiResult } : {}),
-    ...(codexResult === null ? {} : { codex: codexResult }),
-    ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
-    ...(ollamaResult === null ? {} : { ollama: ollamaResult }),
+    results: successfulResults,
+    healthMetrics,
+    nowUnixNano: `${pushNowMs}000000`,
+    nowSeconds: Math.floor(pushNowMs / 1_000),
   });
 
   if (pushResult.ok) {

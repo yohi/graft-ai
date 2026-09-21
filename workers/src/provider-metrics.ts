@@ -29,6 +29,10 @@ type ProviderDiagnostic = {
   readonly error?: ProviderDiagnosticError;
 };
 
+function assertNever(value: never): never {
+  throw new Error(`Unexpected provider execution state: ${String(value)}`);
+}
+
 export interface ProviderDiagnosticReport {
   readonly timestamp: string;
   readonly providers: Readonly<Record<ProviderId, ProviderDiagnostic>>;
@@ -68,10 +72,6 @@ const PROVIDER_REGISTRY = [
   },
 ] as const satisfies readonly RegisteredProvider[];
 
-function assertNever(value: never): never {
-  throw new Error(`Unexpected provider execution state: ${String(value)}`);
-}
-
 function projectProviderError(error: ProviderError): ProviderDiagnosticError {
   return {
     ...(error.statusCode === undefined ? {} : { statusCode: error.statusCode }),
@@ -81,7 +81,17 @@ function projectProviderError(error: ProviderError): ProviderDiagnosticError {
   };
 }
 
-function diagnosticFor(record: ProviderExecutionRecord): ProviderDiagnostic {
+function internalDiagnostic(provider: ProviderId, sourceId: string): ProviderDiagnostic {
+  return {
+    status: "failed",
+    error: { provider, sourceId, kind: "internal" },
+  };
+}
+
+function diagnosticFor(
+  record: ProviderExecutionRecord,
+  primarySourceId: string,
+): ProviderDiagnostic {
   switch (record.status) {
     case "skipped":
       return { status: "skipped" };
@@ -97,7 +107,12 @@ function diagnosticFor(record: ProviderExecutionRecord): ProviderDiagnostic {
           return { status: "failed", error };
         }
         default:
-          return assertNever(record.outcome);
+          console.error("Provider metrics: unknown provider outcome status", {
+            provider: record.provider,
+            sourceId: primarySourceId,
+            kind: "internal",
+          });
+          return internalDiagnostic(record.provider, primarySourceId);
       }
     default:
       return assertNever(record);
@@ -144,21 +159,44 @@ export async function collectAndPushProviderMetrics(
   };
   const records = await runAdapters(adapterEnv, context, PROVIDER_REGISTRY);
   const providers = initialProviderDiagnostics();
-  const recordsByProvider = new Map(records.map((record) => [record.provider, record] as const));
+  const matchedRecords: ProviderExecutionRecord[] = [];
+
+  for (const record of records) {
+    if (!PROVIDER_REGISTRY.some((entry) => entry.provider === record.provider)) {
+      console.error("Provider metrics: unknown provider execution record", {
+        provider: record.provider,
+        kind: "internal",
+      });
+    }
+  }
 
   for (const entry of PROVIDER_REGISTRY) {
-    const record = recordsByProvider.get(entry.provider);
-    if (record === undefined) {
-      const error: ProviderDiagnosticError = {
+    const matchingRecords = records.filter((record) => record.provider === entry.provider);
+    if (matchingRecords.length === 0) {
+      console.error("Provider metrics: provider execution record missing", {
         provider: entry.provider,
         sourceId: entry.primarySourceId,
         kind: "internal",
-      };
-      console.error("Provider metrics: provider execution record missing", error);
-      providers[entry.provider] = { status: "failed", error };
+      });
+      providers[entry.provider] = internalDiagnostic(entry.provider, entry.primarySourceId);
       continue;
     }
-    providers[entry.provider] = diagnosticFor(record);
+    if (matchingRecords.length > 1) {
+      console.error("Provider metrics: duplicate provider execution records", {
+        provider: entry.provider,
+        sourceId: entry.primarySourceId,
+        kind: "internal",
+      });
+      providers[entry.provider] = internalDiagnostic(entry.provider, entry.primarySourceId);
+      continue;
+    }
+    const [record] = matchingRecords;
+    if (record === undefined) {
+      providers[entry.provider] = internalDiagnostic(entry.provider, entry.primarySourceId);
+      continue;
+    }
+    matchedRecords.push(record);
+    providers[entry.provider] = diagnosticFor(record, entry.primarySourceId);
   }
 
   const report: ProviderDiagnosticReport = {
@@ -166,7 +204,7 @@ export async function collectAndPushProviderMetrics(
     providers,
     prometheusPush: { status: "skipped" },
   };
-  const attemptedRecords = records.filter(
+  const attemptedRecords = matchedRecords.filter(
     (record): record is Extract<ProviderExecutionRecord, { status: "attempted" }> =>
       record.status === "attempted",
   );

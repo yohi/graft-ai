@@ -4,6 +4,7 @@ import {
   collectAndPushProviderMetrics,
   type ProviderDiagnosticReport,
 } from "../../src/provider-metrics";
+import worker from "../../src/provider-metrics";
 import type { ProviderMetricsEnv } from "../../src/provider-metrics/types";
 
 const baseEnv = {
@@ -300,7 +301,11 @@ describe("provider-metrics scheduled orchestrator", () => {
     );
 
     expect(report.providers.ollama_cloud.status).toBe("success");
-    expect(metricNames(payloadMetrics(fetchMock))).toContain("ollama_cloud_plan_info");
+    const payload = payloadMetrics(fetchMock);
+    expect(metricNames(payload)).toContain("ollama_cloud_plan_info");
+    expect(metricNames(payload)).not.toContain("ollama_cloud_activity_cost_usd");
+    expect(metricNames(payload)).not.toContain("ollama_cloud_model_requests");
+    expect(JSON.stringify({ report, payload })).not.toContain("ollama-api-usage");
   });
 
   it("uses one history day when OpenAI history configuration is unset", async () => {
@@ -371,6 +376,25 @@ describe("provider-metrics scheduled orchestrator", () => {
 
     expect(requestUrl.searchParams.get("end_time")).toBe("1767312000");
     expect(requestUrl.searchParams.get("start_time")).toBe(String(1767312000 - 31 * 86_400));
+  });
+
+  it("forwards the scheduled event time through the Worker entrypoint", async () => {
+    const fetchMock = createFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const scheduled = Date.parse("2026-01-02T12:34:56.789Z");
+    const event = { scheduledTime: scheduled } as ScheduledEvent;
+
+    await worker.scheduled(
+      event,
+      reportWithOpenAi({ OPENAI_API_HISTORY_DAYS: "31" }),
+      {} as ExecutionContext,
+    );
+
+    const openAiCalls = fetchMock.mock.calls.filter(([input]) =>
+      urlOf(input).includes("api.openai.com"),
+    );
+    const requestUrl = new URL(urlOf(openAiCalls[0]?.[0] ?? "https://invalid.example"));
+    expect(requestUrl.searchParams.get("end_time")).toBe("1767312000");
   });
 
   it("keeps Codex and Ollama failures on the fixed diagnostic allowlist", async () => {

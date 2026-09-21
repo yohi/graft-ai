@@ -36,3 +36,22 @@ Changed only:
 - `workers/src/provider-metrics.ts`
 - `workers/tests/provider-metrics/scheduled.test.ts`
 - This required task report.
+
+## Round 1 Review Fixes
+
+- Added a Worker entrypoint test that calls `worker.scheduled` and verifies the
+  scheduled event time reaches the OpenAI request window.
+- Converted unknown provider outcome statuses into `internal` diagnostics using
+  the registry primary source instead of throwing.
+- Replaced provider-to-record `Map` projection with registry-based matching;
+  duplicate records become internal failures, while unknown records are logged
+  and ignored.
+- Strengthened Ollama fallback assertions to exclude API source and
+  API-derived metrics from the final report and OTLP payload.
+
+Round 1 verification:
+
+- `npx vitest run tests/provider-metrics/scheduled.test.ts` — 17 passed.
+- `npm run typecheck` — passed.
+- `npx prettier --check src/provider-metrics.ts tests/provider-metrics/scheduled.test.ts` — passed.
+- `npm test` — 23 test files, 303 tests passed.

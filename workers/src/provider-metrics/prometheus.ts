@@ -16,6 +16,7 @@ export interface ProviderMetricsPushInput {
 
 type Metric = Record<string, unknown>;
 type MetricSpec = readonly [string, number | undefined, Record<string, unknown>[]?];
+type MetricBuildContext = { readonly metrics: Metric[]; readonly nowUnixNano: string };
 
 function attr(key: string, value: string): Record<string, unknown> {
   return { key, value: { stringValue: value } };
@@ -36,20 +37,19 @@ function gaugeMetric(
 }
 
 function appendQuotaMetrics(
-  metrics: Metric[],
   provider: ProviderId,
   windows: readonly QuotaWindow[],
-  nowUnixNano: string,
+  context: MetricBuildContext,
 ): void {
   for (const window of windows) {
     const periodAttr = [attr("period", window.period)];
     appendOptionalMetrics(
-      metrics,
+      context.metrics,
       [
         [`${provider}_usage_ratio`, window.usageRatio, periodAttr],
         [`${provider}_reset_timestamp_seconds`, window.resetTimestampSeconds, periodAttr],
       ],
-      nowUnixNano,
+      context.nowUnixNano,
     );
   }
 }
@@ -74,9 +74,10 @@ export function buildProviderMetrics(
   nowSeconds: number,
 ): Metric[] {
   const metrics: Metric[] = [];
+  const context = { metrics, nowUnixNano };
 
   for (const result of results) {
-    appendQuotaMetrics(metrics, result.provider, result.windows, nowUnixNano);
+    appendQuotaMetrics(result.provider, result.windows, context);
 
     switch (result.provider) {
       case "openai_api":

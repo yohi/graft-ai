@@ -2,6 +2,7 @@ import { fetchCodexMetrics } from "./provider-metrics/codex";
 import { fetchOllamaMetrics } from "./provider-metrics/ollama";
 import { fetchOpenAIMetrics } from "./provider-metrics/openai-api";
 import { fetchOpenCodeGoMetrics } from "./provider-metrics/opencodego";
+import { toProviderResults } from "./provider-metrics/legacy-results";
 import { pushProviderMetrics } from "./provider-metrics/prometheus";
 import type { ProviderMetricsEnv } from "./provider-metrics/types";
 
@@ -168,11 +169,23 @@ export async function collectAndPushProviderMetrics(
     return report;
   }
 
+  const pushNowMs = Date.now();
+  const nowSeconds = Math.floor(pushNowMs / 1_000);
+  const providerResults = toProviderResults(
+    {
+      ...(hasOpenAIMetrics && openaiResult !== null ? { openai: openaiResult } : {}),
+      ...(codexResult === null ? {} : { codex: codexResult }),
+      ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
+      ...(ollamaResult === null ? {} : { ollama: ollamaResult }),
+    },
+    nowSeconds,
+  );
+
   const pushResult = await pushProviderMetrics(env, {
-    ...(hasOpenAIMetrics && openaiResult !== null ? { openai: openaiResult } : {}),
-    ...(codexResult === null ? {} : { codex: codexResult }),
-    ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
-    ...(ollamaResult === null ? {} : { ollama: ollamaResult }),
+    results: providerResults,
+    healthMetrics: [],
+    nowUnixNano: `${pushNowMs}000000`,
+    nowSeconds,
   });
 
   if (pushResult.ok) {

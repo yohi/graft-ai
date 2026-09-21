@@ -32,12 +32,7 @@ export interface ProviderMetricsEnv {
   MYBROWSER?: Fetcher;
 }
 
-export type ProviderId =
-  | "openai_api"
-  | "codex"
-  | "opencodego"
-  | "ollama_cloud"
-  | "commandcode";
+export type ProviderId = "openai_api" | "codex" | "opencodego" | "ollama_cloud" | "commandcode";
 
 export type SupportLevel = "official-public" | "official-internal" | "web-internal" | "scraping";
 export type SourceRole = "primary" | "enrichment" | "fallback";

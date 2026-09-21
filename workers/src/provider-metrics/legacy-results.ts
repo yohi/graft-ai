@@ -3,6 +3,7 @@ import type {
   OpenAIFetchResult,
   OpenCodeGoFetchResult,
   OllamaFetchResult,
+  ProviderCredits,
   ProviderResult,
   QuotaPeriod,
   QuotaWindow,
@@ -44,18 +45,17 @@ function appendOpenAIResult(results: ProviderResult[], value: OpenAIFetchResult)
 }
 
 function appendCodexResult(results: ProviderResult[], value: CodexFetchResult): void {
-  const credits =
-    value.creditsRemaining === null && value.resetCredits === undefined
-      ? undefined
-      : {
-          ...(value.creditsRemaining === null ? {} : { remaining: value.creditsRemaining }),
-          ...(value.resetCredits === undefined
-            ? {}
-            : {
-                resetCredits: value.resetCredits.credits,
-                resetCreditsAvailableCount: value.resetCredits.availableCount,
-              }),
-        };
+  let credits: ProviderCredits | undefined;
+  if (value.creditsRemaining !== null || value.resetCredits !== undefined) {
+    credits = {};
+    if (value.creditsRemaining !== null) {
+      credits.remaining = value.creditsRemaining;
+    }
+    if (value.resetCredits !== undefined) {
+      credits.resetCredits = value.resetCredits.credits;
+      credits.resetCreditsAvailableCount = value.resetCredits.availableCount;
+    }
+  }
   results.push({
     provider: "codex",
     sources: [],

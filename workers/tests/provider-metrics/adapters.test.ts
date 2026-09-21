@@ -168,6 +168,10 @@ describe("runAdapters", () => {
       status: "failed",
       error: { kind: "internal", provider: "openai_api", sourceId: "fixed-source" },
     });
+    expect(failed.health).toMatchObject({
+      provider: "openai_api",
+      status: "failed",
+    });
     expect(records[1]).toMatchObject({ provider: "codex", status: "attempted" });
   });
 });

@@ -1,5 +1,5 @@
 import { fetchCodexMetrics } from "./provider-metrics/codex";
-import { fetchOllamaMetrics } from "./provider-metrics/ollama";
+import { fetchOllamaMetrics } from "./provider-metrics/ollama/index";
 import { fetchOpenAIMetrics } from "./provider-metrics/openai-api";
 import { fetchOpenCodeGoMetrics } from "./provider-metrics/opencodego/index";
 import { pushProviderMetrics } from "./provider-metrics/prometheus";

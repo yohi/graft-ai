@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchOpenCodeGoMetrics } from "../../src/provider-metrics/opencodego";
+import {
+  fetchOpenCodeGoMetrics,
+  openCodeGoAdapter,
+} from "../../src/provider-metrics/opencodego/index";
+import type { ProviderContext, ProviderMetricsEnv } from "../../src/provider-metrics/types";
 
 const MOCK_WORKSPACE_HTML = `<script>self.__next_f=[["wrk_abc123"]]</script>`;
 
@@ -22,6 +26,14 @@ const MOCK_USAGE_HTML = `
 </script>`;
 
 const MOCK_ZEN_HTML = `{"zenBalance":2345000000}`;
+
+const MOCK_API_USAGE_JSON = JSON.stringify({
+  usage: {
+    rolling: { status: "ok", percent: 30 },
+    weekly: { status: "ok", percent: 15 },
+    monthly: { status: "ok", percent: 50 },
+  },
+});
 
 const MOCK_USAGE_TOP_LEVEL_JSON = JSON.stringify({
   usagePercent: 42,
@@ -46,6 +58,27 @@ self.$R[0].resolve({"usagePercent": 45, "weeklyUsagePercent": 20, "monthlyUsageP
 </script>`;
 
 const MOCK_USAGE_TEXT_BODY = `page content "usagePercent": 72, "resetInSec": 600 more content`;
+
+function zenEnv(cookie?: string): ProviderMetricsEnv {
+  return {
+    GRAFANA_CLOUD_PROMETHEUS_URL: "https://prometheus.example",
+    GRAFANA_CLOUD_PROMETHEUS_USERNAME: "user",
+    GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "token",
+    OPENCODEGO_API_KEY: "opencode-api-key",
+    OPENCODEGO_WORKSPACE_ID: "wrk_abc123",
+    ...(cookie === undefined ? {} : { OPENCODEGO_SESSION_COOKIE: cookie }),
+  };
+}
+
+function adapterContext(fetchFn: typeof fetch): ProviderContext {
+  return {
+    fetchFn,
+    scheduledTimeSeconds: 1_000,
+    openaiHistoryDays: 1,
+    nowSeconds: () => 1_000,
+    monotonicNowMs: () => 0,
+  };
+}
 
 describe("fetchOpenCodeGoMetrics", () => {
   it("parses usage ratios from embedded JSON", async () => {
@@ -589,5 +622,61 @@ describe("fetchOpenCodeGoMetrics", () => {
     expect(extractZenBalance('{"zenBalance": 2345000000}', "rpc")).toBe(23.45);
     expect(extractZenBalance('{"balance": 5000000000}', "rpc")).toBe(50.0);
     expect(extractZenBalance('{"balance": 1000000}', "rpc")).toBe(0.01);
+  });
+
+  it("enriches successful API-key quota with a configured Zen balance", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (url === "https://opencode.ai/zen/go/v1/usage") {
+        return new Response(MOCK_API_USAGE_JSON, { status: 200 });
+      }
+      return new Response(MOCK_ZEN_HTML, { status: 200 });
+    });
+
+    const outcome = await openCodeGoAdapter(zenEnv("session=abc"), adapterContext(fetchFn));
+
+    expect(outcome.status).toBe("success");
+    if (outcome.status !== "success") throw new Error("expected successful OpenCode Go result");
+    expect(outcome.result.provider).toBe("opencodego");
+    if (outcome.result.provider !== "opencodego") {
+      throw new Error("expected OpenCode Go provider result");
+    }
+    expect(outcome.result.zenBalanceUSD).toBe(23.45);
+    expect(outcome.result.sources).toContainEqual({
+      id: "opencodego-zen-rpc",
+      supportLevel: "web-internal",
+      role: "enrichment",
+    });
+    expect(outcome.result).not.toHaveProperty("credits");
+  });
+
+  it("does not call Zen RPC when the session cookie is missing", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(MOCK_API_USAGE_JSON, { status: 200 }));
+
+    const outcome = await openCodeGoAdapter(zenEnv(), adapterContext(fetchFn));
+
+    expect(outcome.status).toBe("success");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    if (outcome.status !== "success") throw new Error("expected successful OpenCode Go result");
+    expect(outcome.result).not.toHaveProperty("zenBalanceUSD");
+  });
+
+  it("keeps API-key quota success when Zen RPC enrichment fails", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (url === "https://opencode.ai/zen/go/v1/usage") {
+        return new Response(MOCK_API_USAGE_JSON, { status: 200 });
+      }
+      return new Response("Not Found", { status: 404 });
+    });
+
+    const outcome = await openCodeGoAdapter(zenEnv("session=abc"), adapterContext(fetchFn));
+
+    expect(outcome.status).toBe("success");
+    if (outcome.status !== "success") throw new Error("expected successful OpenCode Go result");
+    expect(outcome.result).not.toHaveProperty("zenBalanceUSD");
+    expect(outcome.result.sources).toEqual([
+      { id: "opencodego-usage-api", supportLevel: "official-internal", role: "primary" },
+    ]);
   });
 });

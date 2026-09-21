@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { commandcodeAdapter } from "../../src/provider-metrics/commandcode";
+import {
+  commandcodeAdapter,
+  fetchCommandCodeCredits,
+  fetchCommandCodeSubscription,
+  fetchCommandCodeSummary,
+  fetchCommandCodeWhoami,
+} from "../../src/provider-metrics/commandcode";
 import type {
   ProviderContext,
   ProviderMetricsEnv,
@@ -205,6 +211,40 @@ describe("CommandCode adapter", () => {
       "schema",
     ],
     [
+      "missing window limits",
+      "/alpha/billing/credits",
+      json(200, { credits: { monthlyCredits: 1 } }),
+      SOURCE_IDS.credits,
+      "schema",
+    ],
+    [
+      "missing window limit flag",
+      "/alpha/billing/credits",
+      json(200, {
+        credits: { monthlyCredits: 1 },
+        windowLimits: {
+          fiveHour: { used: 0, cap: 1 },
+          weekly: { used: 0, cap: 1 },
+        },
+      }),
+      SOURCE_IDS.credits,
+      "schema",
+    ],
+    [
+      "non-boolean window limit flag",
+      "/alpha/billing/credits",
+      json(200, {
+        credits: { monthlyCredits: 1 },
+        windowLimits: {
+          limited: "false",
+          fiveHour: { used: 0, cap: 1 },
+          weekly: { used: 0, cap: 1 },
+        },
+      }),
+      SOURCE_IDS.credits,
+      "schema",
+    ],
+    [
       "zero quota cap",
       "/alpha/billing/credits",
       json(200, {
@@ -226,6 +266,126 @@ describe("CommandCode adapter", () => {
       });
     },
   );
+
+  it.each([
+    [401, "auth"],
+    [403, "forbidden"],
+    [429, "rate_limit"],
+    [500, "upstream_5xx"],
+  ] as const)("maps credits HTTP %i to %s with credits ownership", async (status, kind) => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = json(status, "response-secret");
+    const outcome = await withFakeTimers(() =>
+      commandcodeAdapter(env(), context(mockFetch(routes))),
+    );
+    expect(outcome).toEqual({
+      status: "failed",
+      error: {
+        kind,
+        provider: "commandcode",
+        sourceId: SOURCE_IDS.credits,
+        statusCode: status,
+      },
+    });
+  });
+
+  it.each([
+    ["network", new TypeError("network-secret")],
+    ["timeout", new DOMException("timeout-secret", "TimeoutError")],
+  ] as const)("preserves credits %s transport ownership", async (kind, error) => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = { status: 200, body: error };
+    const outcome = await withFakeTimers(() =>
+      commandcodeAdapter(env(), context(mockFetch(routes))),
+    );
+    expect(outcome).toEqual({
+      status: "failed",
+      error: { kind, provider: "commandcode", sourceId: SOURCE_IDS.credits },
+    });
+  });
+
+  it("preserves subscriptions HTTP failure ownership", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/subscriptions"] = json(500, "response-secret");
+    const outcome = await withFakeTimers(() =>
+      fetchCommandCodeSubscription(API_KEY, "org-id", context(mockFetch(routes))),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      error: {
+        kind: "upstream_5xx",
+        provider: "commandcode",
+        sourceId: SOURCE_IDS.subscriptions,
+        statusCode: 500,
+      },
+    });
+  });
+
+  it("preserves summary HTTP failure ownership", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/usage/summary"] = json(500, "response-secret");
+    const outcome = await withFakeTimers(() =>
+      fetchCommandCodeSummary(API_KEY, "org-id", undefined, context(mockFetch(routes))),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      error: {
+        kind: "upstream_5xx",
+        provider: "commandcode",
+        sourceId: SOURCE_IDS.summary,
+        statusCode: 500,
+      },
+    });
+  });
+
+  it("preserves whoami parse failure ownership", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/whoami"] = { status: 200, body: "{" };
+    const outcome = await fetchCommandCodeWhoami(API_KEY, context(mockFetch(routes)));
+    expect(outcome).toEqual({
+      ok: false,
+      error: { kind: "parse", provider: "commandcode", sourceId: SOURCE_IDS.whoami },
+    });
+  });
+
+  it("preserves credits parse failure ownership", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = { status: 200, body: "{" };
+    const outcome = await fetchCommandCodeCredits(API_KEY, "org-id", context(mockFetch(routes)));
+    expect(outcome).toEqual({
+      ok: false,
+      error: { kind: "parse", provider: "commandcode", sourceId: SOURCE_IDS.credits },
+    });
+  });
+
+  it("preserves subscriptions parse failure ownership", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/subscriptions"] = { status: 200, body: "{" };
+    const outcome = await fetchCommandCodeSubscription(
+      API_KEY,
+      "org-id",
+      context(mockFetch(routes)),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      error: { kind: "parse", provider: "commandcode", sourceId: SOURCE_IDS.subscriptions },
+    });
+  });
+
+  it("preserves summary parse failure ownership", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/usage/summary"] = { status: 200, body: "{" };
+    const outcome = await fetchCommandCodeSummary(
+      API_KEY,
+      "org-id",
+      undefined,
+      context(mockFetch(routes)),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      error: { kind: "parse", provider: "commandcode", sourceId: SOURCE_IDS.summary },
+    });
+  });
 
   it.each([
     [401, "auth"],

@@ -168,9 +168,8 @@ export async function fetchZenBalance(
   try {
     const text = await fetchServerRPC(BILLING_SERVER_ID, [workspaceId], context, workspaceId);
     return extractZenBalance(text);
-  } catch (error) {
-    if (error instanceof Error) return null;
-    throw error;
+  } catch {
+    return null;
   }
 }
 
@@ -183,8 +182,7 @@ export async function fetchZenBalanceEnrichment(
     const context = createFetchContext(rawCookie, fetchFn);
     const workspaceId = workspaceIdOverride?.trim() || (await fetchWorkspaceId(context));
     return await fetchZenBalance(workspaceId, context);
-  } catch (error) {
-    if (error instanceof Error) return null;
-    throw error;
+  } catch {
+    return null;
   }
 }

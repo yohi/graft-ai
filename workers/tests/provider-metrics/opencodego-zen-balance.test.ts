@@ -679,4 +679,22 @@ describe("fetchOpenCodeGoMetrics", () => {
       { id: "opencodego-usage-api", supportLevel: "official-internal", role: "primary" },
     ]);
   });
+
+  it("swallows a non-Error Zen RPC rejection and preserves quota success", async () => {
+    const billingResponse = new Response("", { status: 200 });
+    billingResponse.text = () => Promise.reject({ kind: "non-error-rpc-failure" });
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (url === "https://opencode.ai/zen/go/v1/usage") {
+        return new Response(MOCK_API_USAGE_JSON, { status: 200 });
+      }
+      return billingResponse;
+    });
+
+    const outcome = await openCodeGoAdapter(zenEnv("session=abc"), adapterContext(fetchFn));
+
+    expect(outcome.status).toBe("success");
+    if (outcome.status !== "success") throw new Error("expected successful OpenCode Go result");
+    expect(outcome.result.windows).toHaveLength(3);
+    expect(outcome.result).not.toHaveProperty("zenBalanceUSD");
+  });
 });

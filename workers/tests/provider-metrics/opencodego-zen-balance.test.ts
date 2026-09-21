@@ -80,6 +80,36 @@ function adapterContext(fetchFn: typeof fetch): ProviderContext {
   };
 }
 
+function mockLegacyFetch({
+  subscription = MOCK_USAGE_HTML,
+  liteSubscription = MOCK_USAGE_HTML,
+  billing = MOCK_ZEN_HTML,
+  checkInit,
+}: {
+  readonly subscription?: string;
+  readonly liteSubscription?: string;
+  readonly billing?: string;
+  readonly checkInit?: (init: RequestInit | undefined) => void;
+} = {}) {
+  return vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+    checkInit?.(init);
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.includes("_server") && url.includes("def399")) {
+      return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
+    }
+    if (url.includes("7abeebee")) {
+      return new Response(subscription, { status: 200 });
+    }
+    if (url.includes("c7389bd0")) {
+      return new Response(liteSubscription, { status: 200 });
+    }
+    if (url.includes("c83b78a6")) {
+      return new Response(billing, { status: 200 });
+    }
+    return new Response("{}", { status: 200 });
+  });
+}
+
 describe("fetchOpenCodeGoMetrics", () => {
   it("parses usage ratios from embedded JSON", async () => {
     let call = 0;
@@ -135,13 +165,7 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("sends Cookie header and normalizes raw tokens", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee")) return new Response(MOCK_USAGE_HTML, { status: 200 });
-      return new Response(MOCK_ZEN_HTML, { status: 200 });
-    });
+    const mockFetch = mockLegacyFetch();
 
     await fetchOpenCodeGoMetrics("__Secure-session=xyz", undefined, mockFetch);
 
@@ -152,28 +176,17 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("sets manual redirects for RPC requests", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
-      expect(init.redirect).toBe("manual");
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("c7389bd0") || url.includes("7abeebee")) {
-        return new Response(MOCK_USAGE_HTML, { status: 200 });
-      }
-      return new Response(MOCK_ZEN_HTML, { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      checkInit: (init) => {
+        expect(init?.redirect).toBe("manual");
+      },
     });
 
     await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
   });
 
   it("sends X-Server-Id and X-Server-Instance headers for _server requests", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee")) return new Response(MOCK_USAGE_HTML, { status: 200 });
-      return new Response(MOCK_ZEN_HTML, { status: 200 });
-    });
+    const mockFetch = mockLegacyFetch();
 
     await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
 
@@ -298,12 +311,10 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("parses text body fallback correctly", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee")) return new Response(MOCK_USAGE_TEXT_BODY, { status: 200 });
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: MOCK_USAGE_TEXT_BODY,
+      liteSubscription: "{}",
+      billing: "{}",
     });
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
@@ -312,14 +323,10 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("throws when required rolling usage is absent", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee")) {
-        return new Response(`page content "resetInSec": 600 more content`, { status: 200 });
-      }
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: `page content "resetInSec": 600 more content`,
+      liteSubscription: "{}",
+      billing: "{}",
     });
 
     await expect(fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch)).rejects.toThrow();
@@ -391,20 +398,11 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("clamps ratio to 0 when billing monthlyUsage is negative", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee")) {
-        return new Response("null", { status: 200 });
-      }
-      if (url.includes("c83b78a6")) {
-        return new Response(
-          '{"customerID":"cust_123","monthlyUsage":-500000000,"monthlyLimit":20,"balance":1500000000}',
-          { status: 200 },
-        );
-      }
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: "null",
+      liteSubscription: "null",
+      billing:
+        '{"customerID":"cust_123","monthlyUsage":-500000000,"monthlyLimit":20,"balance":1500000000}',
     });
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
@@ -433,23 +431,13 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("extracts billing from array structures and nested objects in billing response", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee")) {
-        return new Response("null", { status: 200 });
-      }
-      if (url.includes("c83b78a6")) {
-        return new Response(
-          JSON.stringify([
-            { dummy: true },
-            { nested: { monthlyUsage: 200000000, monthlyLimit: 10, balance: 500000000 } },
-          ]),
-          { status: 200 },
-        );
-      }
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: "null",
+      liteSubscription: "null",
+      billing: JSON.stringify([
+        { dummy: true },
+        { nested: { monthlyUsage: 200000000, monthlyLimit: 10, balance: 500000000 } },
+      ]),
     });
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
@@ -537,17 +525,10 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("returns only balance and 0 rolling ratio in Zen balance fallback", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee") || url.includes("c7389bd0")) {
-        return new Response("null", { status: 200 });
-      }
-      if (url.includes("c83b78a6")) {
-        return new Response('{"zenBalance":5000000000}', { status: 200 });
-      }
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: "null",
+      liteSubscription: "null",
+      billing: '{"zenBalance":5000000000}',
     });
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
@@ -561,22 +542,12 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("correctly handles large USD monthly limits (>= $1000) without dividing by USD_SCALE", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee") || url.includes("c7389bd0")) {
-        return new Response("null", { status: 200 });
-      }
-      if (url.includes("c83b78a6")) {
-        // monthlyUsage in nano-units ($500.00 = 500 * 10^8 = 50_000_000_000)
-        // monthlyLimit in pre-scaled USD ($2500)
-        return new Response(
-          '{"monthlyUsage":50000000000,"monthlyLimit":2500,"balance":10000000000}',
-          { status: 200 },
-        );
-      }
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: "null",
+      liteSubscription: "null",
+      // monthlyUsage in nano-units ($500.00 = 500 * 10^8 = 50_000_000_000)
+      // monthlyLimit in pre-scaled USD ($2500)
+      billing: '{"monthlyUsage":50000000000,"monthlyLimit":2500,"balance":10000000000}',
     });
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);
@@ -587,20 +558,11 @@ describe("fetchOpenCodeGoMetrics", () => {
   });
 
   it("correctly parses minor-unit nano-units (down to $0.01 = 1_000_000)", async () => {
-    const mockFetch = vi.fn().mockImplementation(async (url: string) => {
-      if (url.includes("_server") && url.includes("def399")) {
-        return new Response(MOCK_WORKSPACE_HTML, { status: 200 });
-      }
-      if (url.includes("7abeebee") || url.includes("c7389bd0")) {
-        return new Response("null", { status: 200 });
-      }
-      if (url.includes("c83b78a6")) {
-        // 1 cent = 1_000_000 nano-units, limit = $10 USD
-        return new Response('{"monthlyUsage":1000000,"monthlyLimit":10,"balance":2000000}', {
-          status: 200,
-        });
-      }
-      return new Response("{}", { status: 200 });
+    const mockFetch = mockLegacyFetch({
+      subscription: "null",
+      liteSubscription: "null",
+      // 1 cent = 1_000_000 nano-units, limit = $10 USD
+      billing: '{"monthlyUsage":1000000,"monthlyLimit":10,"balance":2000000}',
     });
 
     const result = await fetchOpenCodeGoMetrics("session=abc", undefined, mockFetch);

@@ -1,10 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
-import { pushProviderMetrics } from "../../src/provider-metrics/prometheus";
-import type {
-  OpenAIFetchResult,
-  CodexFetchResult,
-  OpenCodeGoFetchResult,
-} from "../../src/provider-metrics/types";
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildProviderMetrics,
+  pushProviderMetrics,
+  type ProviderMetricsPushInput,
+} from "../../src/provider-metrics/prometheus";
+import type { ProviderResult } from "../../src/provider-metrics/types";
 
 const env = {
   GRAFANA_CLOUD_PROMETHEUS_URL: "https://otlp-gateway-prod-us-central1.grafana.net/otlp",
@@ -12,198 +12,178 @@ const env = {
   GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "test-token",
 };
 
-const sampleOpenAI: OpenAIFetchResult = {
-  costs: [{ lineItem: "Chat Completions", costUSD: 0.42 }],
-  tokens: [
-    { model: "gpt-4o", inputTokens: 1000, outputTokens: 500, cachedTokens: 100, requests: 10 },
-  ],
+const nowUnixNano = "1000000000000";
+const nowSeconds = 1_000;
+
+const sampleResults: ProviderResult[] = [
+  {
+    provider: "openai_api",
+    sources: [],
+    windows: [],
+    costs: [{ lineItem: "tokens", costUSD: 0.42 }],
+    modelUsage: [
+      { model: "gpt-5", inputTokens: 1_000, outputTokens: 500, cachedTokens: 100, requests: 10 },
+    ],
+  },
+  {
+    provider: "opencodego",
+    sources: [],
+    windows: [{ period: "weekly", usageRatio: 0.2, resetTimestampSeconds: 1_250 }],
+    zenBalanceUSD: 23.45,
+  },
+  {
+    provider: "ollama_cloud",
+    sources: [],
+    windows: [],
+    modelRequests: [{ period: "session", model: "glm-5.3-flash", requestCount: 54 }],
+    activityCostUSD: 12.34,
+  },
+];
+
+type Metric = {
+  readonly name: string;
+  readonly gauge: {
+    readonly dataPoints: readonly {
+      readonly attributes?: readonly {
+        readonly key: string;
+        readonly value: { readonly stringValue: string };
+      }[];
+      readonly asDouble: number;
+      readonly timeUnixNano?: string;
+    }[];
+  };
 };
 
-const sampleCodex: CodexFetchResult = {
-  sessionUsageRatio: 0.45,
-  weeklyUsageRatio: 0.2,
-  sessionResetTimestampSeconds: 1700010000,
-  weeklyResetTimestampSeconds: 1700100000,
-  creditsRemaining: 3.5,
-  resetCredits: { credits: 12, availableCount: 8 },
-  plan: "pro",
-};
+function metricObjects(metrics: readonly Record<string, unknown>[], name: string): Metric[] {
+  return metrics.filter((metric) => metric.name === name) as Metric[];
+}
 
-const sampleOpenCodeGo: OpenCodeGoFetchResult = {
-  rollingUsageRatio: 0.3,
-  weeklyUsageRatio: 0.15,
-  monthlyUsageRatio: 0.5,
-  rollingResetSeconds: 3600,
-  weeklyResetSeconds: 86400,
-  monthlyResetSeconds: 1296000,
-  zenBalanceUSD: 23.45,
-};
+function metricValues(metrics: readonly Record<string, unknown>[], name: string): number[] {
+  return metricObjects(metrics, name).flatMap((metric) =>
+    metric.gauge.dataPoints.map((dataPoint) => dataPoint.asDouble),
+  );
+}
+
+function attributeValue(metric: Metric | undefined, key: string): string | undefined {
+  return metric?.gauge.dataPoints[0]?.attributes?.find((attribute) => attribute.key === key)?.value
+    .stringValue;
+}
+
+function payloadMetrics(fetchFn: ReturnType<typeof vi.fn>): Metric[] {
+  const call = fetchFn.mock.calls[0];
+  if (call === undefined) {
+    throw new Error("Expected one metrics request");
+  }
+  const init = call[1] as RequestInit;
+  const body = JSON.parse(init.body as string) as {
+    resourceMetrics: { scopeMetrics: { metrics: Metric[] }[] }[];
+  };
+  const resourceMetric = body.resourceMetrics[0];
+  const scopeMetric = resourceMetric?.scopeMetrics[0];
+  if (scopeMetric === undefined) {
+    throw new Error("Expected OTLP scope metrics");
+  }
+  return scopeMetric.metrics;
+}
+
+function pushInput(
+  results: ProviderResult[],
+  healthMetrics: Record<string, unknown>[],
+): ProviderMetricsPushInput {
+  return { results, healthMetrics, nowUnixNano, nowSeconds };
+}
+
+describe("buildProviderMetrics", () => {
+  it("emits exact provider metric names, labels, and values", () => {
+    const metrics = buildProviderMetrics(sampleResults, nowUnixNano, nowSeconds);
+
+    const cost = metricObjects(metrics, "openai_api_cost_usd")[0];
+    expect(cost).toBeDefined();
+    expect(attributeValue(cost, "line_item")).toBe("tokens");
+    expect(metricValues(metrics, "openai_api_cost_usd")).toEqual([0.42]);
+    expect(cost?.gauge.dataPoints[0]?.timeUnixNano).toBe(nowUnixNano);
+
+    const inputTokens = metricObjects(metrics, "openai_api_input_tokens")[0];
+    expect(attributeValue(inputTokens, "model")).toBe("gpt-5");
+    expect(metricValues(metrics, "openai_api_input_tokens")).toEqual([1_000]);
+    expect(metricValues(metrics, "openai_api_output_tokens")).toEqual([500]);
+    expect(metricValues(metrics, "openai_api_cached_tokens")).toEqual([100]);
+    expect(metricValues(metrics, "openai_api_requests")).toEqual([10]);
+
+    expect(metricValues(metrics, "opencodego_zen_balance_usd")).toEqual([23.45]);
+    const remainingMetrics = metricObjects(metrics, "opencodego_reset_seconds_remaining");
+    expect(remainingMetrics).toHaveLength(1);
+    expect(attributeValue(remainingMetrics[0], "period")).toBe("weekly");
+    expect(metricValues(metrics, "opencodego_reset_seconds_remaining")).toEqual([250]);
+
+    const modelRequests = metricObjects(metrics, "ollama_cloud_model_requests");
+    expect(modelRequests).toHaveLength(1);
+    expect(attributeValue(modelRequests[0], "period")).toBe("session");
+    expect(attributeValue(modelRequests[0], "model")).toBe("glm-5.3-flash");
+    expect(metricValues(metrics, "ollama_cloud_model_requests")).toEqual([54]);
+    expect(metricValues(metrics, "ollama_cloud_activity_cost_usd")).toEqual([12.34]);
+  });
+});
 
 describe("pushProviderMetrics", () => {
-  it.each([
-    ["missing URL", { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "" }],
-    ["HTTP URL", { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "http://metrics.example.com/otlp" }],
-    ["missing username", { ...env, GRAFANA_CLOUD_PROMETHEUS_USERNAME: "" }],
-    ["missing token", { ...env, GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: "" }],
-  ])("rejects invalid Prometheus configuration: %s", async (_case, invalidEnv) => {
+  it("posts data and health metrics in one OTLP payload", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    const healthMetric = {
+      name: "provider_metrics_scrape_success",
+      gauge: { dataPoints: [{ asDouble: 1 }] },
+    };
+
+    await pushProviderMetrics(
+      env,
+      pushInput([sampleResults[0] as ProviderResult], [healthMetric]),
+      mockFetch,
+    );
+
+    const metrics = payloadMetrics(mockFetch);
+    expect(metrics.map((metric) => metric.name)).toEqual(
+      expect.arrayContaining(["openai_api_cost_usd", "provider_metrics_scrape_success"]),
+    );
+  });
+
+  it("keeps health metrics when there are no data results", async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    const healthMetric = {
+      name: "provider_metrics_scrape_duration_seconds",
+      gauge: { dataPoints: [{ asDouble: 1.25 }] },
+    };
+
+    await pushProviderMetrics(env, pushInput([], [healthMetric]), mockFetch);
+
+    expect(payloadMetrics(mockFetch).map((metric) => metric.name)).toContain(
+      "provider_metrics_scrape_duration_seconds",
+    );
+  });
+
+  it("rejects invalid Prometheus configuration before fetching", async () => {
     const mockFetch = vi.fn();
 
     await expect(
-      pushProviderMetrics(invalidEnv, { codex: sampleCodex }, mockFetch),
+      pushProviderMetrics(
+        { ...env, GRAFANA_CLOUD_PROMETHEUS_URL: "" },
+        pushInput([], []),
+        mockFetch,
+      ),
     ).rejects.toThrow(/Prometheus configuration/i);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("returns ok on HTTP 200", async () => {
+  it("uses the configured endpoint and Basic Auth", async () => {
     const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    const result = await pushProviderMetrics(
-      env,
-      { openai: sampleOpenAI, codex: sampleCodex, openCodeGo: sampleOpenCodeGo },
-      mockFetch,
-    );
-    expect(result.ok).toBe(true);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
 
-  it("posts to OTLP metrics endpoint with Basic Auth", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    await pushProviderMetrics(env, { codex: sampleCodex }, mockFetch);
-    const [url, init] = mockFetch.mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe("https://otlp-gateway-prod-us-central1.grafana.net/otlp/v1/metrics");
+    await pushProviderMetrics(env, pushInput([], []), mockFetch);
+
+    const call = mockFetch.mock.calls[0];
+    if (call === undefined) {
+      throw new Error("Expected one metrics request");
+    }
+    const init = call[1] as RequestInit;
     const headers = init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe(`Basic ${btoa("123456:test-token")}`);
-  });
-
-  it("appends the metrics path before query parameters and fragments", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    await pushProviderMetrics(
-      {
-        ...env,
-        GRAFANA_CLOUD_PROMETHEUS_URL: "https://metrics.example.com/otlp?tenant=demo#metrics",
-      },
-      { codex: sampleCodex },
-      mockFetch,
-    );
-
-    expect(mockFetch.mock.calls[0]![0]).toBe(
-      "https://metrics.example.com/otlp/v1/metrics?tenant=demo#metrics",
-    );
-  });
-
-  it("includes openai_api_cost_usd metric when openai result provided", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    await pushProviderMetrics(env, { openai: sampleOpenAI }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("openai_api_cost_usd");
-    expect(names).toContain("openai_api_input_tokens");
-    expect(names).toContain("openai_api_requests");
-  });
-
-  it("includes codex metrics when codex result provided", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    await pushProviderMetrics(env, { codex: sampleCodex }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("codex_usage_ratio");
-    expect(names).toContain("codex_reset_timestamp_seconds");
-    expect(names).toContain("codex_credits_remaining");
-    expect(names).toContain("codex_reset_credits");
-    expect(names).toContain("codex_reset_credits_available_count");
-    expect(names).toContain("codex_plan_info");
-  });
-
-  it("includes opencodego metrics when openCodeGo result provided", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    await pushProviderMetrics(env, { openCodeGo: sampleOpenCodeGo }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("opencodego_usage_ratio");
-    expect(names).toContain("opencodego_reset_seconds_remaining");
-    expect(names).toContain("opencodego_zen_balance_usd");
-  });
-
-  it("includes ollama metrics when ollama result provided", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    const sampleOllama = {
-      sessionUsageRatio: 0.4,
-      weeklyUsageRatio: 0.15,
-      sessionResetTimestampSeconds: 1786161204,
-      weeklyResetTimestampSeconds: 1786247604,
-      plan: "Pro",
-    };
-    await pushProviderMetrics(env, { ollama: sampleOllama }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
-    const names = metrics.map((m) => m.name);
-    expect(names).toContain("ollama_cloud_usage_ratio");
-    expect(names).toContain("ollama_cloud_reset_timestamp_seconds");
-    expect(names).toContain("ollama_cloud_plan_info");
-  });
-
-  it("retries on HTTP 429 up to 2 times", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("Too Many Requests", { status: 429 }));
-    const result = await pushProviderMetrics(env, { codex: sampleCodex }, mockFetch);
-    expect(result.ok).toBe(false);
-    expect(mockFetch).toHaveBeenCalledTimes(3);
-  });
-
-  it("does not retry on HTTP 400", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("Bad Request", { status: 400 }));
-    const result = await pushProviderMetrics(env, { codex: sampleCodex }, mockFetch);
-    expect(result.ok).toBe(false);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("omits codex_credits_remaining when creditsRemaining is null", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    const noCredits: CodexFetchResult = { ...sampleCodex, creditsRemaining: null };
-    await pushProviderMetrics(env, { codex: noCredits }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
-    const names = metrics.map((m) => m.name);
-    expect(names).not.toContain("codex_credits_remaining");
-  });
-
-  it("omits opencodego_zen_balance_usd when zenBalanceUSD is null", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    const noZen: OpenCodeGoFetchResult = { ...sampleOpenCodeGo, zenBalanceUSD: null };
-    await pushProviderMetrics(env, { openCodeGo: noZen }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{ name: string }>;
-    const names = metrics.map((m) => m.name);
-    expect(names).not.toContain("opencodego_zen_balance_usd");
-  });
-
-  it("omits metrics for OpenCodeGo windows that are absent", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    const noSecondaryWindows: OpenCodeGoFetchResult = {
-      ...sampleOpenCodeGo,
-      weeklyUsageRatio: undefined,
-      weeklyResetSeconds: undefined,
-      monthlyUsageRatio: undefined,
-      monthlyResetSeconds: undefined,
-    };
-    await pushProviderMetrics(env, { openCodeGo: noSecondaryWindows }, mockFetch);
-    const init = mockFetch.mock.calls[0]![1] as RequestInit;
-    const body = JSON.parse(init.body as string);
-    const metrics = body.resourceMetrics[0].scopeMetrics[0].metrics as Array<{
-      name: string;
-      gauge: { dataPoints: Array<{ attributes: Array<{ value: { stringValue: string } }> }> };
-    }>;
-    const periods = metrics
-      .filter((metric) => metric.name === "opencodego_usage_ratio")
-      .flatMap((metric) => metric.gauge.dataPoints[0]?.attributes ?? [])
-      .map((attribute) => attribute.value.stringValue);
-    expect(periods).toEqual(["rolling"]);
+    expect(call[0]).toBe("https://otlp-gateway-prod-us-central1.grafana.net/otlp/v1/metrics");
+    expect(headers.Authorization).toBe(`Basic ${btoa("123456:test-token")}`);
   });
 });

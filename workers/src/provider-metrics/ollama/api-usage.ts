@@ -81,11 +81,9 @@ function parseModelRequests(value: unknown, period: "session" | "weekly"): Provi
     counts.set(modelName, (counts.get(modelName) ?? 0) + requestCount);
   }
 
-  return [...counts.entries()].map(([model, requestCount]) => ({
-    period,
-    model,
-    requestCount,
-  }));
+  return [...counts.entries()]
+    .filter(([, requestCount]) => Number.isSafeInteger(requestCount))
+    .map(([model, requestCount]) => ({ period, model, requestCount }));
 }
 
 function parseLimits(value: unknown): ParsedLimits {
@@ -159,13 +157,15 @@ export async function fetchOllamaApiUsage(
     let body: unknown;
     try {
       body = await response.json();
-    } catch {
-      return failed("parse");
+    } catch (error) {
+      if (error instanceof HttpTransportError) return failed(error.kind);
+      if (error instanceof SyntaxError) return failed("parse");
+      return failed("internal");
     }
     return parseBody(body);
   } catch (error) {
     if (error instanceof HttpTransportError) return failed(error.kind);
-    throw error;
+    return failed("internal");
   }
 }
 

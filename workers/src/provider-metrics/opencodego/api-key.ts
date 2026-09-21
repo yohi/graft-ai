@@ -77,8 +77,7 @@ function hasEntitlementType(value: unknown): boolean {
 async function isEntitlementError(response: Response): Promise<boolean> {
   try {
     const body: unknown = await response.clone().json();
-    if (!isRecord(body)) return false;
-    return hasEntitlementType(body) || hasEntitlementType(body["error"]);
+    return hasEntitlementType(body) || (isRecord(body) && hasEntitlementType(body["error"]));
   } catch {
     return false;
   }

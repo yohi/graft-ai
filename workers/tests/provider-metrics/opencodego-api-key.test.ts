@@ -203,6 +203,33 @@ describe("OpenCode Go API-key adapter", () => {
     });
   });
 
+  it("treats a top-level JSON EntitlementError string as empty", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response(403, JSON.stringify("EntitlementError")));
+
+    await expect(openCodeGoAdapter(env(), context(fetchFn))).resolves.toEqual({
+      status: "empty",
+      reason: "no-supported-window",
+    });
+  });
+
+  it("keeps a top-level JSON non-entitlement error string forbidden", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response(403, JSON.stringify("OtherError")));
+
+    await expect(openCodeGoAdapter(env(), context(fetchFn))).resolves.toEqual({
+      status: "failed",
+      error: {
+        kind: "forbidden",
+        provider: "opencodego",
+        sourceId: SOURCE_ID,
+        statusCode: 403,
+      },
+    });
+  });
+
   it.each([
     [401, "auth"],
     [403, "forbidden"],

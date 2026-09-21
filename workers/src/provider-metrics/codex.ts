@@ -191,6 +191,7 @@ async function fetchViaBrowserRendering(
   baseUrl: string,
   accessToken: string,
   accountId?: string,
+  proxySecret?: string,
 ): Promise<CodexUsageResponse> {
   const puppeteerModule = await import("@cloudflare/puppeteer");
   const launcher =
@@ -209,6 +210,7 @@ async function fetchViaBrowserRendering(
           ...interceptedRequest.headers(),
           Authorization: `Bearer ${accessToken}`,
           ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+          ...(proxySecret ? { "X-Proxy-Secret": proxySecret } : {}),
           "OpenAI-Beta": "codex-1",
           originator: "Codex Desktop",
           Accept: "application/json",
@@ -407,6 +409,7 @@ export async function fetchCodexMetrics(
           baseUrl,
           accessToken,
           options.accountId,
+          options.proxySecret,
         );
         source = BROWSER_SOURCE;
       } catch (error) {

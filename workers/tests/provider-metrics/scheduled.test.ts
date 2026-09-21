@@ -169,6 +169,11 @@ function healthMetric(
   });
 }
 
+function metricTimeUnixNano(metric: Record<string, unknown>): string | undefined {
+  const gauge = metric.gauge as { dataPoints?: { timeUnixNano?: string }[] };
+  return gauge.dataPoints?.[0]?.timeUnixNano;
+}
+
 function reportWithOpenAi(overrides: Partial<ProviderMetricsEnv> = {}): ProviderMetricsEnv {
   return env({ OPENAI_ADMIN_API_KEY: openAiCredential, ...overrides });
 }
@@ -279,6 +284,22 @@ describe("provider-metrics scheduled orchestrator", () => {
 
     expect(names).toContain("openai_api_cost_usd");
     expect(names).toContain("provider_metrics_scrape_success");
+  });
+
+  it("uses one timestamp for data and health metrics in the OTLP payload", async () => {
+    const pushNowMs = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(pushNowMs);
+    const fetchMock = createFetch();
+
+    await collect(reportWithOpenAi(), fetchMock);
+
+    const metrics = payloadMetrics(fetchMock);
+    const dataMetric = metrics.find((metric) => metric.name === "openai_api_cost_usd");
+    const health = healthMetric(metrics, "provider_metrics_scrape_success", "openai_api");
+    const nowUnixNano = `${pushNowMs}000000`;
+
+    expect(metricTimeUnixNano(dataMetric ?? {})).toBe(nowUnixNano);
+    expect(metricTimeUnixNano(health ?? {})).toBe(nowUnixNano);
   });
 
   it("keeps only the Ollama HTML fallback result after API failure", async () => {

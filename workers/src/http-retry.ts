@@ -80,12 +80,14 @@ export async function getWithRetry({
   redirect,
 }: GetWithRetryOptions): Promise<Response> {
   let lastResponse: Response | undefined;
-  let lastErrorKind: HttpTransportErrorKind = "network";
+  let lastErrorKind: HttpTransportErrorKind | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       await sleep(initialBackoffMs * Math.pow(2, attempt - 1));
     }
+
+    lastErrorKind = undefined;
 
     try {
       const response = await fetchFn(url, {
@@ -94,13 +96,16 @@ export async function getWithRetry({
         signal: AbortSignal.timeout(perAttemptTimeoutMs),
         ...(redirect === undefined ? {} : { redirect }),
       });
-      lastResponse = response;
 
-      if (response.ok || !isRetryableStatus(response.status)) {
+      const retryable = !response.ok && isRetryableStatus(response.status);
+      if (!retryable) {
+        lastResponse = response;
         return response;
       }
       if (attempt < maxRetries) {
         await response.body?.cancel().catch(() => undefined);
+      } else {
+        lastResponse = response;
       }
     } catch (err) {
       lastErrorKind =
@@ -111,8 +116,9 @@ export async function getWithRetry({
     }
   }
 
+  if (lastErrorKind !== undefined) throw new HttpTransportError(lastErrorKind);
   if (lastResponse !== undefined) return lastResponse;
-  throw new HttpTransportError(lastErrorKind);
+  throw new HttpTransportError("network");
 }
 
 /**

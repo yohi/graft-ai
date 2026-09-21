@@ -214,12 +214,16 @@ export async function collectAndPushProviderMetrics(
   const successfulResults: ProviderResult[] = attemptedRecords.flatMap((record) =>
     record.outcome.status === "success" ? [record.outcome.result] : [],
   );
-  const healthMetrics = buildHealthMetrics(attemptedRecords.map((record) => record.health));
   const pushNowMs = Date.now();
+  const nowUnixNano = `${pushNowMs}000000`;
+  const healthMetrics = buildHealthMetrics(
+    attemptedRecords.map((record) => record.health),
+    nowUnixNano,
+  );
   const pushResult = await pushProviderMetrics(env, {
     results: successfulResults,
     healthMetrics,
-    nowUnixNano: `${pushNowMs}000000`,
+    nowUnixNano,
     nowSeconds: Math.floor(pushNowMs / 1_000),
   });
 

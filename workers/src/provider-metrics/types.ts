@@ -140,6 +140,16 @@ export interface ProviderContext {
   browserBinding?: Fetcher;
 }
 
+export type AdapterOutcome =
+  | { status: "success"; result: ProviderResult }
+  | { status: "empty"; reason: "no-supported-window" | "no-activity" }
+  | { status: "failed"; error: ProviderError };
+
+export type ProviderAdapter = (
+  env: ProviderMetricsEnv,
+  ctx: ProviderContext,
+) => Promise<AdapterOutcome>;
+
 export type ProviderErrorKind =
   | "auth"
   | "forbidden"

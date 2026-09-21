@@ -59,6 +59,25 @@ const MOCK_OLLAMA_HTML_SIGNED_OUT = `
 </html>
 `;
 
+const MOCK_OLLAMA_HTML_SIGNED_OUT_WITH_RESET = `
+<!DOCTYPE html>
+<html>
+<body>
+  <h2>Sign in to Ollama</h2>
+  <form action="/api/auth/signin" method="POST">
+    <input type="email" name="email" placeholder="Email" />
+    <input type="password" name="password" placeholder="Password" />
+  </form>
+  <span>Cloud Usage</span>
+  <span class="badge">Free</span>
+  <div>
+    <h4>Monthly usage</h4>
+    <span data-time="2026-09-01T00:00:00Z">Resets next month</span>
+  </div>
+</body>
+</html>
+`;
+
 function response(status: number, body: string, contentType = "application/json"): Response {
   return new Response(body, { status, headers: { "Content-Type": contentType } });
 }
@@ -104,6 +123,18 @@ describe("parseOllamaUsageHtml", () => {
         statusCode: 401,
       }),
     );
+  });
+
+  it("keeps valid plan and reset data when sign-in markup is present", () => {
+    expect(parseOllamaUsageHtml(MOCK_OLLAMA_HTML_SIGNED_OUT_WITH_RESET)).toEqual({
+      plan: "Free",
+      windows: [
+        {
+          period: "monthly",
+          resetTimestampSeconds: Math.floor(Date.parse("2026-09-01T00:00:00Z") / 1000),
+        },
+      ],
+    });
   });
 
   it("returns an empty contribution when no valid field is present", () => {
@@ -173,6 +204,17 @@ describe("fetchOllamaSettingsHtml", () => {
     await expect(fetchOllamaSettingsHtml("cookie", mockFetch)).resolves.toEqual({
       status: "failed",
       error: { kind: "upstream_5xx", statusCode: 500 },
+    });
+  });
+
+  it("returns an auth failure for signed-out HTML without a contribution", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(response(200, MOCK_OLLAMA_HTML_SIGNED_OUT, "text/html"));
+
+    await expect(fetchOllamaSettingsHtml("cookie", mockFetch)).resolves.toEqual({
+      status: "failed",
+      error: { kind: "auth", statusCode: 401 },
     });
   });
 });

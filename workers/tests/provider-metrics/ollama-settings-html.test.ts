@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { HttpTransportError } from "../../src/http-retry";
 import {
   fetchOllamaSettingsHtml,
   parseOllamaUsageHtml,
@@ -205,6 +206,35 @@ describe("fetchOllamaSettingsHtml", () => {
       status: "failed",
       error: { kind: "upstream_5xx", statusCode: 500 },
     });
+  });
+
+  it.each([
+    ["network", new HttpTransportError("network")],
+    ["timeout", new HttpTransportError("timeout")],
+    ["network", new TypeError("network-body-secret")],
+    ["timeout", new DOMException("abort-body-secret", "AbortError")],
+    ["timeout", new DOMException("timeout-body-secret", "TimeoutError")],
+  ] as const)("maps %s errors during an HTML body read", async (kind, error) => {
+    const htmlResponse = response(200, "<html></html>", "text/html");
+    vi.spyOn(htmlResponse, "text").mockRejectedValue(error);
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(htmlResponse);
+
+    await expect(fetchOllamaSettingsHtml("cookie", mockFetch)).resolves.toEqual({
+      status: "failed",
+      error: { kind },
+    });
+  });
+
+  it("keeps unknown HTML body-read exceptions as parse without exposing the message", async () => {
+    const rawError = new Error("raw-body-read-secret");
+    const htmlResponse = response(200, "<html></html>", "text/html");
+    vi.spyOn(htmlResponse, "text").mockRejectedValue(rawError);
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(htmlResponse);
+
+    const outcome = await fetchOllamaSettingsHtml("cookie", mockFetch);
+
+    expect(outcome).toEqual({ status: "failed", error: { kind: "parse" } });
+    expect(JSON.stringify(outcome)).not.toContain(rawError.message);
   });
 
   it("returns an auth failure for signed-out HTML without a contribution", async () => {

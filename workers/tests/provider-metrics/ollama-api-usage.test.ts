@@ -222,6 +222,9 @@ describe("Ollama Cloud API-key adapter", () => {
   it.each([
     ["network", new HttpTransportError("network")],
     ["timeout", new HttpTransportError("timeout")],
+    ["network", new TypeError("network-body-secret")],
+    ["timeout", new DOMException("abort-body-secret", "AbortError")],
+    ["timeout", new DOMException("timeout-body-secret", "TimeoutError")],
   ] as const)("maps %s errors during a 200 body read", async (kind, error) => {
     const apiResponse = response(200, "{}");
     vi.spyOn(apiResponse, "json").mockRejectedValue(error);
@@ -230,6 +233,18 @@ describe("Ollama Cloud API-key adapter", () => {
     const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
 
     expectFailure(outcome, kind);
+  });
+
+  it("maps unknown body-read exceptions to internal without exposing the message", async () => {
+    const rawError = new Error("raw-body-read-secret");
+    const apiResponse = response(200, "{}");
+    vi.spyOn(apiResponse, "json").mockRejectedValue(rawError);
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(apiResponse);
+
+    const outcome = await fetchOllamaApiUsage(API_KEY, context(fetchFn));
+
+    expectFailure(outcome, "internal");
+    expect(JSON.stringify(outcome)).not.toContain(rawError.message);
   });
 
   it("maps unexpected parser exceptions to internal without exposing the message", async () => {

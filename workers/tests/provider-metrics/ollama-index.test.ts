@@ -193,6 +193,25 @@ describe("ollamaAdapter HTML ownership", () => {
     });
   });
 
+  it("uses HTML fallback after an API body transport failure", async () => {
+    const apiResponse = response(200, "{}");
+    vi.spyOn(apiResponse, "json").mockRejectedValue(new TypeError("network-body-secret"));
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(apiResponse)
+      .mockResolvedValueOnce(response(200, MOCK_OLLAMA_HTML_FALLBACK, "text/html"));
+
+    const outcome = await ollamaAdapter(env(), context(fetchFn));
+
+    expect(outcome).toMatchObject({
+      status: "success",
+      result: {
+        sources: [{ id: "ollama-settings-html", supportLevel: "scraping", role: "fallback" }],
+      },
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves an API 400 failure when HTML is unavailable", async () => {
     const fetchFn = vi
       .fn<typeof fetch>()

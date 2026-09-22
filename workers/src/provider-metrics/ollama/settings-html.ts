@@ -1,5 +1,6 @@
-import { getWithRetry, HttpTransportError } from "../../http-retry";
+import { getWithRetry } from "../../http-retry";
 import type { ProviderErrorKind, QuotaPeriod, QuotaWindow } from "../types";
+import { classifyOllamaTransportError } from "./transport-errors";
 
 const OLLAMA_SETTINGS_URL = "https://ollama.com/settings";
 const PRIMARY_USAGE_LABELS = ["Session usage", "Hourly usage"] as const;
@@ -220,7 +221,8 @@ export async function fetchOllamaSettingsHtml(
     try {
       html = await response.text();
     } catch (error) {
-      if (error instanceof HttpTransportError) return failed(error.kind);
+      const transportKind = classifyOllamaTransportError(error);
+      if (transportKind !== undefined) return failed(transportKind);
       return failed("parse");
     }
 
@@ -233,7 +235,8 @@ export async function fetchOllamaSettingsHtml(
       return failed("internal");
     }
   } catch (error) {
-    if (error instanceof HttpTransportError) return failed(error.kind);
+    const transportKind = classifyOllamaTransportError(error);
+    if (transportKind !== undefined) return failed(transportKind);
     return failed("internal");
   }
 }

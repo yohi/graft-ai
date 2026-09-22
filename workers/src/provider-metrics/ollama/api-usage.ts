@@ -1,4 +1,4 @@
-import { getWithRetry, HttpTransportError } from "../../http-retry";
+import { getWithRetry } from "../../http-retry";
 import type {
   AdapterOutcome,
   ProviderContext,
@@ -7,6 +7,7 @@ import type {
   ProviderResult,
   QuotaWindow,
 } from "../types";
+import { classifyOllamaTransportError } from "./transport-errors";
 
 const USAGE_URL = "https://ollama.com/api/usage";
 const SOURCE_ID = "ollama-api-usage";
@@ -158,13 +159,15 @@ export async function fetchOllamaApiUsage(
     try {
       body = await response.json();
     } catch (error) {
-      if (error instanceof HttpTransportError) return failed(error.kind);
+      const transportKind = classifyOllamaTransportError(error);
+      if (transportKind !== undefined) return failed(transportKind);
       if (error instanceof SyntaxError) return failed("parse");
       return failed("internal");
     }
     return parseBody(body);
   } catch (error) {
-    if (error instanceof HttpTransportError) return failed(error.kind);
+    const transportKind = classifyOllamaTransportError(error);
+    if (transportKind !== undefined) return failed(transportKind);
     return failed("internal");
   }
 }

@@ -219,7 +219,12 @@ describe("OTel ingress", () => {
         .mockRejectedValueOnce(new Error("queue unavailable"))
         .mockResolvedValue(undefined),
     } as unknown as Queue<unknown>;
-    const testEnv = { ...otelEnv, OTEL_INGRESS_QUEUE: queue } as OtelEnv;
+    const ledger = otelEnv.OTEL_LEDGER.getByName(`retry-${crypto.randomUUID()}`);
+    const testEnv = {
+      ...otelEnv,
+      OTEL_INGRESS_QUEUE: queue,
+      OTEL_LEDGER: { getByName: () => ledger } as unknown as DurableObjectNamespace,
+    } as OtelEnv;
     const body = structuredClone(validOtlpJson) as typeof validOtlpJson;
     const firstResource = body.resourceSpans[0]?.resource;
     if (!firstResource) throw new Error("fixture resource missing");

@@ -153,6 +153,58 @@ describe("CommandCode adapter", () => {
     });
   });
 
+  it("preserves subscription provenance when only currentPeriodStart contributes", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/subscriptions"] = json(200, {
+      data: { currentPeriodStart: "2026-09-01T00:00:00Z" },
+    });
+    const fetchFn = mockFetch(routes);
+    const result = resultOf(await commandcodeAdapter(env(), context(fetchFn)));
+    const urls = fetchFn.mock.calls.map(([input]) => String(input));
+
+    expect(urls[3]).toBe(
+      `${BASE_URL}/alpha/usage/summary?orgId=org%2Fencoded%20id&since=2026-09-01T00%3A00%3A00Z`,
+    );
+    expect(result.sources).toEqual([
+      { id: SOURCE_IDS.credits, supportLevel: "official-internal", role: "primary" },
+      { id: SOURCE_IDS.subscriptions, supportLevel: "official-internal", role: "enrichment" },
+      { id: SOURCE_IDS.summary, supportLevel: "official-internal", role: "enrichment" },
+    ]);
+    expect(result.plan).toBeUndefined();
+    expect(result.subscription).toBeUndefined();
+  });
+
+  it.each(["AbortError", "TimeoutError"] as const)(
+    "retries a %s while reading the credits JSON body",
+    async (errorName) => {
+      const firstResponse = new Response("{}", { status: 200 });
+      vi.spyOn(firstResponse, "json").mockRejectedValue(
+        new DOMException("body timed out", errorName),
+      );
+      const secondResponse = new Response(
+        JSON.stringify({
+          credits: { monthlyCredits: 70 },
+          windowLimits: { limited: false },
+        }),
+        { status: 200 },
+      );
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(firstResponse)
+        .mockResolvedValueOnce(secondResponse);
+
+      const outcome = await withFakeTimers(() =>
+        fetchCommandCodeCredits(API_KEY, "org-id", context(fetchFn)),
+      );
+
+      expect(outcome).toEqual({
+        ok: true,
+        value: { credits: { monthly: 70, remaining: 70 }, windows: [] },
+      });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("omits optional enrichment after failures while keeping credits success", async () => {
     const routes = defaultRoutes();
     routes["/alpha/billing/subscriptions"] = json(500, "subscription-secret");
@@ -171,6 +223,27 @@ describe("CommandCode adapter", () => {
     expect(result.subscription).toBeUndefined();
     expect(result.usage).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain("subscription-secret");
+  });
+
+  it("does not fetch summary after a credits failure", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = json(500, "credits-secret");
+    const fetchFn = mockFetch(routes);
+    const outcome = await withFakeTimers(() => commandcodeAdapter(env(), context(fetchFn)));
+    const urls = fetchFn.mock.calls.map(([input]) => String(input));
+
+    expect(outcome).toEqual({
+      status: "failed",
+      error: {
+        kind: "upstream_5xx",
+        provider: "commandcode",
+        sourceId: SOURCE_IDS.credits,
+        statusCode: 500,
+      },
+    });
+    expect(urls).not.toContain(
+      `${BASE_URL}/alpha/usage/summary?orgId=org%2Fencoded%20id&since=2026-09-01T00%3A00%3A00Z`,
+    );
   });
 
   it("treats unlimited accounts as successful credits without quota windows", async () => {

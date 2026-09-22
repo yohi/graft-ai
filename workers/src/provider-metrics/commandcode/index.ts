@@ -30,6 +30,7 @@ function subscriptionContributes(subscription: CommandCodeSubscription): boolean
   return (
     subscription.plan !== undefined ||
     subscription.status !== undefined ||
+    subscription.currentPeriodStart !== undefined ||
     subscription.billingPeriodEndSeconds !== undefined
   );
 }
@@ -80,6 +81,8 @@ export const commandcodeAdapter: ProviderAdapter = async (env, context) => {
     fetchCommandCodeCredits(apiKey, whoami.value.orgId, context),
     fetchCommandCodeSubscription(apiKey, whoami.value.orgId, context),
   ]);
+  if (!credits.ok) return { status: "failed", error: credits.error };
+
   const summary = await fetchCommandCodeSummary(
     apiKey,
     whoami.value.orgId,
@@ -87,7 +90,6 @@ export const commandcodeAdapter: ProviderAdapter = async (env, context) => {
     context,
   );
 
-  if (!credits.ok) return { status: "failed", error: credits.error };
   return {
     status: "success",
     result: buildResult(

@@ -1,4 +1,4 @@
-import { getWithRetry, HttpTransportError } from "../../http-retry";
+import { getJsonWithRetry, HttpTransportError } from "../../http-retry";
 import type {
   ProviderContext,
   ProviderCredits,
@@ -84,8 +84,9 @@ async function requestEndpoint<T>(
   context: ProviderContext,
 ): Promise<EndpointOutcome<T>> {
   let response: Response;
+  let body: unknown;
   try {
-    response = await getWithRetry({
+    const result = await getJsonWithRetry({
       url: endpointUrl(request.path, request.query),
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -96,21 +97,15 @@ async function requestEndpoint<T>(
       isRetryableStatus: (status) => status === 429 || status >= 500,
       perAttemptTimeoutMs: TIMEOUT_MS,
     });
+    response = result.response;
+    body = result.body;
   } catch (error) {
-    if (error instanceof HttpTransportError) return failure(request.sourceId, error.kind);
-    return failure(request.sourceId, "internal");
+    return failure(request.sourceId, jsonFailureKind(error));
   }
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     return failure(request.sourceId, httpFailureKind(response.status), response.status);
-  }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch (error) {
-    return failure(request.sourceId, jsonFailureKind(error));
   }
 
   try {

@@ -1,10 +1,16 @@
 import { fetchCodexMetrics } from "./provider-metrics/codex";
-import { fetchOllamaMetrics } from "./provider-metrics/ollama";
+import { fetchOllamaMetrics, ollamaAdapter } from "./provider-metrics/ollama/index";
 import { fetchOpenAIMetrics } from "./provider-metrics/openai-api";
 import { fetchOpenCodeGoMetrics } from "./provider-metrics/opencodego";
 import { toProviderResults } from "./provider-metrics/legacy-results";
 import { pushProviderMetrics } from "./provider-metrics/prometheus";
-import type { ProviderMetricsEnv } from "./provider-metrics/types";
+import type {
+  AdapterOutcome,
+  OllamaFetchResult,
+  ProviderContext,
+  ProviderMetricsEnv,
+  ProviderResult,
+} from "./provider-metrics/types";
 
 export interface ProviderMetricsWorker {
   scheduled(event: ScheduledEvent, env: ProviderMetricsEnv, ctx: ExecutionContext): Promise<void>;
@@ -41,6 +47,35 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+type OllamaProviderResult = Extract<ProviderResult, { provider: "ollama_cloud" }>;
+type OllamaCollectionResult = AdapterOutcome | OllamaFetchResult | null;
+
+function createOllamaContext(scheduledTime: number, openaiHistoryDays: number): ProviderContext {
+  return {
+    fetchFn: fetch,
+    scheduledTimeSeconds: Math.floor(scheduledTime / 1_000),
+    openaiHistoryDays,
+    nowSeconds: () => Math.floor(Date.now() / 1_000),
+    monotonicNowMs: () => performance.now(),
+  };
+}
+
+function fetchOllamaCollection(
+  env: ProviderMetricsEnv,
+  apiKey: string | undefined,
+  sessionCookie: string | undefined,
+  scheduledTime: number,
+  openaiHistoryDays: number,
+): Promise<OllamaCollectionResult> {
+  if (apiKey !== undefined && apiKey !== "") {
+    return ollamaAdapter(env, createOllamaContext(scheduledTime, openaiHistoryDays));
+  }
+  if (sessionCookie !== undefined && sessionCookie !== "") {
+    return fetchOllamaMetrics(sessionCookie, fetch);
+  }
+  return Promise.resolve(null);
+}
+
 export async function collectAndPushProviderMetrics(
   env: ProviderMetricsEnv,
   scheduledTime: number = Date.now(),
@@ -74,6 +109,7 @@ export async function collectAndPushProviderMetrics(
   const openAiApiKey = env.OPENAI_ADMIN_API_KEY?.trim();
   const codexAccessToken = env.CODEX_ACCESS_TOKEN?.trim();
   const openCodeGoSessionCookie = env.OPENCODEGO_SESSION_COOKIE?.trim();
+  const ollamaApiKey = env.OLLAMA_API_KEY?.trim();
   const ollamaSessionCookie = env.OLLAMA_SESSION_COOKIE?.trim();
 
   const [openai, codex, openCodeGo, ollama] = await Promise.allSettled([
@@ -94,9 +130,7 @@ export async function collectAndPushProviderMetrics(
     openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""
       ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID, fetch)
       : Promise.resolve(null),
-    ollamaSessionCookie !== undefined && ollamaSessionCookie !== ""
-      ? fetchOllamaMetrics(ollamaSessionCookie, fetch)
-      : Promise.resolve(null),
+    fetchOllamaCollection(env, ollamaApiKey, ollamaSessionCookie, scheduledTime, historyDays ?? 1),
   ] as const);
 
   let openaiResult = null;
@@ -142,9 +176,36 @@ export async function collectAndPushProviderMetrics(
     report.providers.openCodeGo = { status: "failed", error: err };
   }
 
-  let ollamaResult = null;
+  let ollamaResult: OllamaFetchResult | null = null;
+  let ollamaProviderResult: OllamaProviderResult | null = null;
   if (ollama.status === "fulfilled") {
-    ollamaResult = ollama.value;
+    const value: OllamaCollectionResult = ollama.value;
+    if (value !== null && "status" in value) {
+      if (value.status === "success") {
+        if (value.result.provider !== "ollama_cloud") {
+          report.providers.ollama = { status: "failed", error: "internal" };
+        } else {
+          ollamaProviderResult = value.result;
+          const sessionWindow = value.result.windows.find((window) => window.period === "session");
+          const weeklyWindow = value.result.windows.find((window) => window.period === "weekly");
+          report.providers.ollama = {
+            status: "success",
+            sessionUsageRatio: sessionWindow?.usageRatio,
+            weeklyUsageRatio: weeklyWindow?.usageRatio,
+            plan: value.result.plan,
+          };
+        }
+      } else if (value.status === "failed") {
+        const { kind, statusCode } = value.error;
+        report.providers.ollama = {
+          status: "failed",
+          error: statusCode === undefined ? kind : `${kind} (${statusCode})`,
+        };
+      }
+    } else {
+      ollamaResult = value;
+    }
+
     if (ollamaResult !== null) {
       report.providers.ollama = {
         status: "success",
@@ -162,7 +223,11 @@ export async function collectAndPushProviderMetrics(
   const hasOpenAIMetrics =
     openaiResult !== null && (openaiResult.costs.length > 0 || openaiResult.tokens.length > 0);
   const hasMetrics =
-    hasOpenAIMetrics || codexResult !== null || openCodeGoResult !== null || ollamaResult !== null;
+    hasOpenAIMetrics ||
+    codexResult !== null ||
+    openCodeGoResult !== null ||
+    ollamaResult !== null ||
+    ollamaProviderResult !== null;
 
   if (!hasMetrics) {
     console.error("Provider metrics: No metrics to push (all providers skipped, failed, or empty)");
@@ -171,15 +236,18 @@ export async function collectAndPushProviderMetrics(
 
   const pushNowMs = Date.now();
   const nowSeconds = Math.floor(pushNowMs / 1_000);
-  const providerResults = toProviderResults(
-    {
-      ...(hasOpenAIMetrics && openaiResult !== null ? { openai: openaiResult } : {}),
-      ...(codexResult === null ? {} : { codex: codexResult }),
-      ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
-      ...(ollamaResult === null ? {} : { ollama: ollamaResult }),
-    },
-    nowSeconds,
-  );
+  const providerResults = [
+    ...toProviderResults(
+      {
+        ...(hasOpenAIMetrics && openaiResult !== null ? { openai: openaiResult } : {}),
+        ...(codexResult === null ? {} : { codex: codexResult }),
+        ...(openCodeGoResult === null ? {} : { openCodeGo: openCodeGoResult }),
+        ...(ollamaResult === null ? {} : { ollama: ollamaResult }),
+      },
+      nowSeconds,
+    ),
+    ...(ollamaProviderResult === null ? [] : [ollamaProviderResult]),
+  ];
 
   const pushResult = await pushProviderMetrics(env, {
     results: providerResults,

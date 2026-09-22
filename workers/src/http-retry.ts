@@ -110,7 +110,6 @@ async function getWithRetryInternal<T>(
       });
       const retryable = !response.ok && isRetryableStatus(response.status);
       if (!retryable && readBody === undefined) {
-        lastResponse = response;
         return { response, body: undefined };
       }
       if (retryable) {

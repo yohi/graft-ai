@@ -484,34 +484,64 @@ describe("CommandCode adapter", () => {
   });
 
   it.each([
-    [401, "auth"],
-    [403, "forbidden"],
-    [429, "rate_limit"],
-    [500, "upstream_5xx"],
-  ] as const)("maps whoami HTTP %i to %s with whoami ownership", async (status, kind) => {
-    const routes = defaultRoutes();
-    routes["/alpha/whoami"] = json(status, "response-secret");
-    const outcome = await withFakeTimers(() =>
-      commandcodeAdapter(env(), context(mockFetch(routes))),
-    );
-    expect(outcome).toEqual({
-      status: "failed",
-      error: { kind, provider: "commandcode", sourceId: SOURCE_IDS.whoami, statusCode: status },
-    });
-  });
+    ["credits", "/alpha/billing/credits", SOURCE_IDS.credits, 401, "auth"],
+    ["credits", "/alpha/billing/credits", SOURCE_IDS.credits, 403, "forbidden"],
+    ["credits", "/alpha/billing/credits", SOURCE_IDS.credits, 429, "rate_limit"],
+    ["credits", "/alpha/billing/credits", SOURCE_IDS.credits, 500, "upstream_5xx"],
+    ["whoami", "/alpha/whoami", SOURCE_IDS.whoami, 401, "auth"],
+    ["whoami", "/alpha/whoami", SOURCE_IDS.whoami, 403, "forbidden"],
+    ["whoami", "/alpha/whoami", SOURCE_IDS.whoami, 429, "rate_limit"],
+    ["whoami", "/alpha/whoami", SOURCE_IDS.whoami, 500, "upstream_5xx"],
+  ] as const)(
+    "maps %s HTTP %i to %s with %s ownership",
+    async (_endpoint, path, sourceId, status, kind) => {
+      const routes = defaultRoutes();
+      routes[path] = json(status, "response-secret");
+      const outcome = await withFakeTimers(() =>
+        commandcodeAdapter(env(), context(mockFetch(routes))),
+      );
+      expect(outcome).toEqual({
+        status: "failed",
+        error: { kind, provider: "commandcode", sourceId, statusCode: status },
+      });
+    },
+  );
 
   it.each([
-    ["network", new TypeError("network-secret")],
-    ["timeout", new DOMException("timeout-secret", "TimeoutError")],
-  ] as const)("preserves %s transport ownership", async (kind, error) => {
-    const routes = defaultRoutes();
-    routes["/alpha/whoami"] = { status: 200, body: error };
-    const outcome = await withFakeTimers(() =>
-      commandcodeAdapter(env(), context(mockFetch(routes))),
-    );
-    expect(outcome).toEqual({
-      status: "failed",
-      error: { kind, provider: "commandcode", sourceId: SOURCE_IDS.whoami },
-    });
-  });
+    [
+      "credits",
+      "/alpha/billing/credits",
+      SOURCE_IDS.credits,
+      "network",
+      new TypeError("network-secret"),
+    ],
+    [
+      "credits",
+      "/alpha/billing/credits",
+      SOURCE_IDS.credits,
+      "timeout",
+      new DOMException("timeout-secret", "TimeoutError"),
+    ],
+    ["whoami", "/alpha/whoami", SOURCE_IDS.whoami, "network", new TypeError("network-secret")],
+    [
+      "whoami",
+      "/alpha/whoami",
+      SOURCE_IDS.whoami,
+      "timeout",
+      new DOMException("timeout-secret", "TimeoutError"),
+    ],
+  ] as const)(
+    "preserves %s %s transport ownership",
+    async (_endpoint, path, sourceId, kind, error) => {
+      const routes = defaultRoutes();
+      routes[path] = { status: 200, body: error };
+      const outcome = await withFakeTimers(() =>
+        commandcodeAdapter(env(), context(mockFetch(routes))),
+      );
+      expect(outcome).toEqual({
+        status: "failed",
+        error: { kind, provider: "commandcode", sourceId },
+      });
+    },
+  );
 });

@@ -60,6 +60,22 @@ function createOllamaContext(scheduledTime: number, openaiHistoryDays: number): 
   };
 }
 
+function fetchOllamaCollection(
+  env: ProviderMetricsEnv,
+  apiKey: string | undefined,
+  sessionCookie: string | undefined,
+  scheduledTime: number,
+  openaiHistoryDays: number,
+): Promise<OllamaCollectionResult> {
+  if (apiKey !== undefined && apiKey !== "") {
+    return ollamaAdapter(env, createOllamaContext(scheduledTime, openaiHistoryDays));
+  }
+  if (sessionCookie !== undefined && sessionCookie !== "") {
+    return fetchOllamaMetrics(sessionCookie, fetch);
+  }
+  return Promise.resolve(null);
+}
+
 export async function collectAndPushProviderMetrics(
   env: ProviderMetricsEnv,
   scheduledTime: number = Date.now(),
@@ -114,11 +130,7 @@ export async function collectAndPushProviderMetrics(
     openCodeGoSessionCookie !== undefined && openCodeGoSessionCookie !== ""
       ? fetchOpenCodeGoMetrics(openCodeGoSessionCookie, env.OPENCODEGO_WORKSPACE_ID, fetch)
       : Promise.resolve(null),
-    ollamaApiKey !== undefined && ollamaApiKey !== ""
-      ? ollamaAdapter(env, createOllamaContext(scheduledTime, historyDays ?? 1))
-      : ollamaSessionCookie !== undefined && ollamaSessionCookie !== ""
-        ? fetchOllamaMetrics(ollamaSessionCookie, fetch)
-        : Promise.resolve(null),
+    fetchOllamaCollection(env, ollamaApiKey, ollamaSessionCookie, scheduledTime, historyDays ?? 1),
   ] as const);
 
   let openaiResult = null;

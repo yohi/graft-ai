@@ -77,9 +77,19 @@ export async function runAdapters(
       : Promise.resolve({ provider: entry.provider, status: "skipped" as const });
   });
   const settled = await Promise.allSettled(executions);
-  return settled.map((result, index) =>
-    result.status === "fulfilled"
-      ? result.value
-      : { provider: registry[index]?.provider ?? "openai_api", status: "skipped" },
-  );
+  return settled.map((result, index) => {
+    if (result.status === "fulfilled") return result.value;
+    const entry = registry[index];
+    if (entry === undefined) throw new Error("adapter registry result length mismatch");
+    return {
+      provider: entry.provider,
+      status: "attempted" as const,
+      outcome: internalFailure(entry),
+      health: {
+        provider: entry.provider,
+        status: "failed" as const,
+        durationSeconds: 0,
+      },
+    };
+  });
 }

@@ -63,6 +63,49 @@ export function isNullPayload(text: string): boolean {
   );
 }
 
+async function rpcFailure(response: Response, serverId: string): Promise<never> {
+  await response.body?.cancel().catch(() => undefined);
+  if (response.status === 401 || response.status === 403) {
+    throw new OpenCodeGoFetchError(
+      `OpenCodeGo: HTTP ${response.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
+    );
+  }
+  throw new OpenCodeGoFetchError(
+    `OpenCodeGo RPC [${serverId.slice(0, 8)}] HTTP ${response.status}`,
+  );
+}
+
+async function followRedirect(
+  response: Response,
+  serverId: string,
+  headers: Record<string, string>,
+  context: FetchContext,
+): Promise<string> {
+  const location = response.headers.get("Location");
+  if (!location) {
+    throw new OpenCodeGoFetchError(
+      `OpenCodeGo RPC [${serverId.slice(0, 8)}] redirected with HTTP ${response.status} but missing Location header`,
+    );
+  }
+  const targetUrl = new URL(location, BASE_URL);
+  if (targetUrl.origin !== new URL(BASE_URL).origin) {
+    throw new OpenCodeGoFetchError(
+      `OpenCodeGo RPC [${serverId.slice(0, 8)}] attempted cross-origin redirect to ${targetUrl.origin}`,
+    );
+  }
+  const redirectResponse = await getWithRetry({
+    url: targetUrl.toString(),
+    headers,
+    fetchFn: context.fetchFn,
+    logLabel: `OpenCodeGo RPC redirect [${serverId.slice(0, 8)}]`,
+    isRetryableStatus: (status) => status === 429 || status >= 500,
+    perAttemptTimeoutMs: TIMEOUT_MS,
+    redirect: "manual",
+  });
+  if (!redirectResponse.ok) return rpcFailure(redirectResponse, serverId);
+  return redirectResponse.text();
+}
+
 export async function fetchServerRPC(
   serverId: string,
   args: readonly unknown[] | null,
@@ -99,52 +142,10 @@ export async function fetchServerRPC(
   });
 
   if (response.status >= 300 && response.status < 400) {
-    const location = response.headers.get("Location");
-    if (!location) {
-      throw new OpenCodeGoFetchError(
-        `OpenCodeGo RPC [${serverId.slice(0, 8)}] redirected with HTTP ${response.status} but missing Location header`,
-      );
-    }
-    const targetUrl = new URL(location, BASE_URL);
-    if (targetUrl.origin !== new URL(BASE_URL).origin) {
-      throw new OpenCodeGoFetchError(
-        `OpenCodeGo RPC [${serverId.slice(0, 8)}] attempted cross-origin redirect to ${targetUrl.origin}`,
-      );
-    }
-    const redirectResponse = await getWithRetry({
-      url: targetUrl.toString(),
-      headers,
-      fetchFn: context.fetchFn,
-      logLabel: `OpenCodeGo RPC redirect [${serverId.slice(0, 8)}]`,
-      isRetryableStatus: (status) => status === 429 || status >= 500,
-      perAttemptTimeoutMs: TIMEOUT_MS,
-      redirect: "manual",
-    });
-    if (!redirectResponse.ok) {
-      await redirectResponse.body?.cancel().catch(() => undefined);
-      if (redirectResponse.status === 401 || redirectResponse.status === 403) {
-        throw new OpenCodeGoFetchError(
-          `OpenCodeGo: HTTP ${redirectResponse.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
-        );
-      }
-      throw new OpenCodeGoFetchError(
-        `OpenCodeGo RPC [${serverId.slice(0, 8)}] HTTP ${redirectResponse.status}`,
-      );
-    }
-    return redirectResponse.text();
+    return followRedirect(response, serverId, headers, context);
   }
 
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    if (response.status === 401 || response.status === 403) {
-      throw new OpenCodeGoFetchError(
-        `OpenCodeGo: HTTP ${response.status} — Cookie expired, update OPENCODEGO_SESSION_COOKIE`,
-      );
-    }
-    throw new OpenCodeGoFetchError(
-      `OpenCodeGo RPC [${serverId.slice(0, 8)}] HTTP ${response.status}`,
-    );
-  }
+  if (!response.ok) return rpcFailure(response, serverId);
 
   return response.text();
 }

@@ -514,11 +514,21 @@ if [[ -f "$OTEL_DASHBOARD_JSON" ]]; then
   fi
 fi
 
-if ! gcx api "/api/folders/uid/${ALERT_FOLDER_UID}" -o json >/dev/null 2>&1; then
-  if ! gcx api /api/folders -X POST \
-    -d "$(jq -nc --arg uid "$ALERT_FOLDER_UID" --arg title "$ALERT_FOLDER_TITLE" '{uid: $uid, title: $title}')" \
-    -o json >/dev/null 2>&1; then
-    die "Grafana alert folder を作成できませんでした: ${ALERT_FOLDER_UID}"
+ALERT_FOLDER_LOOKUP_STATUS=0
+ALERT_FOLDER_LOOKUP_OUTPUT=""
+if ALERT_FOLDER_LOOKUP_OUTPUT=$(gcx api "/api/folders/uid/${ALERT_FOLDER_UID}" -o json 2>&1); then
+  :
+else
+  ALERT_FOLDER_LOOKUP_STATUS=$?
+  if [[ "$ALERT_FOLDER_LOOKUP_OUTPUT" =~ HTTP[[:space:]]+404([^0-9]|$) ]]; then
+    if ! gcx api /api/folders -X POST \
+      -d "$(jq -nc --arg uid "$ALERT_FOLDER_UID" --arg title "$ALERT_FOLDER_TITLE" '{uid: $uid, title: $title}')" \
+      -o json >/dev/null 2>&1; then
+      die "Grafana alert folder を作成できませんでした: ${ALERT_FOLDER_UID}"
+    fi
+  else
+    printf '%s\n' "$ALERT_FOLDER_LOOKUP_OUTPUT" >&2
+    exit "$ALERT_FOLDER_LOOKUP_STATUS"
   fi
 fi
 

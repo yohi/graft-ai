@@ -29,6 +29,55 @@ test("prepareAlertRule replaces the file org id with the active Grafana org", ()
   });
 });
 
+test("normalizes explicit general folder UID and preserves custom UIDs", async () => {
+  for (const [configuredFolderUid, expectedFolderUid] of [
+    ["general", "graft-ai-alerts"],
+    ["custom-alerts", "custom-alerts"],
+  ]) {
+    const calls = [];
+    const fetchImpl = async (url, options = {}) => {
+      calls.push({ url, options });
+      if (url.endsWith("/api/org/")) {
+        return jsonResponse({ id: 42 });
+      }
+      if (url.includes("/api/folders/uid/")) {
+        return jsonResponse({ uid: expectedFolderUid });
+      }
+      if (url.endsWith("/api/v1/provisioning/alert-rules")) {
+        return jsonResponse([]);
+      }
+      return jsonResponse({ status: "success" });
+    };
+
+    await deployAlertRuleFile("grafana/alerts/graft-ai-otel-rules.json", {
+      grafanaUrl: "https://grafana.example",
+      token: "test-token",
+      folderUid: configuredFolderUid,
+      fetchImpl,
+    });
+
+    const folderLookupCall = calls.find(({ url }) =>
+      url.includes("/api/folders/uid/"),
+    );
+    assert.ok(folderLookupCall);
+    assert.equal(
+      folderLookupCall.url,
+      `https://grafana.example/api/folders/uid/${expectedFolderUid}`,
+    );
+
+    const ruleCreateCall = calls.find(
+      ({ url, options }) =>
+        url.endsWith("/api/v1/provisioning/alert-rules") &&
+        options.method === "POST",
+    );
+    assert.ok(ruleCreateCall);
+    assert.equal(
+      JSON.parse(ruleCreateCall.options.body).folderUID,
+      expectedFolderUid,
+    );
+  }
+});
+
 test("creates the alert folder before deploying rules", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {

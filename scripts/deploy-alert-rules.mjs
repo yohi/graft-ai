@@ -191,7 +191,9 @@ export async function deployAlertRuleFile(filePath, options = {}) {
 
 function resolveAlertFolderUid(rules, configuredFolderUid) {
   const explicitUid = configuredFolderUid?.trim();
-  if (explicitUid) return explicitUid;
+  if (explicitUid) {
+    return explicitUid === "general" ? DEFAULT_ALERT_FOLDER_UID : explicitUid;
+  }
 
   const sourceUid =
     typeof rules[0]?.folderUID === "string" ? rules[0].folderUID.trim() : "";

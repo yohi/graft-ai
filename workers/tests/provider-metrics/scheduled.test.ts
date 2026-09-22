@@ -72,6 +72,17 @@ function providerResponse(input: RequestInfo | URL): Response {
   if (url.includes("opencode.ai")) {
     return new Response('{"zenBalance":10.0}', { status: 200 });
   }
+  if (url.includes("ollama.com/api/usage")) {
+    return new Response(
+      JSON.stringify({
+        limits: {
+          session: { usage: 0.25, models: [{ name: "api-model", request_count: 3 }] },
+        },
+        activity: { cost: "1.50" },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
   if (url.includes("ollama.com")) {
     return new Response(
       '<html><body><div id="header-email">user@ollama.com</div><span>Cloud Usage</span><span>Pro</span><h3>Session usage</h3><div style="width: 25%">25% used</div><span data-time="2026-08-19T06:00:00Z"></span></body></html>',
@@ -278,5 +289,49 @@ describe("provider-metrics scheduled handler", () => {
       throw new Error("Expected a serialized Prometheus metrics payload");
     }
     expect(body).toContain('"ollama_cloud_usage_ratio"');
+  });
+
+  it("fetches Ollama API metrics when only OLLAMA_API_KEY is configured", async () => {
+    const mockFetch = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+        providerResponse(input),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    const envWithOllamaApiKey = {
+      GRAFANA_CLOUD_PROMETHEUS_URL: baseEnv.GRAFANA_CLOUD_PROMETHEUS_URL,
+      GRAFANA_CLOUD_PROMETHEUS_USERNAME: baseEnv.GRAFANA_CLOUD_PROMETHEUS_USERNAME,
+      GRAFANA_CLOUD_ACCESS_POLICY_TOKEN: baseEnv.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN,
+      OLLAMA_API_KEY: "ollama-api-key",
+    } satisfies ProviderMetricsEnv;
+
+    const response = await worker.fetch?.(
+      new Request("https://worker.example/metrics"),
+      envWithOllamaApiKey,
+      ctx,
+    );
+    if (response === undefined) throw new Error("Expected a diagnostic response");
+
+    expect(await response.json()).toMatchObject({
+      providers: { ollama: { status: "success" } },
+      prometheusPush: { status: "success" },
+    });
+    expect(
+      mockFetch.mock.calls.filter(([input]) => urlOf(input).includes("ollama.com/api/usage")),
+    ).toHaveLength(1);
+
+    const prometheusCalls = mockFetch.mock.calls.filter(([input]) =>
+      urlOf(input).includes("/v1/metrics"),
+    );
+    const firstPrometheusCall = prometheusCalls[0];
+    if (firstPrometheusCall === undefined) {
+      throw new Error("Expected a Prometheus metrics request");
+    }
+    const body = firstPrometheusCall[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected a serialized Prometheus metrics payload");
+    }
+    expect(body).toContain('"ollama_cloud_model_requests"');
+    expect(body).toContain('"ollama_cloud_activity_cost_usd"');
   });
 });

@@ -236,7 +236,6 @@ describe("fetchOllamaSettingsHtml", () => {
     expect(outcome).toEqual({ status: "failed", error: { kind: "parse" } });
     expect(JSON.stringify(outcome)).not.toContain(rawError.message);
   });
-
   it("returns an auth failure for signed-out HTML without a contribution", async () => {
     const mockFetch = vi
       .fn()

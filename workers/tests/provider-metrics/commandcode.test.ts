@@ -257,6 +257,39 @@ describe("CommandCode adapter", () => {
     expect(result.credits).toEqual({ monthly: 10, remaining: 10 });
   });
 
+  it.each([
+    ["missing windowLimits", { credits: { monthlyCredits: 10 } }],
+    ["non-record windowLimits", { credits: { monthlyCredits: 10 }, windowLimits: "invalid" }],
+    [
+      "missing limited flag",
+      {
+        credits: { monthlyCredits: 10 },
+        windowLimits: {
+          fiveHour: { used: 0, cap: 1 },
+          weekly: { used: 0, cap: 1 },
+        },
+      },
+    ],
+    [
+      "non-boolean limited flag",
+      {
+        credits: { monthlyCredits: 10 },
+        windowLimits: {
+          limited: "false",
+          fiveHour: { used: 0, cap: 1 },
+          weekly: { used: 0, cap: 1 },
+        },
+      },
+    ],
+  ] as const)("treats %s windowLimits as optional omission", async (_name, body) => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = json(200, body);
+    const result = resultOf(await commandcodeAdapter(env(), context(mockFetch(routes))));
+
+    expect(result.windows).toEqual([]);
+    expect(result.credits).toEqual({ monthly: 10, remaining: 10 });
+  });
+
   it("omits only an invalid optional resetAt", async () => {
     const routes = defaultRoutes();
     routes["/alpha/billing/credits"] = json(200, {
@@ -284,34 +317,24 @@ describe("CommandCode adapter", () => {
       "schema",
     ],
     [
-      "missing window limits",
-      "/alpha/billing/credits",
-      json(200, { credits: { monthlyCredits: 1 } }),
-      SOURCE_IDS.credits,
-      "schema",
-    ],
-    [
-      "missing window limit flag",
+      "missing required five-hour window",
       "/alpha/billing/credits",
       json(200, {
         credits: { monthlyCredits: 1 },
-        windowLimits: {
-          fiveHour: { used: 0, cap: 1 },
-          weekly: { used: 0, cap: 1 },
-        },
+        windowLimits: { limited: true, weekly: { used: 0, cap: 1 } },
       }),
       SOURCE_IDS.credits,
       "schema",
     ],
     [
-      "non-boolean window limit flag",
+      "invalid required weekly window",
       "/alpha/billing/credits",
       json(200, {
         credits: { monthlyCredits: 1 },
         windowLimits: {
-          limited: "false",
+          limited: true,
           fiveHour: { used: 0, cap: 1 },
-          weekly: { used: 0, cap: 1 },
+          weekly: { used: "invalid", cap: 1 },
         },
       }),
       SOURCE_IDS.credits,
@@ -339,6 +362,43 @@ describe("CommandCode adapter", () => {
       });
     },
   );
+
+  it.each([
+    [401, "auth"],
+    [403, "forbidden"],
+    [429, "rate_limit"],
+    [500, "upstream_5xx"],
+  ] as const)("maps credits HTTP %i to %s with credits ownership", async (status, kind) => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = json(status, "response-secret");
+    const outcome = await withFakeTimers(() =>
+      commandcodeAdapter(env(), context(mockFetch(routes))),
+    );
+    expect(outcome).toEqual({
+      status: "failed",
+      error: {
+        kind,
+        provider: "commandcode",
+        sourceId: SOURCE_IDS.credits,
+        statusCode: status,
+      },
+    });
+  });
+
+  it.each([
+    ["network", new TypeError("network-secret")],
+    ["timeout", new DOMException("timeout-secret", "TimeoutError")],
+  ] as const)("preserves credits %s transport ownership", async (kind, error) => {
+    const routes = defaultRoutes();
+    routes["/alpha/billing/credits"] = { status: 200, body: error };
+    const outcome = await withFakeTimers(() =>
+      commandcodeAdapter(env(), context(mockFetch(routes))),
+    );
+    expect(outcome).toEqual({
+      status: "failed",
+      error: { kind, provider: "commandcode", sourceId: SOURCE_IDS.credits },
+    });
+  });
 
   it("preserves subscriptions HTTP failure ownership", async () => {
     const routes = defaultRoutes();

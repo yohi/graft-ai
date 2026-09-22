@@ -36,6 +36,34 @@ describe("getWithRetry transport errors", () => {
       }),
     ).rejects.toMatchObject({ kind: "network" });
   });
+
+  it.each([
+    ["timeout", () => new DOMException("timed out", "TimeoutError")],
+    ["network", () => new TypeError("socket failed")],
+  ] as const)(
+    "prefers a transport error after a retryable HTTP 500 followed by %s",
+    async (kind, errorFactory) => {
+      let attempts = 0;
+      const fetchFn: typeof fetch = async () => {
+        attempts += 1;
+        if (attempts === 1) return new Response("server failed", { status: 500 });
+        throw errorFactory();
+      };
+
+      const result = getWithRetry({
+        url: "https://example.com",
+        headers: {},
+        fetchFn,
+        logLabel: "test",
+        isRetryableStatus: (status) => status >= 500,
+        maxRetries: 1,
+        initialBackoffMs: 0,
+      });
+
+      await expect(result).rejects.toBeInstanceOf(HttpTransportError);
+      await expect(result).rejects.toMatchObject({ kind });
+    },
+  );
 });
 
 describe("getJsonWithRetry body errors", () => {

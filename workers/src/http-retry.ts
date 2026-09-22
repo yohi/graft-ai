@@ -91,12 +91,14 @@ async function getWithRetryInternal<T>(
   readBody?: (response: Response) => Promise<T>,
 ): Promise<RetryResponse<T>> {
   let lastResponse: Response | undefined;
-  let lastErrorKind: HttpTransportErrorKind = "network";
+  let lastErrorKind: HttpTransportErrorKind | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     if (attempt > 0) {
       await sleep(initialBackoffMs * Math.pow(2, attempt - 1));
     }
+
+    lastErrorKind = undefined;
 
     let response: Response;
     try {
@@ -106,6 +108,17 @@ async function getWithRetryInternal<T>(
         signal: AbortSignal.timeout(perAttemptTimeoutMs),
         ...(redirect === undefined ? {} : { redirect }),
       });
+      const retryable = !response.ok && isRetryableStatus(response.status);
+      if (!retryable && readBody === undefined) {
+        return { response, body: undefined };
+      }
+      if (retryable) {
+        if (attempt < maxRetries) {
+          await response.body?.cancel().catch(() => undefined);
+        } else {
+          lastResponse = response;
+        }
+      }
     } catch (err) {
       lastErrorKind = isTimeoutError(err) ? "timeout" : "network";
       console.error(`${logLabel} attempt ${attempt + 1} failed (${lastErrorKind})`);
@@ -138,8 +151,9 @@ async function getWithRetryInternal<T>(
     }
   }
 
+  if (lastErrorKind !== undefined) throw new HttpTransportError(lastErrorKind);
   if (lastResponse !== undefined) return { response: lastResponse, body: undefined };
-  throw new HttpTransportError(lastErrorKind);
+  throw new HttpTransportError("network");
 }
 
 export async function getWithRetry(options: GetWithRetryOptions): Promise<Response> {

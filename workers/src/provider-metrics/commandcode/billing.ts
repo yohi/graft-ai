@@ -145,9 +145,9 @@ function parseQuotaWindow(value: unknown, period: QuotaWindow["period"]): QuotaW
 }
 
 function parseWindowLimits(value: unknown): QuotaWindow[] | null {
-  if (!isRecord(value)) return null;
-  if (value["limited"] === false) return [];
-  if (value["limited"] !== true) return null;
+  if (!isRecord(value)) return [];
+  const limited = value["limited"];
+  if (limited === false || typeof limited !== "boolean") return [];
 
   const session = parseQuotaWindow(value["fiveHour"], "session");
   const weekly = parseQuotaWindow(value["weekly"], "weekly");

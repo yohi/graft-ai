@@ -101,6 +101,12 @@ test("Grafana deployment surfaces publish the OTel alert rules", () => {
   assert.match(setup, /graft-ai-otel-rules\.json/);
 });
 
+test("setup creates a non-root Grafana folder before importing alert rules", () => {
+  assert.match(setup, /ALERT_FOLDER_UID="graft-ai-alerts"/);
+  assert.match(setup, /\/api\/folders\/uid\/\$\{ALERT_FOLDER_UID\}/);
+  assert.match(setup, /gcx api \/api\/folders -X POST/);
+});
+
 test("Grafana Cloud deployment uses OTEL datasource variables in required mode", () => {
   assert.equal(
     (deploy.match(/GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED/g) ?? []).length,

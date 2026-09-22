@@ -29,6 +29,55 @@ test("prepareAlertRule replaces the file org id with the active Grafana org", ()
   });
 });
 
+test("creates the alert folder before deploying rules", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/api/org/")) {
+      return jsonResponse({ id: 42 });
+    }
+    if (url.endsWith("/api/folders/uid/graft-ai-alerts")) {
+      return jsonResponse({ message: "folder not found" }, 404);
+    }
+    if (url.endsWith("/api/folders")) {
+      return jsonResponse(
+        { uid: "graft-ai-alerts", title: "graft-ai Alerts" },
+        200,
+      );
+    }
+    if (url.endsWith("/api/v1/provisioning/alert-rules")) {
+      return jsonResponse([]);
+    }
+    return jsonResponse({ status: "success" });
+  };
+
+  await deployAlertRuleFile("grafana/alerts/graft-ai-otel-rules.json", {
+    grafanaUrl: "https://grafana.example",
+    token: "test-token",
+    fetchImpl,
+  });
+
+  const folderCreateCalls = calls.filter(
+    ({ url, options }) =>
+      url.endsWith("/api/folders") && options.method === "POST",
+  );
+  assert.equal(folderCreateCalls.length, 1);
+  assert.deepEqual(JSON.parse(folderCreateCalls[0].options.body), {
+    uid: "graft-ai-alerts",
+    title: "graft-ai Alerts",
+  });
+
+  const ruleCreateCall = calls.find(
+    ({ url, options }) =>
+      url.endsWith("/api/v1/provisioning/alert-rules") &&
+      options.method === "POST",
+  );
+  assert.equal(
+    JSON.parse(ruleCreateCall.options.body).folderUID,
+    "graft-ai-alerts",
+  );
+});
+
 test("dry-run validates an alert rule file without Grafana credentials", async () => {
   const result = await deployAlertRuleFile(
     "grafana/alerts/graft-ai-otel-rules.json",
@@ -66,13 +115,13 @@ test("deploys existing alert rules with PUT and new rules with POST", async () =
 
   assert.equal(result.success, true);
   assert.equal(result.ruleCount, 4);
-  assert.equal(calls.length, 6);
-  assert.equal(calls[2].options.method, "PUT");
-  assert.equal(calls[3].options.method, "POST");
+  assert.equal(calls.length, 7);
+  assert.equal(calls[3].options.method, "PUT");
   assert.equal(calls[4].options.method, "POST");
   assert.equal(calls[5].options.method, "POST");
-  assert.equal(JSON.parse(calls[2].options.body).orgId, 42);
-  assert.equal(calls[2].options.headers.Authorization, "Bearer test-token");
+  assert.equal(calls[6].options.method, "POST");
+  assert.equal(JSON.parse(calls[3].options.body).orgId, 42);
+  assert.equal(calls[3].options.headers.Authorization, "Bearer test-token");
 });
 
 test("uses a fresh timeout for each request during a slow deployment", async () => {
@@ -115,7 +164,7 @@ test("uses a fresh timeout for each request during a slow deployment", async () 
   );
 
   assert.equal(result.success, true);
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 7);
   assert.equal(
     new Set(calls.map(({ options }) => options.signal)).size,
     calls.length,

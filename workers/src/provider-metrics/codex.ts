@@ -1,8 +1,30 @@
-import type { CodexFetchResult } from "./types";
-import { getWithRetry } from "../http-retry";
+import { getWithRetry, HttpTransportError } from "../http-retry";
+import type {
+  AdapterOutcome,
+  ProviderAdapter,
+  ProviderContext,
+  ProviderErrorKind,
+  ProviderResult,
+  ProviderSource,
+  QuotaWindow,
+} from "./types";
 
 const DEFAULT_BASE_URL = "https://chatgpt.com";
 const TIMEOUT_MS = 30000;
+const PRIMARY_SOURCE_ID = "codex-wham-usage";
+const BROWSER_SOURCE_ID = "codex-browser-rendering";
+
+const PRIMARY_SOURCE = {
+  id: PRIMARY_SOURCE_ID,
+  supportLevel: "official-internal",
+  role: "primary",
+} as const satisfies ProviderSource;
+
+const BROWSER_SOURCE = {
+  id: BROWSER_SOURCE_ID,
+  supportLevel: "web-internal",
+  role: "fallback",
+} as const satisfies ProviderSource;
 
 type WindowSnapshot = {
   readonly usedPercent: number;
@@ -17,16 +39,33 @@ type CodexUsageResponse = {
   readonly plan: string;
 };
 
+type ResetCredits = {
+  readonly credits: number;
+  readonly availableCount: number;
+};
+
+type CodexResult = Extract<ProviderResult, { provider: "codex" }>;
+type CodexResponseFailureKind = Extract<ProviderErrorKind, "schema" | "parse">;
+
+type CodexRequestOptions = {
+  readonly accountId?: string;
+  readonly baseUrl?: string;
+  readonly proxySecret?: string;
+};
+
 class CodexResponseError extends Error {
   readonly name = "CodexResponseError";
 
-  constructor(readonly detail: string) {
+  constructor(
+    readonly kind: CodexResponseFailureKind,
+    detail: string,
+  ) {
     super(`Invalid Codex API response: ${detail}`);
   }
 }
 
 function invalidResponse(detail: string): never {
-  throw new CodexResponseError(detail);
+  throw new CodexResponseError("schema", detail);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -41,12 +80,8 @@ function parseFiniteNumber(value: unknown, path: string): number {
 }
 
 function parseWindow(value: unknown, path: string): WindowSnapshot | null {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (!isRecord(value)) {
-    invalidResponse(`${path} must be an object`);
-  }
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) invalidResponse(`${path} must be an object`);
 
   const usedPercent = parseFiniteNumber(value["used_percent"], `${path}.used_percent`);
   if (usedPercent < 0 || usedPercent > 100) {
@@ -105,7 +140,6 @@ function parseUsageResponse(value: unknown): CodexUsageResponse {
 
   const primaryWindow = parseWindow(rateLimit["primary_window"], "rate_limit.primary_window");
   const secondaryWindow = parseWindow(rateLimit["secondary_window"], "rate_limit.secondary_window");
-
   if (primaryWindow === null && secondaryWindow === null) {
     invalidResponse("rate_limit must contain at least one valid window");
   }
@@ -118,7 +152,7 @@ function parseUsageResponse(value: unknown): CodexUsageResponse {
   };
 }
 
-function parseResetCreditsResponse(value: unknown): CodexFetchResult["resetCredits"] {
+function parseResetCreditsResponse(value: unknown): ResetCredits {
   if (!isRecord(value)) invalidResponse("reset credits body must be an object");
   return {
     credits: parseFiniteNumber(value["credits"], "reset_credits.credits"),
@@ -130,7 +164,7 @@ async function fetchResetCredits(
   baseUrl: string,
   headers: Readonly<Record<string, string>>,
   fetchFn: typeof fetch,
-): Promise<CodexFetchResult["resetCredits"]> {
+): Promise<ResetCredits | undefined> {
   try {
     const response = await getWithRetry({
       url: `${baseUrl}/backend-api/wham/rate-limit-reset-credits`,
@@ -148,7 +182,6 @@ async function fetchResetCredits(
     const body: unknown = await response.json();
     return parseResetCreditsResponse(body);
   } catch {
-    // reset-credits is supplementary; usage metrics remain usable when it fails
     return undefined;
   }
 }
@@ -158,6 +191,7 @@ async function fetchViaBrowserRendering(
   baseUrl: string,
   accessToken: string,
   accountId?: string,
+  proxySecret?: string,
 ): Promise<CodexUsageResponse> {
   const puppeteerModule = await import("@cloudflare/puppeteer");
   const launcher =
@@ -176,6 +210,7 @@ async function fetchViaBrowserRendering(
           ...interceptedRequest.headers(),
           Authorization: `Bearer ${accessToken}`,
           ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+          ...(proxySecret ? { "X-Proxy-Secret": proxySecret } : {}),
           "OpenAI-Beta": "codex-1",
           originator: "Codex Desktop",
           Accept: "application/json",
@@ -188,17 +223,10 @@ async function fetchViaBrowserRendering(
 
     const response = await page.goto(targetUrl, {
       waitUntil: "networkidle0",
-      timeout: 30000,
+      timeout: TIMEOUT_MS,
     });
 
-    let rawText = "";
-    if (response !== null) {
-      try {
-        rawText = await response.text();
-      } catch {
-        rawText = "";
-      }
-    }
+    let rawText = response === null ? "" : await response.text();
     if (rawText.length === 0) {
       const evalResult = await page.evaluate("document.body.innerText");
       rawText = typeof evalResult === "string" ? evalResult : "";
@@ -208,10 +236,7 @@ async function fetchViaBrowserRendering(
     try {
       body = JSON.parse(rawText);
     } catch {
-      const snippet = rawText.replace(/\s+/g, " ").trim().slice(0, 200);
-      throw new CodexResponseError(
-        `Browser rendering returned non-JSON response (snippet: ${snippet || "<empty>"})`,
-      );
+      throw new CodexResponseError("parse", "browser response was not valid JSON");
     }
     return parseUsageResponse(body);
   } finally {
@@ -219,49 +244,133 @@ async function fetchViaBrowserRendering(
   }
 }
 
+function isTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === "AbortError" || error.name === "TimeoutError" || /timeout/i.test(error.message)
+  );
+}
+
+function browserFailureKind(error: unknown): ProviderErrorKind {
+  if (error instanceof HttpTransportError) return error.kind;
+  if (error instanceof CodexResponseError) return error.kind;
+  if (error instanceof SyntaxError) return "parse";
+  return isTimeoutError(error) ? "timeout" : "network";
+}
+
+function primaryResponseFailureKind(error: unknown): CodexResponseFailureKind {
+  return error instanceof CodexResponseError ? error.kind : "parse";
+}
+
+function failed(kind: ProviderErrorKind, sourceId: string, statusCode?: number): AdapterOutcome {
+  return {
+    status: "failed",
+    error: {
+      kind,
+      provider: "codex",
+      sourceId,
+      ...(statusCode === undefined ? {} : { statusCode }),
+    },
+  };
+}
+
+function httpFailureKind(status: number): ProviderErrorKind {
+  if (status === 401) return "auth";
+  if (status === 403) return "forbidden";
+  if (status === 429) return "rate_limit";
+  if (status >= 500) return "upstream_5xx";
+  return "upstream_4xx";
+}
+
 function classifyCodexWindow(window: WindowSnapshot | null): "weekly" | "session" | null {
-  if (!window) return null;
-  if (window.limitWindowSeconds !== undefined) {
-    return window.limitWindowSeconds >= 86400 * 3 ? "weekly" : "session";
-  }
-  return null;
+  if (!window || window.limitWindowSeconds === undefined) return null;
+  return window.limitWindowSeconds >= 86400 * 3 ? "weekly" : "session";
 }
 
 function normalizeCodexWindows(
   primary: WindowSnapshot | null,
   secondary: WindowSnapshot | null,
-): { sessionWindow: WindowSnapshot | null; weeklyWindow: WindowSnapshot | null } {
+): { readonly sessionWindow: WindowSnapshot | null; readonly weeklyWindow: WindowSnapshot | null } {
   let sessionWindow: WindowSnapshot | null = null;
   let weeklyWindow: WindowSnapshot | null = null;
 
   const primaryType = classifyCodexWindow(primary);
   const secondaryType = classifyCodexWindow(secondary);
-
-  if (primaryType === "weekly") {
-    weeklyWindow = primary;
-  } else if (primaryType === "session") {
-    sessionWindow = primary;
-  }
-
-  if (secondaryType === "weekly" && !weeklyWindow) {
-    weeklyWindow = secondary;
-  } else if (secondaryType === "session" && !sessionWindow) {
-    sessionWindow = secondary;
-  }
+  if (primaryType === "weekly") weeklyWindow = primary;
+  if (primaryType === "session") sessionWindow = primary;
+  if (secondaryType === "weekly" && weeklyWindow === null) weeklyWindow = secondary;
+  if (secondaryType === "session" && sessionWindow === null) sessionWindow = secondary;
 
   return { sessionWindow, weeklyWindow };
 }
 
+function buildResult(
+  data: CodexUsageResponse,
+  resetCredits: ResetCredits | undefined,
+  source: ProviderSource,
+): CodexResult {
+  const { sessionWindow, weeklyWindow } = normalizeCodexWindows(
+    data.primaryWindow,
+    data.secondaryWindow,
+  );
+  const windows: QuotaWindow[] = [
+    ...(sessionWindow === null
+      ? []
+      : [
+          {
+            period: "session" as const,
+            usageRatio: sessionWindow.usedPercent / 100,
+            resetTimestampSeconds: sessionWindow.resetAt,
+          },
+        ]),
+    ...(weeklyWindow === null
+      ? []
+      : [
+          {
+            period: "weekly" as const,
+            usageRatio: weeklyWindow.usedPercent / 100,
+            resetTimestampSeconds: weeklyWindow.resetAt,
+          },
+        ]),
+  ];
+  const hasCredits = data.creditsRemaining !== null || resetCredits !== undefined;
+
+  return {
+    provider: "codex",
+    sources: [source],
+    windows,
+    plan: data.plan,
+    ...(hasCredits
+      ? {
+          credits: {
+            ...(data.creditsRemaining === null ? {} : { remaining: data.creditsRemaining }),
+            ...(resetCredits === undefined
+              ? {}
+              : {
+                  resetCredits: resetCredits.credits,
+                  resetCreditsAvailableCount: resetCredits.availableCount,
+                }),
+          },
+        }
+      : {}),
+  };
+}
+
+function requestOptions(env: Parameters<ProviderAdapter>[0]): CodexRequestOptions {
+  const baseUrl = env.CODEX_PROXY_URL || env.CODEX_API_BASE_URL;
+  return {
+    ...(env.CODEX_ACCOUNT_ID === undefined ? {} : { accountId: env.CODEX_ACCOUNT_ID }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(env.CODEX_PROXY_SECRET === undefined ? {} : { proxySecret: env.CODEX_PROXY_SECRET }),
+  };
+}
+
 export async function fetchCodexMetrics(
   accessToken: string,
-  accountId?: string,
-  fetchFn: typeof fetch = fetch,
-  proxyUrlOrBaseUrl?: string,
-  browserBinding?: Fetcher,
-  _now: Date = new Date(),
-  proxySecret?: string,
-): Promise<CodexFetchResult> {
-  const baseUrl = (proxyUrlOrBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
+  context: ProviderContext,
+  options: CodexRequestOptions = {},
+): Promise<AdapterOutcome> {
+  const baseUrl = (options.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, "");
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/json",
@@ -272,56 +381,56 @@ export async function fetchCodexMetrics(
     "OpenAI-Beta": "codex-1",
     originator: "Codex Desktop",
   };
-  if (accountId) {
-    headers["ChatGPT-Account-Id"] = accountId;
-  }
-  if (proxySecret) {
-    headers["X-Proxy-Secret"] = proxySecret;
-  }
+  if (options.accountId) headers["ChatGPT-Account-Id"] = options.accountId;
+  if (options.proxySecret) headers["X-Proxy-Secret"] = options.proxySecret;
 
-  let data: CodexUsageResponse;
+  try {
+    const response = await getWithRetry({
+      url: `${baseUrl}/backend-api/wham/usage`,
+      headers,
+      fetchFn: context.fetchFn,
+      logLabel: "Codex usage fetch",
+      isRetryableStatus: (status) => status === 429 || status >= 500,
+      perAttemptTimeoutMs: TIMEOUT_MS,
+    });
 
-  const response = await getWithRetry({
-    url: `${baseUrl}/backend-api/wham/usage`,
-    headers,
-    fetchFn,
-    logLabel: "Codex usage fetch",
-    isRetryableStatus: (status) => status === 429 || status >= 500,
-    perAttemptTimeoutMs: TIMEOUT_MS,
-  });
-
-  if (!response.ok) {
-    if (response.status === 403 && browserBinding !== undefined) {
-      // Fallback to Cloudflare Browser Rendering to solve interactive JS challenge
-      data = await fetchViaBrowserRendering(browserBinding, baseUrl, accessToken, accountId);
-    } else {
-      let bodySnippet = "";
-      try {
-        const text = await response.text();
-        bodySnippet = ` — ${text.replace(/\s+/g, " ").trim().slice(0, 200)}`;
-      } catch {
-        await response.body?.cancel().catch(() => undefined);
+    let data: CodexUsageResponse;
+    let source: ProviderSource = PRIMARY_SOURCE;
+    if (!response.ok) {
+      const statusCode = response.status;
+      await response.body?.cancel().catch(() => undefined);
+      if (statusCode !== 403 || context.browserBinding === undefined) {
+        return failed(httpFailureKind(statusCode), PRIMARY_SOURCE_ID, statusCode);
       }
-      throw new Error(`Codex API error: HTTP ${response.status}${bodySnippet}`);
+
+      try {
+        data = await fetchViaBrowserRendering(
+          context.browserBinding,
+          baseUrl,
+          accessToken,
+          options.accountId,
+          options.proxySecret,
+        );
+        source = BROWSER_SOURCE;
+      } catch (error) {
+        return failed(browserFailureKind(error), BROWSER_SOURCE_ID);
+      }
+    } else {
+      try {
+        const body: unknown = await response.json();
+        data = parseUsageResponse(body);
+      } catch (error) {
+        return failed(primaryResponseFailureKind(error), PRIMARY_SOURCE_ID);
+      }
     }
-  } else {
-    const body: unknown = await response.json();
-    data = parseUsageResponse(body);
+
+    const resetCredits = await fetchResetCredits(baseUrl, headers, context.fetchFn);
+    return { status: "success", result: buildResult(data, resetCredits, source) };
+  } catch (error) {
+    if (error instanceof HttpTransportError) return failed(error.kind, PRIMARY_SOURCE_ID);
+    return failed("internal", PRIMARY_SOURCE_ID);
   }
-
-  const resetCredits = await fetchResetCredits(baseUrl, headers, fetchFn);
-  const { sessionWindow, weeklyWindow } = normalizeCodexWindows(
-    data.primaryWindow,
-    data.secondaryWindow,
-  );
-
-  return {
-    sessionUsageRatio: sessionWindow ? sessionWindow.usedPercent / 100 : undefined,
-    weeklyUsageRatio: weeklyWindow ? weeklyWindow.usedPercent / 100 : undefined,
-    sessionResetTimestampSeconds: sessionWindow ? sessionWindow.resetAt : undefined,
-    weeklyResetTimestampSeconds: weeklyWindow ? weeklyWindow.resetAt : undefined,
-    creditsRemaining: data.creditsRemaining,
-    resetCredits,
-    plan: data.plan,
-  };
 }
+
+export const codexAdapter: ProviderAdapter = async (env, context) =>
+  fetchCodexMetrics(env.CODEX_ACCESS_TOKEN ?? "", context, requestOptions(env));

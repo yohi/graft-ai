@@ -1,10 +1,28 @@
-import type { OpenAIFetchResult, OpenAIMetric, OpenAITokenMetric } from "./types";
-import { getWithRetry } from "../http-retry";
+import { getWithRetry, HttpTransportError } from "../http-retry";
+import type {
+  AdapterOutcome,
+  OpenAIMetric,
+  OpenAITokenMetric,
+  ProviderAdapter,
+  ProviderContext,
+  ProviderErrorKind,
+  ProviderMetricsEnv,
+  ProviderResult,
+  ProviderSource,
+} from "./types";
 
 const COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const COMPLETIONS_URL = "https://api.openai.com/v1/organization/usage/completions";
 const MAX_PAGES = 100;
 const TIMEOUT_MS = 20000;
+const DAY_SECONDS = 86400;
+const SOURCE_ID = "openai-organization-api";
+
+const PRIMARY_SOURCE = {
+  id: SOURCE_ID,
+  supportLevel: "official-public",
+  role: "primary",
+} as const satisfies ProviderSource;
 
 type CostBucket = {
   readonly results: readonly OpenAIMetric[];
@@ -39,19 +57,25 @@ type HistoryWindow = {
   readonly endTime: number;
 };
 
+type OpenAIResult = Extract<ProviderResult, { provider: "openai_api" }>;
+type OpenAIResponseFailureKind = Extract<ProviderErrorKind, "schema" | "parse">;
+
 class OpenAIResponseError extends Error {
   readonly name = "OpenAIResponseError";
 
-  constructor(readonly detail: string) {
+  constructor(
+    readonly kind: OpenAIResponseFailureKind,
+    detail: string,
+  ) {
     super(`Invalid OpenAI API response: ${detail}`);
   }
 }
 
-class InvalidHistoryDaysError extends RangeError {
-  readonly name = "InvalidHistoryDaysError";
+class OpenAIHttpError extends Error {
+  readonly name = "OpenAIHttpError";
 
-  constructor(readonly historyDays: number) {
-    super(`historyDays must be a positive integer, received ${historyDays}`);
+  constructor(readonly statusCode: number) {
+    super("OpenAI API request failed");
   }
 }
 
@@ -60,7 +84,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function invalidResponse(detail: string): never {
-  throw new OpenAIResponseError(detail);
+  throw new OpenAIResponseError("schema", detail);
 }
 
 function parseFiniteNumber(value: unknown, path: string): number {
@@ -181,10 +205,18 @@ async function fetchPage<T>(
 
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
-    throw new Error(`OpenAI API error: HTTP ${response.status} at ${url}`);
+    throw new OpenAIHttpError(response.status);
   }
 
-  const body: unknown = await response.json();
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new OpenAIResponseError("parse", "response body was not valid JSON");
+    }
+    throw error;
+  }
   return parsePage(body, endpoint);
 }
 
@@ -210,7 +242,9 @@ async function fetchAllPages<T>(
   let pages = 0;
 
   do {
-    if (++pages > MAX_PAGES) throw new Error(`OpenAI API pagination exceeded ${MAX_PAGES} pages`);
+    if (++pages > MAX_PAGES) {
+      throw new OpenAIResponseError("schema", `pagination exceeded ${MAX_PAGES} pages`);
+    }
     const url = buildUrl(endpoint, window, cursor);
     const page = await fetchPage(url, client, endpoint);
     all.push(...page.data);
@@ -220,59 +254,97 @@ async function fetchAllPages<T>(
   return all;
 }
 
-export async function fetchOpenAIMetrics(
-  apiKey: string,
-  historyDays = 1,
-  fetchFn: typeof fetch = fetch,
-  nowMs: number = Date.now(),
-): Promise<OpenAIFetchResult> {
-  if (!Number.isInteger(historyDays) || historyDays <= 0) {
-    throw new InvalidHistoryDaysError(historyDays);
-  }
-  // scheduledTime を受け取り、指定した historyDays 分の完全 UTC 日を集計する
-  const dayMs = 86400 * 1000;
-  const todayUtcMs = Math.floor(nowMs / dayMs) * dayMs;
-  const endTime = todayUtcMs / 1000;
-  const startTime = endTime - historyDays * 86400;
-
-  const client = { apiKey, fetchFn } as const satisfies OpenAIClient;
-  const window = { startTime, endTime } as const satisfies HistoryWindow;
-  const [costBuckets, completionBuckets] = await Promise.all([
-    fetchAllPages(COSTS_ENDPOINT, client, window),
-    fetchAllPages(COMPLETIONS_ENDPOINT, client, window),
-  ]);
-
-  const costMap = new Map<string, number>();
-  for (const bucket of costBuckets) {
-    for (const r of bucket.results) {
-      costMap.set(r.lineItem, (costMap.get(r.lineItem) ?? 0) + r.costUSD);
-    }
-  }
-  const costs: OpenAIMetric[] = [...costMap.entries()].map(([lineItem, costUSD]) => ({
-    lineItem,
-    costUSD,
-  }));
-
-  const tokenMap = new Map<string, OpenAITokenMetric>();
-  for (const bucket of completionBuckets) {
-    for (const r of bucket.results) {
-      const existing = tokenMap.get(r.model) ?? {
-        model: r.model,
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedTokens: 0,
-        requests: 0,
-      };
-      tokenMap.set(r.model, {
-        model: r.model,
-        inputTokens: existing.inputTokens + r.inputTokens,
-        outputTokens: existing.outputTokens + r.outputTokens,
-        cachedTokens: existing.cachedTokens + r.cachedTokens,
-        requests: existing.requests + r.requests,
-      });
-    }
-  }
-  const tokens: OpenAITokenMetric[] = [...tokenMap.values()];
-
-  return { costs, tokens };
+function httpFailureKind(status: number): ProviderErrorKind {
+  if (status === 401) return "auth";
+  if (status === 403) return "forbidden";
+  if (status === 429) return "rate_limit";
+  if (status >= 500) return "upstream_5xx";
+  return "upstream_4xx";
 }
+
+function failed(kind: ProviderErrorKind, statusCode?: number): AdapterOutcome {
+  return {
+    status: "failed",
+    error: {
+      kind,
+      provider: "openai_api",
+      sourceId: SOURCE_ID,
+      ...(statusCode === undefined ? {} : { statusCode }),
+    },
+  };
+}
+
+function failureKind(error: unknown): ProviderErrorKind {
+  if (error instanceof HttpTransportError) return error.kind;
+  if (error instanceof OpenAIResponseError) return error.kind;
+  if (error instanceof SyntaxError) return "parse";
+  return "internal";
+}
+
+export async function fetchOpenAIMetrics(
+  env: ProviderMetricsEnv,
+  ctx: ProviderContext,
+): Promise<AdapterOutcome> {
+  try {
+    const dayEnd = Math.floor(ctx.scheduledTimeSeconds / DAY_SECONDS) * DAY_SECONDS;
+    const window = {
+      startTime: dayEnd - ctx.openaiHistoryDays * DAY_SECONDS,
+      endTime: dayEnd,
+    } as const satisfies HistoryWindow;
+    const client = {
+      apiKey: env.OPENAI_ADMIN_API_KEY ?? "",
+      fetchFn: ctx.fetchFn,
+    } as const satisfies OpenAIClient;
+    const [costBuckets, completionBuckets] = await Promise.all([
+      fetchAllPages(COSTS_ENDPOINT, client, window),
+      fetchAllPages(COMPLETIONS_ENDPOINT, client, window),
+    ]);
+
+    const costMap = new Map<string, number>();
+    for (const bucket of costBuckets) {
+      for (const r of bucket.results) {
+        costMap.set(r.lineItem, (costMap.get(r.lineItem) ?? 0) + r.costUSD);
+      }
+    }
+    const costs: OpenAIMetric[] = [...costMap.entries()].map(([lineItem, costUSD]) => ({
+      lineItem,
+      costUSD,
+    }));
+
+    const tokenMap = new Map<string, OpenAITokenMetric>();
+    for (const bucket of completionBuckets) {
+      for (const r of bucket.results) {
+        const existing = tokenMap.get(r.model) ?? {
+          model: r.model,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedTokens: 0,
+          requests: 0,
+        };
+        tokenMap.set(r.model, {
+          model: r.model,
+          inputTokens: existing.inputTokens + r.inputTokens,
+          outputTokens: existing.outputTokens + r.outputTokens,
+          cachedTokens: existing.cachedTokens + r.cachedTokens,
+          requests: existing.requests + r.requests,
+        });
+      }
+    }
+    const modelUsage: OpenAITokenMetric[] = [...tokenMap.values()];
+    const result: OpenAIResult = {
+      provider: "openai_api",
+      sources: [PRIMARY_SOURCE],
+      windows: [],
+      costs,
+      modelUsage,
+    };
+    return { status: "success", result };
+  } catch (error) {
+    if (error instanceof OpenAIHttpError) {
+      return failed(httpFailureKind(error.statusCode), error.statusCode);
+    }
+    return failed(failureKind(error));
+  }
+}
+
+export const openaiAdapter: ProviderAdapter = fetchOpenAIMetrics;

@@ -116,6 +116,75 @@ describe("provider-metrics scheduled handler", () => {
     expect(prometheusCalls).toHaveLength(1);
   });
 
+  it("pushes ProviderResult metrics from the migrated OpenAI and Codex adapters", async () => {
+    const mockFetch = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+        const url = urlOf(input);
+        if (url.includes("/v1/metrics")) return new Response("", { status: 200 });
+        if (url.includes("api.openai.com")) {
+          const result = url.includes("/costs")
+            ? { line_item: "tokens", amount: { value: 1.25 } }
+            : {
+                model: "gpt-5",
+                input_tokens: 10,
+                output_tokens: 4,
+                input_cached_tokens: 2,
+                num_model_requests: 1,
+              };
+          return new Response(
+            JSON.stringify({ data: [{ results: [result] }], has_more: false, next_page: null }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (url.includes("rate-limit-reset-credits")) {
+          return new Response(JSON.stringify({ credits: 12, available_count: 8 }), { status: 200 });
+        }
+        if (url.includes("chatgpt.com")) {
+          return new Response(
+            JSON.stringify({
+              plan_type: "pro",
+              rate_limit: {
+                primary_window: {
+                  used_percent: 50,
+                  reset_at: 1767268800,
+                  limit_window_seconds: 18000,
+                },
+                secondary_window: {
+                  used_percent: 30,
+                  reset_at: 1767830400,
+                  limit_window_seconds: 604800,
+                },
+              },
+              credits: { balance: 7 },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        throw new Error(`Unexpected URL in migrated adapter test: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    await worker.scheduled(
+      scheduledEvent,
+      {
+        ...openAiOnlyEnv,
+        CODEX_ACCESS_TOKEN: "codex-token",
+      },
+      ctx,
+    );
+
+    const prometheusCall = mockFetch.mock.calls.find(([input]) =>
+      urlOf(input).includes("/v1/metrics"),
+    );
+    if (prometheusCall === undefined) throw new Error("Expected a Prometheus metrics request");
+    const body = prometheusCall[1]?.body;
+    if (typeof body !== "string") throw new Error("Expected a serialized Prometheus payload");
+
+    expect(body).toContain('"openai_api_cost_usd"');
+    expect(body).toContain('"codex_credits_remaining"');
+  });
+
   it("does not push when configured providers produce no actual metrics", async () => {
     const mockFetch = vi.fn(async (input: RequestInfo | URL): Promise<Response> =>
       providerResponse(input),

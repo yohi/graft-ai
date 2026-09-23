@@ -46,13 +46,13 @@ The provider registry checks the primary credential for each provider. A provide
 
 ### Primary credentials
 
-| Provider | Primary credential | Primary source ID | Support level |
-| --- | --- | --- | --- |
-| OpenAI API | `OPENAI_ADMIN_API_KEY` | `openai-organization-api` | `official-public` |
-| Codex | `CODEX_ACCESS_TOKEN` | `codex-wham-usage` | `official-internal` |
-| OpenCode Go | `OPENCODEGO_API_KEY` | `opencodego-usage-api` | `official-internal` |
-| Ollama Cloud | `OLLAMA_API_KEY` | `ollama-api-usage` | `official-internal` |
-| CommandCode | `COMMAND_CODE_API_KEY` | `commandcode-billing-credits` | `official-internal` |
+| Provider     | Primary credential     | Primary source ID             | Support level       |
+| ------------ | ---------------------- | ----------------------------- | ------------------- |
+| OpenAI API   | `OPENAI_ADMIN_API_KEY` | `openai-organization-api`     | `official-public`   |
+| Codex        | `CODEX_ACCESS_TOKEN`   | `codex-wham-usage`            | `official-internal` |
+| OpenCode Go  | `OPENCODEGO_API_KEY`   | `opencodego-usage-api`        | `official-internal` |
+| Ollama Cloud | `OLLAMA_API_KEY`       | `ollama-api-usage`            | `official-internal` |
+| CommandCode  | `COMMAND_CODE_API_KEY` | `commandcode-billing-credits` | `official-internal` |
 
 ### Fallback and enrichment credentials
 
@@ -66,21 +66,21 @@ The provider registry checks the primary credential for each provider. A provide
 
 Source IDs are fixed endpoint ownership identifiers. They are not inferred from an error message. Support levels are `official-public`, `official-internal`, `web-internal`, and `scraping`; source roles are `primary`, `enrichment`, and `fallback`.
 
-| Provider path | Source ID | Role | Support level |
-| --- | --- | --- | --- |
-| OpenAI organization API | `openai-organization-api` | `primary` | `official-public` |
-| Codex WHAM usage | `codex-wham-usage` | `primary` | `official-internal` |
-| Codex Browser Rendering | `codex-browser-rendering` | `fallback` | `web-internal` |
-| OpenCode Go usage API | `opencodego-usage-api` | `primary` | `official-internal` |
-| OpenCode Go Zen RPC | `opencodego-zen-rpc` | `enrichment` | `web-internal` |
-| Ollama usage API | `ollama-api-usage` | `primary` | `official-internal` |
-| Ollama settings HTML | `ollama-settings-html` | `enrichment` or `fallback` | `scraping` |
-| CommandCode whoami prerequisite | `commandcode-whoami` | internal prerequisite | `official-internal` |
-| CommandCode billing credits | `commandcode-billing-credits` | `primary` | `official-internal` |
-| CommandCode billing subscriptions | `commandcode-billing-subscriptions` | `enrichment` | `official-internal` |
-| CommandCode usage summary | `commandcode-usage-summary` | `enrichment` | `official-internal` |
+| Provider path                     | Source ID                           | Role                       | Support level       |
+| --------------------------------- | ----------------------------------- | -------------------------- | ------------------- |
+| OpenAI organization API           | `openai-organization-api`           | `primary`                  | `official-public`   |
+| Codex WHAM usage                  | `codex-wham-usage`                  | `primary`                  | `official-internal` |
+| Codex Browser Rendering           | `codex-browser-rendering`           | `fallback`                 | `web-internal`      |
+| OpenCode Go usage API             | `opencodego-usage-api`              | `primary`                  | `official-internal` |
+| OpenCode Go Zen RPC               | `opencodego-zen-rpc`                | `enrichment`               | `web-internal`      |
+| Ollama usage API                  | `ollama-api-usage`                  | `primary`                  | `official-internal` |
+| Ollama settings HTML              | `ollama-settings-html`              | `enrichment` or `fallback` | `scraping`          |
+| CommandCode whoami prerequisite   | `commandcode-whoami`                | internal prerequisite      | `official-internal` |
+| CommandCode billing credits       | `commandcode-billing-credits`       | `primary`                  | `official-internal` |
+| CommandCode billing subscriptions | `commandcode-billing-subscriptions` | `enrichment`               | `official-internal` |
+| CommandCode usage summary         | `commandcode-usage-summary`         | `enrichment`               | `official-internal` |
 
-`commandcode-whoami` resolves the organization required by the other CommandCode endpoints. It owns failures but is intentionally not included in the successful result's `sources` list.
+`commandcode-whoami` identifies the API principal. When `org.id` is present, it scopes the other CommandCode endpoint requests; when a successful response has no organization, those requests omit `orgId`, matching the Command Code CLI. It owns failures but is intentionally not included in the successful result's `sources` list.
 
 ## Metrics
 
@@ -155,12 +155,12 @@ Authentication failures and provider-specific retry behavior are implementation 
 
 The diagnostic report preserves `skipped`, `success`, `empty`, and `failed` for each provider.
 
-| Provider status | Meaning | `provider_metrics_scrape_success` | Duration | Timestamp |
-| --- | --- | --- | --- | --- |
-| `skipped` | The primary credential or valid preflight configuration was absent. No adapter ran. | Not emitted | Not emitted | Not emitted |
-| `success` | Usable provider data was returned. | `1` | Emitted | Emitted |
-| `empty` | The request was valid but no supported window or activity was available. | `1` | Emitted | Emitted |
-| `failed` | The adapter could not produce a valid result because of transport, HTTP, schema, parse, or internal failure. | `0` | Emitted | Not emitted |
+| Provider status | Meaning                                                                                                      | `provider_metrics_scrape_success` | Duration    | Timestamp   |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------- | ----------- | ----------- |
+| `skipped`       | The primary credential or valid preflight configuration was absent. No adapter ran.                          | Not emitted                       | Not emitted | Not emitted |
+| `success`       | Usable provider data was returned.                                                                           | `1`                               | Emitted     | Emitted     |
+| `empty`         | The request was valid but no supported window or activity was available.                                     | `1`                               | Emitted     | Emitted     |
+| `failed`        | The adapter could not produce a valid result because of transport, HTTP, schema, parse, or internal failure. | `0`                               | Emitted     | Not emitted |
 
 Health-only behavior is intentional:
 

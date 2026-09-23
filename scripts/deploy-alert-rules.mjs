@@ -210,7 +210,7 @@ async function ensureAlertFolder(
   headers,
   requestSignal,
 ) {
-  const folderEndpoint = `${grafanaUrl}/api/folders/uid/${encodeURIComponent(folderUid)}`;
+  const folderEndpoint = `${grafanaUrl}/api/folders/${encodeURIComponent(folderUid)}`;
   try {
     await requestJson(
       fetchFn,
@@ -227,17 +227,32 @@ async function ensureAlertFolder(
     if (!(error instanceof Error) || error.status !== 404) throw error;
   }
 
-  await requestJson(
-    fetchFn,
-    `${grafanaUrl}/api/folders`,
-    {
-      method: "POST",
-      headers,
-      signal: requestSignal(),
-      body: JSON.stringify({ uid: folderUid, title: folderTitle }),
-    },
-    "Grafana folder API",
-  );
+  try {
+    await requestJson(
+      fetchFn,
+      `${grafanaUrl}/api/folders`,
+      {
+        method: "POST",
+        headers,
+        signal: requestSignal(),
+        body: JSON.stringify({ uid: folderUid, title: folderTitle }),
+      },
+      "Grafana folder API",
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || error.status !== 412) throw error;
+
+    await requestJson(
+      fetchFn,
+      folderEndpoint,
+      {
+        method: "GET",
+        headers,
+        signal: requestSignal(),
+      },
+      "Grafana folder API",
+    );
+  }
 }
 
 /**

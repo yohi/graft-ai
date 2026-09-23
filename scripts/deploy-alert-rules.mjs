@@ -10,6 +10,8 @@ import {
 } from "./deploy-dashboards.mjs";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_ALERT_FOLDER_UID = "graft-ai-alerts";
+const DEFAULT_ALERT_FOLDER_TITLE = "graft-ai Alerts";
 const DEFAULT_FILES = [
   "grafana/alerts/graft-ai-ollama-cloud-rules.json",
   "grafana/alerts/graft-ai-otel-rules.json",
@@ -66,10 +68,13 @@ export function parseAlertRules(input) {
 /**
  * @param {object} rule
  * @param {number} orgId
+ * @param {import("./deploy-dashboards.mjs").DatasourceUids} [datasourceUids]
+ * @param {string} [folderUid]
  * @returns {object}
  */
-export function prepareAlertRule(rule, orgId, datasourceUids) {
+export function prepareAlertRule(rule, orgId, datasourceUids, folderUid) {
   const prepared = { ...rule, orgId };
+  if (folderUid) prepared.folderUID = folderUid;
   return datasourceUids
     ? rewriteGrafanaDatasourceUids(prepared, datasourceUids)
     : prepared;
@@ -80,6 +85,8 @@ export function prepareAlertRule(rule, orgId, datasourceUids) {
  * @param {{
  *   grafanaUrl?: string,
  *   token?: string,
+ *   folderUid?: string,
+ *   folderTitle?: string,
  *   datasourceUids?: import("./deploy-dashboards.mjs").DatasourceUids,
  *   dryRun?: boolean,
  *   fetchImpl?: typeof fetch,
@@ -129,6 +136,16 @@ export async function deployAlertRuleFile(filePath, options = {}) {
     throw new Error("Grafana organization response did not contain a valid id");
   }
 
+  const folderUid = resolveAlertFolderUid(rules, options.folderUid);
+  await ensureAlertFolder(
+    fetchFn,
+    grafanaUrl,
+    folderUid,
+    options.folderTitle?.trim() || DEFAULT_ALERT_FOLDER_TITLE,
+    headers,
+    requestSignal,
+  );
+
   const rulesEndpoint = `${grafanaUrl}/api/v1/provisioning/alert-rules`;
   const existing = await requestJson(fetchFn, rulesEndpoint, {
     method: "GET",
@@ -157,7 +174,7 @@ export async function deployAlertRuleFile(filePath, options = {}) {
       headers,
       signal: requestSignal(),
       body: JSON.stringify(
-        prepareAlertRule(rule, orgId, options.datasourceUids),
+        prepareAlertRule(rule, orgId, options.datasourceUids, folderUid),
       ),
     });
     deployed.push({ uid: rule.uid, method });
@@ -172,13 +189,70 @@ export async function deployAlertRuleFile(filePath, options = {}) {
   };
 }
 
+function resolveAlertFolderUid(rules, configuredFolderUid) {
+  const explicitUid = configuredFolderUid?.trim();
+  if (explicitUid) {
+    return explicitUid === "general" ? DEFAULT_ALERT_FOLDER_UID : explicitUid;
+  }
+
+  const sourceUid =
+    typeof rules[0]?.folderUID === "string" ? rules[0].folderUID.trim() : "";
+  return sourceUid && sourceUid !== "general"
+    ? sourceUid
+    : DEFAULT_ALERT_FOLDER_UID;
+}
+
+async function ensureAlertFolder(
+  fetchFn,
+  grafanaUrl,
+  folderUid,
+  folderTitle,
+  headers,
+  requestSignal,
+) {
+  const folderEndpoint = `${grafanaUrl}/api/folders/uid/${encodeURIComponent(folderUid)}`;
+  try {
+    await requestJson(
+      fetchFn,
+      folderEndpoint,
+      {
+        method: "GET",
+        headers,
+        signal: requestSignal(),
+      },
+      "Grafana folder API",
+    );
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || error.status !== 404) throw error;
+  }
+
+  await requestJson(
+    fetchFn,
+    `${grafanaUrl}/api/folders`,
+    {
+      method: "POST",
+      headers,
+      signal: requestSignal(),
+      body: JSON.stringify({ uid: folderUid, title: folderTitle }),
+    },
+    "Grafana folder API",
+  );
+}
+
 /**
  * @param {typeof fetch} fetchFn
  * @param {string} endpoint
  * @param {RequestInit} options
+ * @param {string} [resourceLabel]
  * @returns {Promise<unknown>}
  */
-async function requestJson(fetchFn, endpoint, options) {
+async function requestJson(
+  fetchFn,
+  endpoint,
+  options,
+  resourceLabel = "Grafana alert API",
+) {
   const response = await fetchFn(endpoint, options);
   const responseText = await response.text();
   let result = {};
@@ -195,9 +269,11 @@ async function requestJson(fetchFn, endpoint, options) {
       result && typeof result === "object" && typeof result.message === "string"
         ? result.message
         : "request failed";
-    throw new Error(
-      `Grafana alert API request failed: ${response.status} - ${message}`,
+    const error = new Error(
+      `${resourceLabel} request failed: ${response.status} - ${message}`,
     );
+    error.status = response.status;
+    throw error;
   }
   return result;
 }
@@ -248,6 +324,8 @@ export async function main(args = process.argv.slice(2), env = process.env) {
         grafanaUrl,
         token,
         dryRun: parsed.dryRun,
+        folderUid: env.GRAFANA_ALERT_FOLDER_UID,
+        folderTitle: env.GRAFANA_ALERT_FOLDER_TITLE,
         datasourceUids,
       });
       if (result.dryRun) {

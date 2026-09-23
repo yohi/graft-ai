@@ -101,6 +101,30 @@ test("Grafana deployment surfaces publish the OTel alert rules", () => {
   assert.match(setup, /graft-ai-otel-rules\.json/);
 });
 
+test("setup creates a non-root Grafana folder before importing alert rules", () => {
+  assert.match(setup, /ALERT_FOLDER_UID="graft-ai-alerts"/);
+  assert.match(setup, /\/api\/folders\/uid\/\$\{ALERT_FOLDER_UID\}/);
+  assert.match(setup, /gcx api \/api\/folders -X POST/);
+
+  assert.match(
+    setup,
+    /ALERT_FOLDER_LOOKUP_OUTPUT=\$\(\s*gcx api "\/api\/folders\/uid\/\$\{ALERT_FOLDER_UID\}" -o json 2>&1\s*\)/,
+  );
+  assert.match(setup, /HTTP\[\[:space:\]\]\+404/);
+  assert.match(setup, /exit "\$ALERT_FOLDER_LOOKUP_STATUS"/);
+
+  const folderCreationIndex = setup.indexOf("gcx api /api/folders -X POST");
+  const alertRuleImportIndex = setup.indexOf(
+    'gcx api "${api_args[@]}" -d "$rule" -o json',
+  );
+  assert.notEqual(folderCreationIndex, -1);
+  assert.notEqual(alertRuleImportIndex, -1);
+  assert.ok(
+    folderCreationIndex < alertRuleImportIndex,
+    "alert folder creation must precede alert-rule import",
+  );
+});
+
 test("Grafana Cloud deployment uses OTEL datasource variables in required mode", () => {
   assert.equal(
     (deploy.match(/GRAFANA_OTEL_DATASOURCE_UIDS_REQUIRED/g) ?? []).length,

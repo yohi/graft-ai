@@ -121,12 +121,9 @@ function parseWhoami(value: unknown): CommandCodeWhoami | null {
   const org = value["org"];
   if (isRecord(org)) {
     const orgId = org["id"];
-    return nonEmptyString(orgId) ? { orgId } : null;
+    if (nonEmptyString(orgId)) return { orgId };
   }
-  if (org === null && isRecord(value["user"]) && nonEmptyString(value["user"]["id"])) {
-    return {};
-  }
-  return null;
+  return value["success"] === true ? {} : null;
 }
 
 function parseResetTimestamp(value: unknown): number | undefined {

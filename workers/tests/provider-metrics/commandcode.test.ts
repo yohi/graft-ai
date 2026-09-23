@@ -175,6 +175,26 @@ describe("CommandCode adapter", () => {
     expect(result.usage).toEqual({ costUSD: 0.57, requests: 45, tokens: 3_100_000 });
   });
 
+  it.each([
+    ["organization omitted", { success: true }],
+    ["organization without an id", { success: true, org: {} }],
+  ])("matches CLI fallback when whoami has %s", async (_name, whoami) => {
+    const routes = defaultRoutes();
+    routes["/alpha/whoami"] = json(200, whoami);
+    const fetchFn = mockFetch(routes);
+
+    const result = resultOf(await commandcodeAdapter(env(), context(fetchFn)));
+    const urls = fetchFn.mock.calls.map(([input]) => String(input));
+
+    expect(urls.slice(1, 3)).toEqual([
+      `${BASE_URL}/alpha/billing/credits`,
+      `${BASE_URL}/alpha/billing/subscriptions`,
+    ]);
+    expect(urls[3]).toBe(`${BASE_URL}/alpha/usage/summary?since=2026-09-01T00%3A00%3A00Z`);
+    expect(result.credits?.remaining).toBe(75);
+    expect(result.usage?.tokens).toBe(3_100_000);
+  });
+
   it("preserves subscription provenance when only currentPeriodStart contributes", async () => {
     const routes = defaultRoutes();
     routes["/alpha/billing/subscriptions"] = json(200, {
@@ -331,6 +351,13 @@ describe("CommandCode adapter", () => {
 
   it.each([
     ["missing whoami org", "/alpha/whoami", json(200, { org: {} }), SOURCE_IDS.whoami, "schema"],
+    [
+      "failed whoami without organization",
+      "/alpha/whoami",
+      json(200, { success: false, org: null }),
+      SOURCE_IDS.whoami,
+      "schema",
+    ],
     [
       "invalid credits",
       "/alpha/billing/credits",

@@ -153,6 +153,28 @@ describe("CommandCode adapter", () => {
     });
   });
 
+  it("fetches account usage without orgId when whoami has no organization", async () => {
+    const routes = defaultRoutes();
+    routes["/alpha/whoami"] = json(200, {
+      success: true,
+      org: null,
+      user: { id: "user-1", name: "Example", userName: "example", email: "example@example.com" },
+    });
+    const fetchFn = mockFetch(routes);
+
+    const result = resultOf(await commandcodeAdapter(env(), context(fetchFn)));
+    const urls = fetchFn.mock.calls.map(([input]) => String(input));
+
+    expect(urls).toEqual([
+      `${BASE_URL}/alpha/whoami?limits=1`,
+      `${BASE_URL}/alpha/billing/credits`,
+      `${BASE_URL}/alpha/billing/subscriptions`,
+      `${BASE_URL}/alpha/usage/summary?since=2026-09-01T00%3A00%3A00Z`,
+    ]);
+    expect(result.credits).toEqual({ monthly: 70, purchased: 5, free: 0, remaining: 75 });
+    expect(result.usage).toEqual({ costUSD: 0.57, requests: 45, tokens: 3_100_000 });
+  });
+
   it("preserves subscription provenance when only currentPeriodStart contributes", async () => {
     const routes = defaultRoutes();
     routes["/alpha/billing/subscriptions"] = json(200, {

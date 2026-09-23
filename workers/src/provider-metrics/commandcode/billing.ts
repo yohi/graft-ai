@@ -21,7 +21,7 @@ const TIMEOUT_MS = 10_000;
 type EndpointOutcome<T> =
   { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: ProviderError };
 
-type CommandCodeWhoami = { readonly orgId: string };
+type CommandCodeWhoami = { readonly orgId?: string };
 
 export type CommandCodeCredits = {
   readonly credits: ProviderCredits;
@@ -117,9 +117,16 @@ async function requestEndpoint<T>(
 }
 
 function parseWhoami(value: unknown): CommandCodeWhoami | null {
-  if (!isRecord(value) || !isRecord(value["org"])) return null;
-  const orgId = value["org"]["id"];
-  return nonEmptyString(orgId) ? { orgId } : null;
+  if (!isRecord(value)) return null;
+  const org = value["org"];
+  if (isRecord(org)) {
+    const orgId = org["id"];
+    return nonEmptyString(orgId) ? { orgId } : null;
+  }
+  if (org === null && isRecord(value["user"]) && nonEmptyString(value["user"]["id"])) {
+    return {};
+  }
+  return null;
 }
 
 function parseResetTimestamp(value: unknown): number | undefined {
@@ -228,18 +235,18 @@ const WHOAMI_REQUEST: EndpointRequest<CommandCodeWhoami> = {
 
 function orgRequest<T>(
   path: string,
-  orgId: string,
+  orgId: string | undefined,
   sourceId: string,
   parse: (value: unknown) => T | null,
 ): EndpointRequest<T> {
-  return { path, query: [["orgId", orgId]], sourceId, parse };
+  return { path, query: orgId === undefined ? [] : [["orgId", orgId]], sourceId, parse };
 }
 
 function summaryRequest(
-  orgId: string,
+  orgId: string | undefined,
   currentPeriodStart: string | undefined,
 ): EndpointRequest<ProviderUsageSummary> {
-  const query: [string, string][] = [["orgId", orgId]];
+  const query: [string, string][] = orgId === undefined ? [] : [["orgId", orgId]];
   if (currentPeriodStart !== undefined) query.push(["since", currentPeriodStart]);
   return {
     path: "/alpha/usage/summary",
@@ -251,7 +258,11 @@ function summaryRequest(
 
 export const fetchCommandCodeWhoami = (apiKey: string, context: ProviderContext) =>
   requestEndpoint(apiKey, WHOAMI_REQUEST, context);
-export const fetchCommandCodeCredits = (apiKey: string, orgId: string, context: ProviderContext) =>
+export const fetchCommandCodeCredits = (
+  apiKey: string,
+  orgId: string | undefined,
+  context: ProviderContext,
+) =>
   requestEndpoint(
     apiKey,
     orgRequest("/alpha/billing/credits", orgId, COMMAND_CODE_SOURCE_IDS.credits, parseCredits),
@@ -259,7 +270,7 @@ export const fetchCommandCodeCredits = (apiKey: string, orgId: string, context: 
   );
 export const fetchCommandCodeSubscription = (
   apiKey: string,
-  orgId: string,
+  orgId: string | undefined,
   context: ProviderContext,
 ) =>
   requestEndpoint(
@@ -274,7 +285,7 @@ export const fetchCommandCodeSubscription = (
   );
 export const fetchCommandCodeSummary = (
   apiKey: string,
-  orgId: string,
+  orgId: string | undefined,
   currentPeriodStart: string | undefined,
   context: ProviderContext,
 ) => requestEndpoint(apiKey, summaryRequest(orgId, currentPeriodStart), context);

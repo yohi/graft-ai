@@ -9,6 +9,12 @@ const deploy = readFileSync(
   resolve(root, ".github/workflows/deploy.yml"),
   "utf8",
 );
+const providerMetricsDashboard = JSON.parse(
+  readFileSync(
+    resolve(root, "grafana/dashboards/graft-ai-provider-metrics.json"),
+    "utf8",
+  ),
+).dashboard;
 const otelTerraform = readFileSync(resolve(root, "terraform/otel.tf"), "utf8");
 const terraformVariables = readFileSync(
   resolve(root, "terraform/variables.tf"),
@@ -99,6 +105,49 @@ test("Grafana deployment surfaces publish the OTel alert rules", () => {
   assert.match(makefile, /deploy-alert-rules:/);
   assert.match(setup, /graft-ai-otel\.json/);
   assert.match(setup, /graft-ai-otel-rules\.json/);
+});
+
+test("Provider Metrics Worker syncs each provider API key and the Ollama session cookie", () => {
+  for (const name of [
+    "COMMAND_CODE_API_KEY",
+    "OPENCODEGO_API_KEY",
+    "OLLAMA_API_KEY",
+    "OLLAMA_SESSION_COOKIE",
+  ]) {
+    assert.match(
+      deploy,
+      new RegExp(`${name}: \\$\\{\\{ secrets\\.${name} \\}\\}`),
+    );
+    assert.match(deploy, new RegExp(`sync_secret "${name}" "\\$${name}"`));
+  }
+});
+
+test("Provider Metrics dashboard exposes CommandCode balances and usage", () => {
+  const panels = providerMetricsDashboard.panels;
+  assert.ok(
+    panels.some(
+      (panel) => panel.type === "row" && panel.title === "CommandCode",
+    ),
+  );
+
+  const expressions = new Set(
+    panels.flatMap((panel) =>
+      (panel.targets ?? []).map((target) => target.expr),
+    ),
+  );
+  for (const metric of [
+    "commandcode_credits_remaining",
+    "commandcode_credits_monthly",
+    "commandcode_usage_cost_usd",
+    "commandcode_usage_requests",
+    "commandcode_usage_tokens",
+    "commandcode_billing_period_end_seconds",
+  ]) {
+    assert.ok(
+      [...expressions].some((expression) => expression.includes(metric)),
+      `dashboard should query ${metric}`,
+    );
+  }
 });
 
 test("setup creates a non-root Grafana folder before importing alert rules", () => {

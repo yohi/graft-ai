@@ -375,6 +375,7 @@ jobs:
           CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
           CODEX_ACCOUNT_ID: ${{ secrets.CODEX_ACCOUNT_ID || vars.CODEX_ACCOUNT_ID }}
           CODEX_PROXY_URL: ${{ secrets.CODEX_PROXY_URL || vars.CODEX_PROXY_URL }}
+          CODEX_PROXY_SECRET: ${{ secrets.CODEX_PROXY_SECRET }}
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
           OLLAMA_SESSION_COOKIE: ${{ secrets.OLLAMA_SESSION_COOKIE }}
           OPENCODEGO_API_KEY: ${{ secrets.OPENCODEGO_API_KEY }}
@@ -397,6 +398,7 @@ jobs:
           sync_secret "CODEX_ACCESS_TOKEN" "$CODEX_ACCESS_TOKEN"
           sync_secret "CODEX_ACCOUNT_ID" "$CODEX_ACCOUNT_ID"
           sync_secret "CODEX_PROXY_URL" "$CODEX_PROXY_URL"
+          sync_secret "CODEX_PROXY_SECRET" "$CODEX_PROXY_SECRET"
           sync_secret "OLLAMA_API_KEY" "$OLLAMA_API_KEY"
           sync_secret "OLLAMA_SESSION_COOKIE" "$OLLAMA_SESSION_COOKIE"
           sync_secret "OPENCODEGO_API_KEY" "$OPENCODEGO_API_KEY"

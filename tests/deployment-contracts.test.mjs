@@ -107,12 +107,13 @@ test("Grafana deployment surfaces publish the OTel alert rules", () => {
   assert.match(setup, /graft-ai-otel-rules\.json/);
 });
 
-test("Provider Metrics Worker syncs each provider API key and the Ollama session cookie", () => {
+test("Provider Metrics Worker syncs provider credentials and Codex proxy authentication", () => {
   for (const name of [
     "COMMAND_CODE_API_KEY",
     "OPENCODEGO_API_KEY",
     "OLLAMA_API_KEY",
     "OLLAMA_SESSION_COOKIE",
+    "CODEX_PROXY_SECRET",
   ]) {
     assert.match(
       deploy,

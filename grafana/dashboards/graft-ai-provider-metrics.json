@@ -3,13 +3,14 @@
     "id": null,
     "uid": "graft-ai-provider-metrics",
     "title": "graft-ai — AI Provider Usage & Rate Limits",
-    "description": "Unified dashboard for OpenAI API, Codex, Ollama Cloud, and OpenCode Go usage, costs, and rate limit resets via graft-ai",
+    "description": "Unified dashboard for OpenAI API, Codex, Ollama Cloud, OpenCode Go, and CommandCode usage, costs, and rate limit resets via graft-ai",
     "tags": [
       "graft-ai",
       "openai",
       "codex",
       "ollama-cloud",
       "opencodego",
+      "commandcode",
       "prometheus"
     ],
     "timezone": "browser",
@@ -21,15 +22,7 @@
       "to": "now"
     },
     "timepicker": {
-      "refresh_intervals": [
-        "1m",
-        "5m",
-        "15m",
-        "30m",
-        "1h",
-        "2h",
-        "1d"
-      ]
+      "refresh_intervals": ["1m", "5m", "15m", "30m", "1h", "2h", "1d"]
     },
     "templating": {
       "list": []
@@ -64,9 +57,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "textMode": "auto",
@@ -127,9 +118,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "textMode": "auto",
@@ -173,9 +162,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "textMode": "auto",
@@ -229,9 +216,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "textMode": "auto",
@@ -288,9 +273,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -350,9 +333,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -412,9 +393,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -477,9 +456,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -555,9 +532,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -617,9 +592,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -679,9 +652,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -744,9 +715,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -822,9 +791,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -884,9 +851,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -946,9 +911,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -1008,9 +971,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -1073,9 +1034,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -1138,9 +1097,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "showThresholdLabels": false,
@@ -1203,9 +1160,7 @@
         },
         "options": {
           "reduceOptions": {
-            "calcs": [
-              "lastNotNull"
-            ]
+            "calcs": ["lastNotNull"]
           },
           "orientation": "auto",
           "textMode": "auto",
@@ -1245,6 +1200,201 @@
             },
             "expr": "max(opencodego_zen_balance_usd)",
             "legendFormat": "Zen Balance",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 500,
+        "type": "row",
+        "title": "CommandCode",
+        "gridPos": {
+          "x": 0,
+          "y": 24,
+          "w": 24,
+          "h": 1
+        },
+        "collapsed": false,
+        "panels": []
+      },
+      {
+        "id": 20,
+        "type": "stat",
+        "title": "CommandCode Credits Remaining",
+        "gridPos": { "x": 0, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "short" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_credits_remaining)",
+            "legendFormat": "Remaining Credits",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 21,
+        "type": "stat",
+        "title": "CommandCode Monthly Credits",
+        "gridPos": { "x": 6, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "short" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_credits_monthly)",
+            "legendFormat": "Monthly Credits",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 22,
+        "type": "stat",
+        "title": "CommandCode Usage Cost",
+        "gridPos": { "x": 12, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "currencyUSD" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_usage_cost_usd)",
+            "legendFormat": "Usage Cost",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 23,
+        "type": "stat",
+        "title": "CommandCode Plan",
+        "gridPos": { "x": 18, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "name",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "short" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "commandcode_plan_info",
+            "legendFormat": "{{plan}}",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "type": "stat",
+        "title": "CommandCode Usage Requests",
+        "gridPos": { "x": 0, "y": 29, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "short" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_usage_requests)",
+            "legendFormat": "Usage Requests",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 25,
+        "type": "stat",
+        "title": "CommandCode Usage Tokens",
+        "gridPos": { "x": 6, "y": 29, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "short" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_usage_tokens)",
+            "legendFormat": "Usage Tokens",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 26,
+        "type": "stat",
+        "title": "CommandCode Billing Period Reset In",
+        "gridPos": { "x": 12, "y": 29, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "area"
+        },
+        "fieldConfig": {
+          "defaults": { "noValue": "-", "unit": "dtdhms" }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(clamp_min(commandcode_billing_period_end_seconds - time(), 0))",
+            "legendFormat": "Billing Period Reset",
             "refId": "A",
             "instant": true
           }

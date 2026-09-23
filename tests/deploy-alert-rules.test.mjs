@@ -40,7 +40,7 @@ test("normalizes explicit general folder UID and preserves custom UIDs", async (
       if (url.endsWith("/api/org/")) {
         return jsonResponse({ id: 42 });
       }
-      if (url.includes("/api/folders/uid/")) {
+      if (url.endsWith(`/api/folders/${expectedFolderUid}`)) {
         return jsonResponse({ uid: expectedFolderUid });
       }
       if (url.endsWith("/api/v1/provisioning/alert-rules")) {
@@ -57,12 +57,12 @@ test("normalizes explicit general folder UID and preserves custom UIDs", async (
     });
 
     const folderLookupCall = calls.find(({ url }) =>
-      url.includes("/api/folders/uid/"),
+      url.endsWith(`/api/folders/${expectedFolderUid}`),
     );
     assert.ok(folderLookupCall);
     assert.equal(
       folderLookupCall.url,
-      `https://grafana.example/api/folders/uid/${expectedFolderUid}`,
+      `https://grafana.example/api/folders/${expectedFolderUid}`,
     );
 
     const ruleCreateCall = calls.find(
@@ -85,7 +85,7 @@ test("creates the alert folder before deploying rules", async () => {
     if (url.endsWith("/api/org/")) {
       return jsonResponse({ id: 42 });
     }
-    if (url.endsWith("/api/folders/uid/graft-ai-alerts")) {
+    if (url.endsWith("/api/folders/graft-ai-alerts")) {
       return jsonResponse({ message: "folder not found" }, 404);
     }
     if (url.endsWith("/api/folders")) {
@@ -124,6 +124,49 @@ test("creates the alert folder before deploying rules", async () => {
   assert.equal(
     JSON.parse(ruleCreateCall.options.body).folderUID,
     "graft-ai-alerts",
+  );
+});
+
+test("continues when a concurrent deployment creates the alert folder", async () => {
+  const calls = [];
+  let folderLookups = 0;
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/api/org/")) {
+      return jsonResponse({ id: 42 });
+    }
+    if (url.endsWith("/api/folders/graft-ai-alerts")) {
+      folderLookups += 1;
+      return folderLookups === 1
+        ? jsonResponse({ message: "folder not found" }, 404)
+        : jsonResponse({ uid: "graft-ai-alerts" });
+    }
+    if (url.endsWith("/api/folders")) {
+      return jsonResponse(
+        { message: "the folder has been changed by someone else" },
+        412,
+      );
+    }
+    if (url.endsWith("/api/v1/provisioning/alert-rules")) {
+      return jsonResponse([]);
+    }
+    return jsonResponse({ status: "success" });
+  };
+
+  const result = await deployAlertRuleFile(
+    "grafana/alerts/graft-ai-otel-rules.json",
+    {
+      grafanaUrl: "https://grafana.example",
+      token: "test-token",
+      fetchImpl,
+    },
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(folderLookups, 2);
+  assert.equal(
+    calls.filter(({ url }) => url.endsWith("/api/folders")).length,
+    1,
   );
 });
 

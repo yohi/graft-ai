@@ -1219,10 +1219,164 @@
         "panels": []
       },
       {
+        "id": 27,
+        "type": "gauge",
+        "title": "CommandCode Session Usage",
+        "gridPos": { "x": 0, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "noValue": "-",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 0.75 },
+                { "color": "red", "value": 0.9 }
+              ]
+            },
+            "unit": "percentunit"
+          }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_usage_ratio{period=\"session\"})",
+            "legendFormat": "Session Usage",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 28,
+        "type": "gauge",
+        "title": "CommandCode Session Reset In",
+        "gridPos": { "x": 6, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 18000,
+            "noValue": "-",
+            "unit": "dtdhms",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": null },
+                { "color": "yellow", "value": 3600 },
+                { "color": "green", "value": 9000 }
+              ]
+            }
+          }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(clamp_min(commandcode_reset_timestamp_seconds{period=\"session\"} - time(), 0))",
+            "legendFormat": "Session Reset",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 29,
+        "type": "gauge",
+        "title": "CommandCode Weekly Usage",
+        "gridPos": { "x": 12, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "noValue": "-",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "green", "value": null },
+                { "color": "yellow", "value": 0.75 },
+                { "color": "red", "value": 0.9 }
+              ]
+            },
+            "unit": "percentunit"
+          }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(commandcode_usage_ratio{period=\"weekly\"})",
+            "legendFormat": "Weekly Usage",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
+        "id": 30,
+        "type": "gauge",
+        "title": "CommandCode Weekly Reset In",
+        "gridPos": { "x": 18, "y": 25, "w": 6, "h": 4 },
+        "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "orientation": "auto",
+          "showThresholdLabels": false,
+          "showThresholdMarkers": true
+        },
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 604800,
+            "noValue": "-",
+            "unit": "dtdhms",
+            "color": { "mode": "thresholds" },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                { "color": "red", "value": null },
+                { "color": "yellow", "value": 120960 },
+                { "color": "green", "value": 302400 }
+              ]
+            }
+          }
+        },
+        "targets": [
+          {
+            "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
+            "expr": "max(clamp_min(commandcode_reset_timestamp_seconds{period=\"weekly\"} - time(), 0))",
+            "legendFormat": "Weekly Reset",
+            "refId": "A",
+            "instant": true
+          }
+        ]
+      },
+      {
         "id": 20,
         "type": "stat",
         "title": "CommandCode Credits Remaining",
-        "gridPos": { "x": 0, "y": 25, "w": 6, "h": 4 },
+        "gridPos": { "x": 0, "y": 29, "w": 6, "h": 4 },
         "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
         "options": {
           "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -1248,7 +1402,7 @@
         "id": 21,
         "type": "stat",
         "title": "CommandCode Monthly Credits",
-        "gridPos": { "x": 6, "y": 25, "w": 6, "h": 4 },
+        "gridPos": { "x": 6, "y": 29, "w": 6, "h": 4 },
         "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
         "options": {
           "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -1274,7 +1428,7 @@
         "id": 22,
         "type": "stat",
         "title": "CommandCode Usage Cost",
-        "gridPos": { "x": 12, "y": 25, "w": 6, "h": 4 },
+        "gridPos": { "x": 12, "y": 29, "w": 6, "h": 4 },
         "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
         "options": {
           "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -1300,7 +1454,7 @@
         "id": 23,
         "type": "stat",
         "title": "CommandCode Plan",
-        "gridPos": { "x": 18, "y": 25, "w": 6, "h": 4 },
+        "gridPos": { "x": 18, "y": 29, "w": 6, "h": 4 },
         "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
         "options": {
           "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -1326,7 +1480,7 @@
         "id": 24,
         "type": "stat",
         "title": "CommandCode Usage Requests",
-        "gridPos": { "x": 0, "y": 29, "w": 6, "h": 4 },
+        "gridPos": { "x": 0, "y": 33, "w": 6, "h": 4 },
         "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
         "options": {
           "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -1352,7 +1506,7 @@
         "id": 25,
         "type": "stat",
         "title": "CommandCode Usage Tokens",
-        "gridPos": { "x": 6, "y": 29, "w": 6, "h": 4 },
+        "gridPos": { "x": 6, "y": 33, "w": 6, "h": 4 },
         "datasource": { "type": "prometheus", "uid": "grafanacloud-prom" },
         "options": {
           "reduceOptions": { "calcs": ["lastNotNull"] },

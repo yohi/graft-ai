@@ -103,12 +103,12 @@ test("Grafana deployment surfaces publish the OTel alert rules", () => {
 
 test("setup creates a non-root Grafana folder before importing alert rules", () => {
   assert.match(setup, /ALERT_FOLDER_UID="graft-ai-alerts"/);
-  assert.match(setup, /\/api\/folders\/uid\/\$\{ALERT_FOLDER_UID\}/);
+  assert.match(setup, /\/api\/folders\/\$\{ALERT_FOLDER_UID\}/);
   assert.match(setup, /gcx api \/api\/folders -X POST/);
 
   assert.match(
     setup,
-    /ALERT_FOLDER_LOOKUP_OUTPUT=\$\(\s*gcx api "\/api\/folders\/uid\/\$\{ALERT_FOLDER_UID\}" -o json 2>&1\s*\)/,
+    /ALERT_FOLDER_LOOKUP_OUTPUT=\$\(\s*gcx api "\/api\/folders\/\$\{ALERT_FOLDER_UID\}" -o json 2>&1\s*\)/,
   );
   assert.match(setup, /HTTP\[\[:space:\]\]\+404/);
   assert.match(setup, /exit "\$ALERT_FOLDER_LOOKUP_STATUS"/);

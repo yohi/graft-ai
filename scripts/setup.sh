@@ -516,7 +516,7 @@ fi
 
 ALERT_FOLDER_LOOKUP_STATUS=0
 ALERT_FOLDER_LOOKUP_OUTPUT=""
-if ALERT_FOLDER_LOOKUP_OUTPUT=$(gcx api "/api/folders/uid/${ALERT_FOLDER_UID}" -o json 2>&1); then
+if ALERT_FOLDER_LOOKUP_OUTPUT=$(gcx api "/api/folders/${ALERT_FOLDER_UID}" -o json 2>&1); then
   :
 else
   ALERT_FOLDER_LOOKUP_STATUS=$?
